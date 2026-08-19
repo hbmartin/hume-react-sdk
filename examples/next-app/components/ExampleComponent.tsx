@@ -1,7 +1,10 @@
 'use client';
 
-import { useCallDurationTimestamp, useVoice } from '@humeai/voice-react';
-import { useEffect, useState } from 'react';
+import {
+  useAudioDevices,
+  useCallDurationTimestamp,
+  useVoice,
+} from '@humeai/voice-react';
 import { match } from 'ts-pattern';
 
 import { ChatConnected } from '@/components/ChatConnected';
@@ -23,54 +26,14 @@ export const ExampleComponent = ({
   const { connect, disconnect, status } = useVoice();
   const callDurationTimestamp = useCallDurationTimestamp();
 
-  const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>(
-    [],
-  );
-  const [audioOutputDevices, setAudioOutputDevices] = useState<
-    MediaDeviceInfo[]
-  >([]);
-  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string>('');
-  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('');
-
-  useEffect(() => {
-    const getDevices = async () => {
-      let stream: MediaStream | null = null;
-      try {
-        // Request permission first
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-        // Get all devices
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(
-          (device) => device.kind === 'audioinput',
-        );
-        const audioOutputs = devices.filter(
-          (device) => device.kind === 'audiooutput',
-        );
-
-        setAudioInputDevices(audioInputs);
-        setAudioOutputDevices(audioOutputs);
-
-        // Set defaults to first device
-        if (audioInputs.length > 0 && !selectedMicrophoneId) {
-          setSelectedMicrophoneId(audioInputs[0].deviceId);
-        }
-        if (audioOutputs.length > 0 && !selectedSpeakerId) {
-          setSelectedSpeakerId(audioOutputs[0].deviceId);
-        }
-      } catch {
-        // eslint-disable-next-line no-console
-        console.warn('Unable to enumerate devices');
-      } finally {
-        // Close the microphone stream now that we have the device IDs
-        if (stream) {
-          stream.getTracks().forEach((track) => track.stop());
-        }
-      }
-    };
-
-    void getDevices();
-  }, [selectedMicrophoneId, selectedSpeakerId]);
+  const {
+    inputDevices: audioInputDevices,
+    outputDevices: audioOutputDevices,
+    selectedInputDeviceId: selectedMicrophoneId,
+    selectedOutputDeviceId: selectedSpeakerId,
+    setSelectedInputDeviceId: setSelectedMicrophoneId,
+    setSelectedOutputDeviceId: setSelectedSpeakerId,
+  } = useAudioDevices();
 
   const connectArgs = {
     auth: {
@@ -88,8 +51,8 @@ export const ExampleComponent = ({
         }
       : {}),
     devices: {
-      microphoneDeviceId: selectedMicrophoneId,
-      speakerDeviceId: selectedSpeakerId,
+      microphoneDeviceId: selectedMicrophoneId ?? undefined,
+      speakerDeviceId: selectedSpeakerId ?? undefined,
     },
   };
 
@@ -98,7 +61,7 @@ export const ExampleComponent = ({
       <div className="flex flex-col gap-2">
         <div className="text-sm font-medium">Microphone</div>
         <Select
-          value={selectedMicrophoneId}
+          value={selectedMicrophoneId ?? ''}
           onValueChange={setSelectedMicrophoneId}
         >
           <SelectTrigger className="w-full">
@@ -111,7 +74,7 @@ export const ExampleComponent = ({
                 value={device.deviceId}
                 className="cursor-pointer px-8 py-2 hover:bg-gray-100"
               >
-                {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
+                {device.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -120,7 +83,10 @@ export const ExampleComponent = ({
 
       <div className="flex flex-col gap-2">
         <div className="text-sm font-medium">Speaker</div>
-        <Select value={selectedSpeakerId} onValueChange={setSelectedSpeakerId}>
+        <Select
+          value={selectedSpeakerId ?? ''}
+          onValueChange={setSelectedSpeakerId}
+        >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Select speaker" />
           </SelectTrigger>
@@ -131,7 +97,7 @@ export const ExampleComponent = ({
                 value={device.deviceId}
                 className="cursor-pointer px-8 py-2 hover:bg-gray-100"
               >
-                {device.label || `Speaker ${device.deviceId.slice(0, 8)}`}
+                {device.label}
               </SelectItem>
             ))}
           </SelectContent>
