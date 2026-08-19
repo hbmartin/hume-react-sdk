@@ -114,7 +114,9 @@ export type VoiceContextType = {
   readyState: VoiceReadyState;
   sendUserInput: (text: string) => void;
   sendAssistantInput: (text: string) => void;
-  sendSessionSettings: Hume.empathicVoice.chat.ChatSocket['sendSessionSettings'];
+  sendSessionSettings: (
+    sessionSettings: Omit<Hume.empathicVoice.SessionSettings, 'type'>,
+  ) => void;
   sendToolMessage: (
     type:
       | Hume.empathicVoice.ToolResponseMessage
@@ -826,13 +828,16 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const sendSessionSettings = useCallback(
-    (sessionSettings: Hume.empathicVoice.SessionSettings) => {
+    (sessionSettings: Omit<Hume.empathicVoice.SessionSettings, 'type'>) => {
       if (resourceStatusRef.current.socket !== 'connected') {
         console.warn('Socket is not connected. Cannot send session settings.');
         return;
       }
       try {
-        clientSendSessionSettings(sessionSettings);
+        clientSendSessionSettings({
+          ...sessionSettings,
+          type: 'session_settings',
+        });
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Unknown error';
         updateError({
