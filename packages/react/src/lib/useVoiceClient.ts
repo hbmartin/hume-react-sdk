@@ -19,6 +19,14 @@ export type SocketConfig = {
   hostname?: string;
 } & Hume.empathicVoice.chat.Chat.ConnectArgs;
 
+/**
+ * The close event emitted by the underlying chat socket. Derived from the
+ * SDK's own handler type so it stays correct across `hume` upgrades.
+ */
+export type SocketCloseEvent = Parameters<
+  NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>
+>[0];
+
 export enum VoiceReadyState {
   IDLE = 'idle',
   CONNECTING = 'connecting',
@@ -79,9 +87,17 @@ export const useVoiceClient = (props: {
   onToolCallError?: (message: string, error?: Error) => void;
   onClientError?: (message: string, error?: Error) => void;
   onOpen?: () => void;
-  onClose?: Hume.empathicVoice.chat.ChatSocket.EventHandlers['close'];
+  onClose?: (
+    event: SocketCloseEvent,
+    consumerInitiated: boolean,
+  ) => void | Promise<void>;
 }) => {
   const connectAbortController = useRef<AbortController | null>(null);
+
+  // Distinguishes a disconnect the consumer asked for from one the server (or
+  // the network) initiated. Consumers cut audio immediately; server-initiated
+  // closures let queued assistant audio finish first.
+  const consumerInitiated = useRef(false);
 
   const client = useRef<Hume.empathicVoice.chat.ChatSocket | null>(null);
 
@@ -105,6 +121,7 @@ export const useVoiceClient = (props: {
     ) => {
       // Abort previous attempt if any
       connectAbortController.current?.abort();
+      consumerInitiated.current = false;
 
       const controller = new AbortController();
       const signal = controller.signal;
@@ -259,7 +276,7 @@ export const useVoiceClient = (props: {
 
         socket.on('close', (event) => {
           signal.removeEventListener('abort', abortHandler);
-          onClose.current?.(event);
+          void onClose.current?.(event, consumerInitiated.current);
           setReadyState(VoiceReadyState.CLOSED);
         });
 
@@ -280,6 +297,7 @@ export const useVoiceClient = (props: {
     connectAbortController.current?.abort();
     connectAbortController.current = null;
     setReadyState(VoiceReadyState.IDLE);
+    consumerInitiated.current = true;
     client.current?.close();
   }, []);
 

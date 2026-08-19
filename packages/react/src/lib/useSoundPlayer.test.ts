@@ -404,4 +404,76 @@ describe('useSoundPlayer', () => {
       index: 2,
     });
   });
+
+  describe('waitForQueueToDrain', () => {
+    const renderPlayer = (enableAudioWorklet: boolean) =>
+      renderHook(() =>
+        useSoundPlayer({
+          enableAudioWorklet,
+          onError: vi.fn(),
+          onPlayAudio: vi.fn(),
+          onStopAudio: vi.fn(),
+        }),
+      );
+
+    const postWorkletMessage = (data: unknown) => {
+      act(() => {
+        fakePort.onmessage?.({ data } as MessageEvent);
+      });
+    };
+
+    it('resolves immediately when nothing is queued or playing', async () => {
+      const { result } = renderPlayer(true);
+      await act(() => result.current.initPlayer());
+
+      await expect(result.current.waitForQueueToDrain(1000)).resolves.toBe(
+        true,
+      );
+    });
+
+    it('resolves immediately in non-worklet mode when nothing is queued', async () => {
+      const { result } = renderPlayer(false);
+      await act(() => result.current.initPlayer());
+
+      await expect(result.current.waitForQueueToDrain(1000)).resolves.toBe(
+        true,
+      );
+    });
+
+    it('waits for queued audio, then resolves once the queue empties', async () => {
+      const { result } = renderPlayer(true);
+      await act(() => result.current.initPlayer());
+
+      postWorkletMessage({ type: 'queueLength', length: 3 });
+      expect(result.current.queueLength).toBe(3);
+
+      let settled = false;
+      const pending = result.current.waitForQueueToDrain(5000).then((value) => {
+        settled = true;
+        return value;
+      });
+
+      // Still draining: the wait must not have resolved yet.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      });
+      expect(settled).toBe(false);
+
+      postWorkletMessage({ type: 'queueLength', length: 0 });
+
+      await expect(pending).resolves.toBe(true);
+      expect(result.current.queueLength).toBe(0);
+    });
+
+    it('gives up after the timeout when the queue never empties', async () => {
+      const { result } = renderPlayer(true);
+      await act(() => result.current.initPlayer());
+
+      postWorkletMessage({ type: 'queueLength', length: 2 });
+
+      await expect(result.current.waitForQueueToDrain(150)).resolves.toBe(
+        false,
+      );
+    });
+  });
 });
