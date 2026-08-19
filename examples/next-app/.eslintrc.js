@@ -162,7 +162,7 @@ module.exports = {
       },
     },
     {
-      files: ['./e2e/**.*.ts', './e2e/**.*.tsx'],
+      files: ['./e2e/**/*.ts', './e2e/**/*.tsx'],
       extends: ['plugin:playwright/recommended'],
     },
   ],
