@@ -37,6 +37,15 @@ type SessionSettingsOnConnect = Omit<
   Hume.empathicVoice.SessionSettings,
   'builtinTools' | 'tools' | 'metadata' | 'type'
 >;
+export type SessionSettingsUpdate = Omit<
+  Hume.empathicVoice.SessionSettings,
+  'type'
+>;
+
+type ActiveConnection = {
+  consumerInitiated: boolean;
+  socket: Hume.empathicVoice.chat.ChatSocket;
+};
 /**
  * Extracts session settings that can be sent as query params when the websocket connects.
  * Matches ConnectSessionSettings in the TypeScript SDK (systemPrompt, voiceId, context, etc. are supported).
@@ -93,12 +102,7 @@ export const useVoiceClient = (props: {
   ) => void | Promise<void>;
 }) => {
   const connectAbortController = useRef<AbortController | null>(null);
-
-  // Distinguishes a disconnect the consumer asked for from one the server (or
-  // the network) initiated. Consumers cut audio immediately; server-initiated
-  // closures let queued assistant audio finish first.
-  const consumerInitiated = useRef(false);
-
+  const activeConnection = useRef<ActiveConnection | null>(null);
   const client = useRef<Hume.empathicVoice.chat.ChatSocket | null>(null);
 
   const [readyState, setReadyState] = useState<VoiceReadyState>(
@@ -121,7 +125,6 @@ export const useVoiceClient = (props: {
     ) => {
       // Abort previous attempt if any
       connectAbortController.current?.abort();
-      consumerInitiated.current = false;
 
       const controller = new AbortController();
       const signal = controller.signal;
@@ -155,8 +158,14 @@ export const useVoiceClient = (props: {
         });
 
         client.current = socket;
+        const connection: ActiveConnection = {
+          consumerInitiated: false,
+          socket,
+        };
+        activeConnection.current = connection;
 
         const abortHandler = () => {
+          connection.consumerInitiated = true;
           socket.close();
           reject(new Error('Connection attempt has been aborted'));
         };
@@ -276,12 +285,22 @@ export const useVoiceClient = (props: {
 
         socket.on('close', (event) => {
           signal.removeEventListener('abort', abortHandler);
-          void onClose.current?.(event, consumerInitiated.current);
+          if (activeConnection.current !== connection) {
+            return;
+          }
+          activeConnection.current = null;
+          if (client.current === socket) {
+            client.current = null;
+          }
+          void onClose.current?.(event, connection.consumerInitiated);
           setReadyState(VoiceReadyState.CLOSED);
         });
 
         socket.on('error', (e) => {
           signal.removeEventListener('abort', abortHandler);
+          if (activeConnection.current !== connection) {
+            return;
+          }
           const message = e instanceof Error ? e.message : 'Unknown error';
           onClientError.current?.(message, e instanceof Error ? e : undefined);
           reject(e);
@@ -294,20 +313,26 @@ export const useVoiceClient = (props: {
   );
 
   const disconnect = useCallback(() => {
+    const connection = activeConnection.current;
+    if (connection) {
+      connection.consumerInitiated = true;
+    }
     connectAbortController.current?.abort();
     connectAbortController.current = null;
     setReadyState(VoiceReadyState.IDLE);
-    consumerInitiated.current = true;
-    client.current?.close();
+    connection?.socket.close();
   }, []);
 
   const sendSessionSettings = useCallback(
-    (sessionSettings: Hume.empathicVoice.SessionSettings) => {
+    (sessionSettings: SessionSettingsUpdate) => {
       if (readyState !== VoiceReadyState.OPEN) {
         return;
       }
       client.current?.sendSessionSettings(sessionSettings);
-      onSessionSettings.current?.(sessionSettings);
+      onSessionSettings.current?.({
+        ...sessionSettings,
+        type: 'session_settings',
+      });
     },
     [readyState],
   );

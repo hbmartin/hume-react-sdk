@@ -12,7 +12,8 @@ export type UseAudioDevicesOptions = {
    * Request microphone permission on mount so that real device labels are
    * available. When permission is refused the hook still enumerates devices,
    * but their labels fall back to generated names and `permissionDenied`
-   * becomes `true`. Defaults to `true`.
+   * becomes `true`. Defaults to `false`; prefer the returned
+   * `requestPermission` function from a user gesture.
    */
   requestPermission?: boolean;
 };
@@ -26,8 +27,12 @@ export type UseAudioDevicesReturn = {
   setSelectedOutputDeviceId: (deviceId: string | null) => void;
   /** Re-enumerate devices. Called automatically on mount and on `devicechange`. */
   refetch: () => Promise<void>;
+  /** Request microphone permission, release the stream, and refresh device labels. */
+  requestPermission: () => Promise<void>;
   isLoading: boolean;
   error: Error | null;
+  /** Non-denial failure while acquiring microphone permission. */
+  permissionError: Error | null;
   /** `false` during server-side rendering and in insecure contexts. */
   isSupported: boolean;
   /** `true` when microphone permission was refused, so labels are generated. */
@@ -42,7 +47,7 @@ const reconcileSelection = (
   current: string | null,
   devices: AudioDevice[],
 ): string | null => {
-  const first = devices[0];
+  const first = devices.find((device) => device.deviceId !== '');
   if (first === undefined) {
     return null;
   }
@@ -63,8 +68,13 @@ const reconcileSelection = (
  * first remaining device of that kind.
  * @example
  * ```tsx
- * const { inputDevices, selectedInputDeviceId, setSelectedInputDeviceId } =
- *   useAudioDevices();
+ * const {
+ *   inputDevices,
+ *   selectedInputDeviceId,
+ *   selectedOutputDeviceId,
+ *   setSelectedInputDeviceId,
+ *   requestPermission,
+ * } = useAudioDevices();
  *
  * await connect({
  *   auth,
@@ -76,7 +86,7 @@ const reconcileSelection = (
  * ```
  */
 export const useAudioDevices = ({
-  requestPermission = true,
+  requestPermission: requestPermissionOnMount = false,
 }: UseAudioDevicesOptions = {}): UseAudioDevicesReturn => {
   const [inputDevices, setInputDevices] = useState<AudioDevice[]>([]);
   const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
@@ -89,8 +99,12 @@ export const useAudioDevices = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [permissionDenied, setPermissionDenied] = useState(false);
-  const [isSupported] = useState(isAudioDeviceEnumerationSupported);
+  const [permissionError, setPermissionError] = useState<Error | null>(null);
+  const [isSupported, setIsSupported] = useState(false);
   const refetchSequence = useRef(0);
+  const isMounted = useRef(false);
+  const permissionRequest = useRef<Promise<void> | null>(null);
+  const requestedPermissionOnMount = useRef(false);
 
   // Intentionally has no dependencies: the selection updates are written as
   // functional updates so that `refetch` keeps a stable identity. A version
@@ -102,12 +116,14 @@ export const useAudioDevices = ({
     }
 
     const sequence = ++refetchSequence.current;
-    setIsLoading(true);
+    if (isMounted.current) {
+      setIsLoading(true);
+    }
     try {
       const { inputDevices: inputs, outputDevices: outputs } =
         await getAllAudioDevices();
 
-      if (sequence !== refetchSequence.current) return;
+      if (sequence !== refetchSequence.current || !isMounted.current) return;
       setInputDevices(inputs);
       setOutputDevices(outputs);
       setSelectedInputDeviceId((current) =>
@@ -118,49 +134,81 @@ export const useAudioDevices = ({
       );
       setError(null);
     } catch (e) {
-      if (sequence !== refetchSequence.current) return;
+      if (sequence !== refetchSequence.current || !isMounted.current) return;
       setError(
         e instanceof Error
           ? e
           : new Error('Failed to enumerate audio devices.'),
       );
     } finally {
-      if (sequence === refetchSequence.current) {
+      if (sequence === refetchSequence.current && isMounted.current) {
         setIsLoading(false);
       }
     }
   }, []);
 
+  const requestPermission = useCallback((): Promise<void> => {
+    if (permissionRequest.current) {
+      return permissionRequest.current;
+    }
+
+    const operation = (async () => {
+      try {
+        await requestAudioDevicePermission();
+        if (isMounted.current) {
+          setPermissionDenied(false);
+          setPermissionError(null);
+        }
+      } catch (e) {
+        const browserError =
+          typeof e === 'object' && e !== null
+            ? (e as { message?: unknown; name?: unknown })
+            : null;
+        const permissionFailure = browserError?.name === 'NotAllowedError';
+        if (isMounted.current) {
+          let nextPermissionError: Error | null = null;
+          if (!permissionFailure) {
+            if (e instanceof Error) {
+              nextPermissionError = e;
+            } else {
+              nextPermissionError = new Error(
+                typeof browserError?.message === 'string'
+                  ? browserError.message
+                  : 'Failed to request microphone permission.',
+              );
+              if (typeof browserError?.name === 'string') {
+                nextPermissionError.name = browserError.name;
+              }
+            }
+          }
+          setPermissionDenied(permissionFailure);
+          setPermissionError(nextPermissionError);
+        }
+      } finally {
+        await refetch();
+        permissionRequest.current = null;
+      }
+    })();
+
+    permissionRequest.current = operation;
+    return operation;
+  }, [refetch]);
+
   useEffect(() => {
-    if (!isAudioDeviceEnumerationSupported()) {
+    isMounted.current = true;
+    const supported = isAudioDeviceEnumerationSupported();
+    setIsSupported(supported);
+    if (!supported) {
+      isMounted.current = false;
       return;
     }
 
-    let cancelled = false;
     const { mediaDevices } = navigator;
-
-    const init = async () => {
-      if (requestPermission) {
-        try {
-          await requestAudioDevicePermission();
-          if (!cancelled) {
-            setPermissionDenied(false);
-          }
-        } catch {
-          // Permission refusal is not an enumeration failure. Devices are
-          // still listed, only their labels are generated rather than real.
-          if (!cancelled) {
-            setPermissionDenied(true);
-          }
-        }
-      }
-
-      if (!cancelled) {
-        await refetch();
-      }
-    };
-
-    void init();
+    void refetch();
+    if (requestPermissionOnMount && !requestedPermissionOnMount.current) {
+      requestedPermissionOnMount.current = true;
+      void requestPermission();
+    }
 
     const handleDeviceChange = () => {
       void refetch();
@@ -169,10 +217,11 @@ export const useAudioDevices = ({
     mediaDevices.addEventListener('devicechange', handleDeviceChange);
 
     return () => {
-      cancelled = true;
+      isMounted.current = false;
+      refetchSequence.current += 1;
       mediaDevices.removeEventListener('devicechange', handleDeviceChange);
     };
-  }, [requestPermission, refetch]);
+  }, [refetch, requestPermission, requestPermissionOnMount]);
 
   return {
     inputDevices,
@@ -182,9 +231,11 @@ export const useAudioDevices = ({
     setSelectedInputDeviceId,
     setSelectedOutputDeviceId,
     refetch,
+    requestPermission,
     isLoading,
     error,
     isSupported,
     permissionDenied,
+    permissionError,
   };
 };

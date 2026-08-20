@@ -1,4 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import React from 'react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAudioDevices } from './useAudioDevices';
@@ -64,6 +66,7 @@ describe('useAudioDevices', () => {
 
     vi.mocked(isAudioDeviceEnumerationSupported).mockReturnValue(true);
     vi.mocked(requestAudioDevicePermission).mockResolvedValue(undefined);
+    vi.mocked(getAllAudioDevices).mockResolvedValue(devices('initial'));
   });
 
   afterEach(() => {
@@ -142,5 +145,91 @@ describe('useAudioDevices', () => {
     });
     expect(result.current.error).toBeNull();
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it('enumerates without requesting permission by default', async () => {
+    const { result } = renderHook(() => useAudioDevices());
+
+    await waitFor(() =>
+      expect(result.current.inputDevices).toEqual(
+        devices('initial').inputDevices,
+      ),
+    );
+    expect(requestAudioDevicePermission).not.toHaveBeenCalled();
+  });
+
+  it('enumerates while an opt-in permission prompt is still pending', async () => {
+    const permission = createDeferred<void>();
+    vi.mocked(requestAudioDevicePermission).mockReturnValue(permission.promise);
+
+    const { result } = renderHook(() =>
+      useAudioDevices({ requestPermission: true }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.inputDevices).toEqual(
+        devices('initial').inputDevices,
+      ),
+    );
+    expect(requestAudioDevicePermission).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      permission.resolve(undefined);
+      await permission.promise;
+    });
+  });
+
+  it('keeps privacy-redacted empty device ids unselected', async () => {
+    vi.mocked(getAllAudioDevices).mockResolvedValue({
+      inputDevices: [{ deviceId: '', kind: 'audioinput', label: 'Microphone' }],
+      outputDevices: [{ deviceId: '', kind: 'audiooutput', label: 'Speaker' }],
+    });
+
+    const { result } = renderHook(() => useAudioDevices());
+
+    await waitFor(() => expect(result.current.inputDevices).toHaveLength(1));
+    expect(result.current.selectedInputDeviceId).toBeNull();
+    expect(result.current.selectedOutputDeviceId).toBeNull();
+  });
+
+  it('distinguishes permission denial from other capture failures', async () => {
+    vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce(
+      new DOMException('Denied', 'NotAllowedError'),
+    );
+    const denied = renderHook(() => useAudioDevices());
+    await act(() => denied.result.current.requestPermission());
+    expect(denied.result.current.permissionDenied).toBe(true);
+    expect(denied.result.current.permissionError).toBeNull();
+    denied.unmount();
+
+    const unavailable = new DOMException('Busy', 'NotReadableError');
+    vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce(unavailable);
+    const failed = renderHook(() => useAudioDevices());
+    await act(() => failed.result.current.requestPermission());
+    expect(failed.result.current.permissionDenied).toBe(false);
+    expect(failed.result.current.permissionError).toMatchObject({
+      message: 'Busy',
+      name: 'NotReadableError',
+    });
+  });
+
+  it('requests permission only once during Strict Mode effect replay', async () => {
+    const wrapper = ({ children }: React.PropsWithChildren) =>
+      React.createElement(React.StrictMode, null, children);
+
+    renderHook(() => useAudioDevices({ requestPermission: true }), { wrapper });
+
+    await waitFor(() =>
+      expect(requestAudioDevicePermission).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it('uses a deterministic unsupported snapshot during server rendering', () => {
+    const SupportProbe = () =>
+      React.createElement('span', null, String(useAudioDevices().isSupported));
+
+    expect(renderToString(React.createElement(SupportProbe))).toContain(
+      'false',
+    );
   });
 });

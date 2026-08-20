@@ -34,7 +34,10 @@ const toAudioDevice = (
 ): AudioDevice => ({
   deviceId: device.deviceId,
   label:
-    device.label || `${FALLBACK_LABELS[kind]} ${device.deviceId.slice(0, 8)}`,
+    device.label ||
+    (device.deviceId
+      ? `${FALLBACK_LABELS[kind]} ${device.deviceId.slice(0, 8)}`
+      : FALLBACK_LABELS[kind]),
   kind,
 });
 
@@ -53,6 +56,11 @@ const toAudioDevice = (
  */
 export const requestAudioDevicePermission = async (): Promise<void> => {
   if (!isAudioDeviceEnumerationSupported()) return;
+  if (typeof navigator.mediaDevices.getUserMedia !== 'function') {
+    const error = new Error('Microphone capture is not supported.');
+    error.name = 'NotSupportedError';
+    throw error;
+  }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   stream.getTracks().forEach((track) => track.stop());
 };
