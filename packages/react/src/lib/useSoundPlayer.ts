@@ -32,6 +32,11 @@ type WorkletMessage =
 
 const BARK_BAND_COUNT = 24;
 
+/** How often `waitForQueueToDrain` re-checks whether playback has finished. */
+const DRAIN_POLL_INTERVAL_MS = 50;
+/** Upper bound on how long a server-initiated disconnect waits for audio. */
+const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
+
 export const useSoundPlayer = (props: {
   enableAudioWorklet: boolean;
   onError: (message: string, reason: AudioPlayerErrorReason) => void;
@@ -87,6 +92,11 @@ export const useSoundPlayer = (props: {
   const currentlyPlayingAudioBuffer = useRef<AudioBufferSourceNode | null>(
     null,
   );
+
+  // Mirrors of the playback state, readable from inside async loops that would
+  // otherwise close over a stale render's values.
+  const queueLengthRef = useLatestRef(queueLength);
+  const isPlayingRef = useLatestRef(isPlaying);
 
   /**
    * Only for non-AudioWorklet mode.
@@ -436,6 +446,41 @@ export const useSoundPlayer = (props: {
     ],
   );
 
+  /**
+   * Resolve once the queue has emptied and playback has finished, or once
+   * `timeoutMs` has elapsed. Resolves `true` if the audio drained, `false` if
+   * the timeout won.
+   *
+   * Used so a server-initiated disconnect can let the assistant finish its
+   * current sentence. A disconnect the consumer asked for should call
+   * `stopAll` directly instead, cutting audio immediately.
+   */
+  const waitForQueueToDrain = useCallback(
+    async (timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<boolean> => {
+      const isDrained = () =>
+        queueLengthRef.current === 0 && isPlayingRef.current === false;
+
+      if (isDrained()) {
+        return true;
+      }
+
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, DRAIN_POLL_INTERVAL_MS),
+        );
+        if (isDrained()) {
+          return true;
+        }
+      }
+
+      // The queue never emptied. The caller stops the player anyway rather
+      // than leaving the socket teardown hanging on stuck audio.
+      return false;
+    },
+    [queueLengthRef, isPlayingRef],
+  );
+
   const stopAll = useCallback(async () => {
     isInitialized.current = false;
     isProcessing.current = false;
@@ -599,6 +644,7 @@ export const useSoundPlayer = (props: {
       muteAudio,
       unmuteAudio,
       stopAll: stopAllWithRetries,
+      waitForQueueToDrain,
       clearQueue,
       volume,
       setVolume,
@@ -613,6 +659,7 @@ export const useSoundPlayer = (props: {
       muteAudio,
       unmuteAudio,
       stopAllWithRetries,
+      waitForQueueToDrain,
       clearQueue,
       volume,
       setVolume,

@@ -1,5 +1,6 @@
 export * from './lib/connection-message';
 export * from './lib/fftStore';
+export * from './lib/useAudioDevices';
 export * from './lib/useCallDuration';
 export * from './lib/useMicrophoneStream';
 export * from './lib/useMicrophone';
@@ -13,5 +14,13 @@ export * from './models/llm';
 export * from './models/messages';
 export * from './models/ttsService';
 export * from './models/connect-options';
+
+export {
+  getAllAudioDevices,
+  getInputDevices,
+  getOutputDevices,
+  isAudioDeviceEnumerationSupported,
+  requestAudioDevicePermission,
+} from './utils';
 
 export type { SocketConfig } from './lib/useVoiceClient';

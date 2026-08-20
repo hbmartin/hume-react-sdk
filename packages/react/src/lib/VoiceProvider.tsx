@@ -25,6 +25,7 @@ import { useMicrophoneStream } from './useMicrophoneStream';
 import { useSoundPlayer } from './useSoundPlayer';
 import { useToolStatus } from './useToolStatus';
 import {
+  type SocketCloseEvent,
   ToolCallHandler,
   useVoiceClient,
   VoiceReadyState,
@@ -114,7 +115,9 @@ export type VoiceContextType = {
   readyState: VoiceReadyState;
   sendUserInput: (text: string) => void;
   sendAssistantInput: (text: string) => void;
-  sendSessionSettings: Hume.empathicVoice.chat.ChatSocket['sendSessionSettings'];
+  sendSessionSettings: (
+    sessionSettings: Omit<Hume.empathicVoice.SessionSettings, 'type'>,
+  ) => void;
   sendToolMessage: (
     type:
       | Hume.empathicVoice.ToolResponseMessage
@@ -331,6 +334,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     addToQueue: playerAddToQueue,
     clearQueue: playerClearQueue,
     stopAll: playerStopAll,
+    waitForQueueToDrain: playerWaitForQueueToDrain,
   } = player;
   const { addToStore: toolStatusAddToStore, clearStore: toolStatusClearStore } =
     toolStatus;
@@ -416,10 +420,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       createConnectMessage();
       onOpen.current?.();
     }, [startTimer, createConnectMessage]),
-    onClose: useCallback<
-      NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>
-    >(
-      (event) => {
+    onClose: useCallback(
+      (event: SocketCloseEvent, consumerInitiated: boolean) => {
         // onClose handler needs to handle resource cleanup in the event that the
         // websocket connection is closed by the server and not the user/client
         stopTimer();
@@ -434,11 +436,24 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         setIsPaused(false);
 
         const resourceShutdownFns = [];
-        if (resourceStatusRef.current.audioPlayer === 'connected') {
-          resourceShutdownFns.push(playerStopAll());
-        }
+
+        // The microphone always stops at once: the socket is already gone, so
+        // continuing to capture only keeps the recording indicator lit.
         if (resourceStatusRef.current.mic === 'connected') {
           resourceShutdownFns.push(micStopFnRef.current?.());
+        }
+
+        if (resourceStatusRef.current.audioPlayer === 'connected') {
+          // A disconnect the consumer asked for cuts audio immediately. One
+          // the server or the network initiated lets audio that is already
+          // queued finish first, so the assistant's closing sentence is not
+          // clipped. The wait is bounded, so a stuck queue cannot hang here.
+          resourceShutdownFns.push(
+            (consumerInitiated
+              ? Promise.resolve(true)
+              : playerWaitForQueueToDrain()
+            ).then(() => playerStopAll()),
+          );
         }
 
         if (resourceShutdownFns.length > 0) {
@@ -457,6 +472,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         createDisconnectMessage,
         clearMessageStore,
         playerStopAll,
+        playerWaitForQueueToDrain,
         stopTimer,
         toolStatusClearStore,
       ],
@@ -826,13 +842,16 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const sendSessionSettings = useCallback(
-    (sessionSettings: Hume.empathicVoice.SessionSettings) => {
+    (sessionSettings: Omit<Hume.empathicVoice.SessionSettings, 'type'>) => {
       if (resourceStatusRef.current.socket !== 'connected') {
         console.warn('Socket is not connected. Cannot send session settings.');
         return;
       }
       try {
-        clientSendSessionSettings(sessionSettings);
+        clientSendSessionSettings({
+          ...sessionSettings,
+          type: 'session_settings',
+        });
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Unknown error';
         updateError({

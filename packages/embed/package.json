@@ -1,6 +1,6 @@
 {
   "name": "@humeai/voice-embed",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -32,10 +32,10 @@
     "jsdom": "^24.0.0",
     "tsup": "^8.3.5",
     "typescript": "^5.4.3",
-    "vitest": "^3.1.2"
+    "vitest": "^3.2.6"
   },
   "dependencies": {
-    "hume": "0.15.17",
+    "hume": "0.16.1",
     "zod": "^3.22.4"
   },
   "browserslist": [
