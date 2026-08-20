@@ -57,13 +57,28 @@ export type SocketAuthSchema = z.infer<typeof BaseSocketConfig>;
 
 export type SocketConfig = SocketAuthSchema & SocketConnectSchema;
 
+/**
+ * Validates the auth/hostname portion of a `SocketConfig` while preserving the
+ * (untyped-at-runtime) connect arguments that ride along with it.
+ */
+const SocketConfigSchema = z
+  .custom<SocketConfig>()
+  .superRefine((value, ctx) => {
+    const result = BaseSocketConfig.safeParse(value);
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        ctx.addIssue(issue);
+      }
+    }
+  });
+
 // ---------------------------------------------------------------------------
 // Client to frame actions
 // ---------------------------------------------------------------------------
 export const ClientToFrameActionSchema = z.union([
   z.object({
     type: z.literal('update_config'),
-    payload: z.custom<SocketConfig>(),
+    payload: SocketConfigSchema,
   }),
   z.object({
     type: z.literal('cancel'),

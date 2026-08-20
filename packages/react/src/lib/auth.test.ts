@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+
+import { AuthStrategySchema, getAuthStrategyError } from './auth';
+
+describe('AuthStrategySchema', () => {
+  it('accepts an API key strategy', () => {
+    expect(
+      AuthStrategySchema.parse({ type: 'apiKey', value: 'hume-api-key' }),
+    ).toEqual({ type: 'apiKey', value: 'hume-api-key' });
+  });
+
+  it('accepts an access token strategy', () => {
+    expect(
+      AuthStrategySchema.parse({ type: 'accessToken', value: 'token' }),
+    ).toEqual({ type: 'accessToken', value: 'token' });
+  });
+
+  it('rejects an empty API key with a descriptive message', () => {
+    const result = AuthStrategySchema.safeParse({ type: 'apiKey', value: '' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(
+        'API key for the Hume API must not be empty',
+      );
+    }
+  });
+
+  it('rejects a missing access token with a descriptive message', () => {
+    const result = AuthStrategySchema.safeParse({ type: 'accessToken' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(
+        'Access token for the Hume API is required',
+      );
+    }
+  });
+
+  it('rejects an unknown strategy type', () => {
+    expect(
+      AuthStrategySchema.safeParse({ type: 'password', value: 'x' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('getAuthStrategyError', () => {
+  it('returns null for a usable strategy', () => {
+    expect(getAuthStrategyError({ type: 'apiKey', value: 'k' })).toBeNull();
+    expect(
+      getAuthStrategyError({ type: 'accessToken', value: 't' }),
+    ).toBeNull();
+  });
+
+  it('describes an empty credential with its path', () => {
+    expect(getAuthStrategyError({ type: 'apiKey', value: '' })).toBe(
+      'auth.value: API key for the Hume API must not be empty',
+    );
+    expect(getAuthStrategyError({ type: 'accessToken', value: 42 })).toBe(
+      'auth.value: Access token for the Hume API must be a string',
+    );
+  });
+
+  it('explains a missing or malformed strategy', () => {
+    expect(getAuthStrategyError(undefined)).toBe(
+      'An auth strategy ({ type: "apiKey" | "accessToken", value }) is required to connect to the Hume API',
+    );
+    expect(getAuthStrategyError('hume-api-key')).toBe(
+      'The auth strategy must be an object of the form { type: "apiKey" | "accessToken", value }',
+    );
+    expect(getAuthStrategyError({ value: 'k' })).toMatch(
+      /^auth\.type: Invalid discriminator value/,
+    );
+  });
+});
