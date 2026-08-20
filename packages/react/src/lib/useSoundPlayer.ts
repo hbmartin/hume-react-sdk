@@ -34,6 +34,8 @@ const BARK_BAND_COUNT = 24;
 
 /** How often `waitForQueueToDrain` re-checks whether playback has finished. */
 const DRAIN_POLL_INTERVAL_MS = 50;
+/** Require an idle period so the final render quantum reaches the output. */
+const DRAIN_SETTLE_MS = DRAIN_POLL_INTERVAL_MS;
 /** Upper bound on how long a server-initiated disconnect waits for audio. */
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
 
@@ -97,6 +99,8 @@ export const useSoundPlayer = (props: {
   // otherwise close over a stale render's values.
   const queueLengthRef = useLatestRef(queueLength);
   const isPlayingRef = useLatestRef(isPlaying);
+  const pendingAudioTasks = useRef(0);
+  const playbackActivitySequence = useRef(0);
 
   /**
    * Only for non-AudioWorklet mode.
@@ -384,58 +388,61 @@ export const useSoundPlayer = (props: {
         return;
       }
 
-      const audioBuffer = await convertToAudioBuffer(message);
-      if (!audioBuffer) {
-        onError.current(
-          'Failed to convert data to audio buffer',
-          'malformed_audio',
-        );
-        return;
-      }
-
-      // Because converting the data to an audi obuffer is async, chunks that are
-      // only a few ms apart can end up converting out of order. So we need this
-      // getNextAudioBuffers function to make sure that we're playing the chunks
-      // in the correct order.
-      const playableBuffers = getNextAudioBuffers(message, audioBuffer);
-      if (playableBuffers.length === 0) {
-        return;
-      }
-
+      pendingAudioTasks.current += 1;
+      playbackActivitySequence.current += 1;
       try {
-        // Loop through the buffers and add them to the playback queue one at a time
-        for (const nextAudioBufferToPlay of playableBuffers) {
-          if (props.enableAudioWorklet) {
-            // AudioWorklet mode
-            const pcmData = nextAudioBufferToPlay.buffer.getChannelData(0);
-            workletNode.current?.port.postMessage({
-              type: 'audio',
-              data: pcmData,
-              id: nextAudioBufferToPlay.id,
-              index: nextAudioBufferToPlay.index,
-            });
-          } else if (!props.enableAudioWorklet) {
-            // Non-AudioWorklet mode
-            clipQueue.current.push({
-              id: nextAudioBufferToPlay.id,
-              buffer: nextAudioBufferToPlay.buffer,
-              index: nextAudioBufferToPlay.index,
-            });
-            setQueueLength(clipQueue.current.length);
-            // playNextClip will iterate the clipQueue upon finishing
-            // the playback of the current audio clip,
-            // so we can just call playNextClip here if it's the only one in the queue
-            if (clipQueue.current.length === 1) {
-              playNextClip();
+        const audioBuffer = await convertToAudioBuffer(message);
+        if (!audioBuffer) {
+          onError.current(
+            'Failed to convert data to audio buffer',
+            'malformed_audio',
+          );
+          return;
+        }
+
+        // Because converting the data to an audio buffer is async, chunks that
+        // are only a few ms apart can end up converting out of order. Preserve
+        // playback order before adding the ready buffers to the player queue.
+        const playableBuffers = getNextAudioBuffers(message, audioBuffer);
+        if (playableBuffers.length === 0) {
+          return;
+        }
+
+        try {
+          for (const nextAudioBufferToPlay of playableBuffers) {
+            if (props.enableAudioWorklet) {
+              // AudioWorklet mode
+              const pcmData = nextAudioBufferToPlay.buffer.getChannelData(0);
+              workletNode.current?.port.postMessage({
+                type: 'audio',
+                data: pcmData,
+                id: nextAudioBufferToPlay.id,
+                index: nextAudioBufferToPlay.index,
+              });
+            } else if (!props.enableAudioWorklet) {
+              // Non-AudioWorklet mode
+              clipQueue.current.push({
+                id: nextAudioBufferToPlay.id,
+                buffer: nextAudioBufferToPlay.buffer,
+                index: nextAudioBufferToPlay.index,
+              });
+              setQueueLength(clipQueue.current.length);
+              // playNextClip will iterate the queue when playback ends, so it
+              // only needs to be started when this is the first queued clip.
+              if (clipQueue.current.length === 1) {
+                playNextClip();
+              }
             }
           }
+        } catch (e) {
+          const eMessage = e instanceof Error ? e.message : 'Unknown error';
+          onError.current(
+            `Failed to add clip to queue: ${eMessage}`,
+            'malformed_audio',
+          );
         }
-      } catch (e) {
-        const eMessage = e instanceof Error ? e.message : 'Unknown error';
-        onError.current(
-          `Failed to add clip to queue: ${eMessage}`,
-          'malformed_audio',
-        );
+      } finally {
+        pendingAudioTasks.current -= 1;
       }
     },
     [
@@ -458,20 +465,45 @@ export const useSoundPlayer = (props: {
   const waitForQueueToDrain = useCallback(
     async (timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<boolean> => {
       const isDrained = () =>
-        queueLengthRef.current === 0 && isPlayingRef.current === false;
+        pendingAudioTasks.current === 0 &&
+        queueLengthRef.current === 0 &&
+        isPlayingRef.current === false;
 
-      if (isDrained()) {
+      // Preserve the zero-work fast path. Once audio work has started, require
+      // a stable idle period so an in-flight decode or the worklet's final
+      // render quantum cannot race teardown.
+      if (isDrained() && playbackActivitySequence.current === 0) {
         return true;
       }
 
       const deadline = Date.now() + timeoutMs;
+      let stableSince: number | null = null;
+      let observedActivitySequence = playbackActivitySequence.current;
+
       while (Date.now() < deadline) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, DRAIN_POLL_INTERVAL_MS),
-        );
-        if (isDrained()) {
-          return true;
+        const now = Date.now();
+        const currentActivitySequence = playbackActivitySequence.current;
+        if (currentActivitySequence !== observedActivitySequence) {
+          observedActivitySequence = currentActivitySequence;
+          stableSince = null;
         }
+
+        if (isDrained()) {
+          stableSince ??= now;
+          if (now - stableSince >= DRAIN_SETTLE_MS) {
+            return true;
+          }
+        } else {
+          stableSince = null;
+        }
+
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          break;
+        }
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(DRAIN_POLL_INTERVAL_MS, remainingMs)),
+        );
       }
 
       // The queue never emptied. The caller stops the player anyway rather

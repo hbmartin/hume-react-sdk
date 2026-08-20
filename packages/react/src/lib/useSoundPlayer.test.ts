@@ -52,10 +52,15 @@ const fakePort: MessagePort & { postMessage: Mock } = {
 describe('useSoundPlayer', () => {
   let originalAudioContext: typeof globalThis.AudioContext;
   let originalAudioWorkletNode: typeof globalThis.AudioWorkletNode;
+  let decodeAudioData: Mock;
 
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
     originalAudioWorkletNode = globalThis.AudioWorkletNode;
+    decodeAudioData = vi.fn((buffer: ArrayBuffer) =>
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      Promise.resolve(createFakeAudioBuffer(new Uint8Array(buffer)[0]!)),
+    );
 
     globalThis.AudioContext = vi.fn().mockImplementation(() => ({
       createAnalyser: () => ({
@@ -74,10 +79,7 @@ describe('useSoundPlayer', () => {
         disconnect: vi.fn(),
       }),
       destination: {},
-      decodeAudioData: vi.fn((buffer: ArrayBuffer) =>
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        Promise.resolve(createFakeAudioBuffer(new Uint8Array(buffer)[0]!)),
-      ),
+      decodeAudioData,
       close: vi.fn(),
       sampleRate: 48000,
     }));
@@ -463,6 +465,78 @@ describe('useSoundPlayer', () => {
 
       await expect(pending).resolves.toBe(true);
       expect(result.current.queueLength).toBe(0);
+    });
+
+    it('does not drain immediately when the worklet starts its final block', async () => {
+      const { result } = renderPlayer(true);
+      await act(() => result.current.initPlayer());
+      await act(() =>
+        result.current.addToQueue({
+          id: 'final',
+          index: 0,
+          data: '\x01',
+          type: 'audio_output',
+          receivedAt: new Date(0),
+        }),
+      );
+
+      postWorkletMessage({ type: 'start_clip', id: 'final', index: 0 });
+      postWorkletMessage({ type: 'queueLength', length: 0 });
+
+      let settled = false;
+      const pending = result.current.waitForQueueToDrain(5000).then((value) => {
+        settled = true;
+        return value;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await expect(pending).resolves.toBe(true);
+    });
+
+    it('waits for audio that is still being decoded', async () => {
+      let resolveDecode = (_buffer: AudioBuffer): void => {
+        throw new Error('Decode promise was not initialized.');
+      };
+      decodeAudioData.mockImplementationOnce(
+        () =>
+          new Promise<AudioBuffer>((resolve) => {
+            resolveDecode = resolve;
+          }),
+      );
+
+      const { result } = renderPlayer(true);
+      await act(() => result.current.initPlayer());
+
+      let addToQueue = Promise.resolve();
+      act(() => {
+        addToQueue = result.current.addToQueue({
+          id: 'pending',
+          index: 0,
+          data: '\x01',
+          type: 'audio_output',
+          receivedAt: new Date(0),
+        });
+      });
+
+      let settled = false;
+      const pendingDrain = result.current
+        .waitForQueueToDrain(5000)
+        .then((value) => {
+          settled = true;
+          return value;
+        });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      });
+      expect(settled).toBe(false);
+
+      await act(async () => {
+        resolveDecode(createFakeAudioBuffer(1));
+        await addToQueue;
+      });
+      await expect(pendingDrain).resolves.toBe(true);
     });
 
     it('gives up after the timeout when the queue never empties', async () => {

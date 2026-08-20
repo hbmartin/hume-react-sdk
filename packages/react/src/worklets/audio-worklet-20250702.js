@@ -142,7 +142,14 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
     const channels = output.length;
 
     const result = this._bq.read();
-    this.port.postMessage({ type: 'queueLength', length: this._bq.size });
+    // Keep the block being rendered in the queue count. Reporting zero here
+    // would let the main thread tear down the graph before this quantum has
+    // reached the output. The following process call reports zero once there
+    // is no active block and nothing remains queued.
+    this.port.postMessage({
+      type: 'queueLength',
+      length: result ? Math.max(this._bq.size, 1) : 0,
+    });
 
     if (result) {
       const { buffer: block, id, index } = result;

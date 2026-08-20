@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AudioDevice } from '../models/connect-options';
 import {
@@ -90,6 +90,7 @@ export const useAudioDevices = ({
   const [error, setError] = useState<Error | null>(null);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [isSupported] = useState(isAudioDeviceEnumerationSupported);
+  const refetchSequence = useRef(0);
 
   // Intentionally has no dependencies: the selection updates are written as
   // functional updates so that `refetch` keeps a stable identity. A version
@@ -100,11 +101,13 @@ export const useAudioDevices = ({
       return;
     }
 
+    const sequence = ++refetchSequence.current;
     setIsLoading(true);
     try {
       const { inputDevices: inputs, outputDevices: outputs } =
         await getAllAudioDevices();
 
+      if (sequence !== refetchSequence.current) return;
       setInputDevices(inputs);
       setOutputDevices(outputs);
       setSelectedInputDeviceId((current) =>
@@ -115,13 +118,16 @@ export const useAudioDevices = ({
       );
       setError(null);
     } catch (e) {
+      if (sequence !== refetchSequence.current) return;
       setError(
         e instanceof Error
           ? e
           : new Error('Failed to enumerate audio devices.'),
       );
     } finally {
-      setIsLoading(false);
+      if (sequence === refetchSequence.current) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
