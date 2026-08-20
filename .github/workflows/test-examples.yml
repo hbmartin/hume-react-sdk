@@ -4,6 +4,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -13,6 +15,18 @@ jobs:
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
+      - name: Check live EVI test credentials
+        id: live_test_credentials
+        env:
+          TEST_HUME_API_KEY: ${{ secrets.TEST_HUME_API_KEY }}
+          TEST_HUME_SECRET_KEY: ${{ secrets.TEST_HUME_SECRET_KEY }}
+        run: |
+          if [[ -n "$TEST_HUME_API_KEY" && -n "$TEST_HUME_SECRET_KEY" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout SDK repo (PR/branch)
         uses: actions/checkout@v4
         with:
@@ -29,19 +43,22 @@ jobs:
       - name: Set up node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10.20.0
 
       - name: Build React SDK
         working-directory: ./sdk
+        env:
+          SDK_BRANCH: ${{ github.head_ref || github.ref_name || 'unknown' }}
+          SDK_REF: ${{ github.event.pull_request.head.sha || github.head_ref || github.ref }}
         run: |
           echo "=== React SDK Build Info ==="
-          echo "Branch: ${{ github.head_ref || github.ref_name || 'unknown' }}"
-          echo "Ref: ${{ github.event.pull_request.head.sha || github.head_ref || github.ref }}"
+          echo "Branch: $SDK_BRANCH"
+          echo "Ref: $SDK_REF"
           echo "Commit SHA: $(git rev-parse HEAD)"
           echo "==========================="
           pnpm install
@@ -53,7 +70,8 @@ jobs:
         run: |
           cd packages/react && pnpm pack
           mv humeai-voice-react-*.tgz ../..
-          echo "TARBALL=$(ls ../../humeai-voice-react-*.tgz | xargs -I {} basename {})" >> $GITHUB_ENV
+          tarball=$(find ../.. -maxdepth 1 -name 'humeai-voice-react-*.tgz' -print -quit)
+          echo "TARBALL=$(basename "$tarball")" >> "$GITHUB_ENV"
 
       - name: Install example deps and use packed SDK
         working-directory: ./examples/evi/evi-next-js-app-router-quickstart
@@ -70,12 +88,18 @@ jobs:
         run: pnpm run build
 
       - name: Install Playwright browsers
+        if: steps.live_test_credentials.outputs.available == 'true'
         working-directory: ./examples/evi/evi-next-js-app-router-quickstart
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Run evi-next-js-app-router-quickstart tests
+        if: steps.live_test_credentials.outputs.available == 'true'
         working-directory: ./examples/evi/evi-next-js-app-router-quickstart
         env:
           TEST_HUME_API_KEY: ${{ secrets.TEST_HUME_API_KEY }}
           TEST_HUME_SECRET_KEY: ${{ secrets.TEST_HUME_SECRET_KEY }}
         run: pnpm run test
+
+      - name: Report skipped live EVI tests
+        if: steps.live_test_credentials.outputs.available != 'true'
+        run: echo "::notice::Skipping live EVI tests because test credentials are unavailable."

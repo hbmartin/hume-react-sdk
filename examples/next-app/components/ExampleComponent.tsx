@@ -33,7 +33,19 @@ export const ExampleComponent = ({
     selectedOutputDeviceId: selectedSpeakerId,
     setSelectedInputDeviceId: setSelectedMicrophoneId,
     setSelectedOutputDeviceId: setSelectedSpeakerId,
+    requestPermission: requestDevicePermission,
+    isLoading: areDevicesLoading,
+    error: deviceError,
+    permissionDenied,
+    permissionError,
   } = useAudioDevices();
+  const selectableInputDevices = audioInputDevices.filter(
+    (device) => device.deviceId !== '',
+  );
+  const selectableOutputDevices = audioOutputDevices.filter(
+    (device) => device.deviceId !== '',
+  );
+  const displayedDeviceError = permissionError ?? deviceError;
 
   const connectArgs = {
     auth: {
@@ -68,15 +80,21 @@ export const ExampleComponent = ({
             <SelectValue placeholder="Select microphone" />
           </SelectTrigger>
           <SelectContent className="max-h-60 overflow-y-auto rounded-md border bg-white shadow-lg">
-            {audioInputDevices.map((device) => (
-              <SelectItem
-                key={device.deviceId}
-                value={device.deviceId}
-                className="cursor-pointer px-8 py-2 hover:bg-gray-100"
-              >
-                {device.label}
-              </SelectItem>
-            ))}
+            {selectableInputDevices.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-neutral-500">
+                Grant microphone permission to choose a device.
+              </div>
+            ) : (
+              selectableInputDevices.map((device) => (
+                <SelectItem
+                  key={device.deviceId}
+                  value={device.deviceId}
+                  className="cursor-pointer px-8 py-2 hover:bg-gray-100"
+                >
+                  {device.label}
+                </SelectItem>
+              ))
+            )}
           </SelectContent>
         </Select>
       </div>
@@ -91,18 +109,47 @@ export const ExampleComponent = ({
             <SelectValue placeholder="Select speaker" />
           </SelectTrigger>
           <SelectContent className="max-h-60 overflow-y-auto rounded-md border bg-white shadow-lg">
-            {audioOutputDevices.map((device) => (
-              <SelectItem
-                key={device.deviceId}
-                value={device.deviceId}
-                className="cursor-pointer px-8 py-2 hover:bg-gray-100"
-              >
-                {device.label}
-              </SelectItem>
-            ))}
+            {selectableOutputDevices.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-neutral-500">
+                Grant microphone permission to choose a device.
+              </div>
+            ) : (
+              selectableOutputDevices.map((device) => (
+                <SelectItem
+                  key={device.deviceId}
+                  value={device.deviceId}
+                  className="cursor-pointer px-8 py-2 hover:bg-gray-100"
+                >
+                  {device.label}
+                </SelectItem>
+              ))
+            )}
           </SelectContent>
         </Select>
       </div>
+
+      <button
+        className="max-w-sm rounded border border-neutral-500 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={areDevicesLoading}
+        onClick={() => {
+          void requestDevicePermission();
+        }}
+      >
+        {areDevicesLoading
+          ? 'Refreshing devices...'
+          : 'Enable device selection'}
+      </button>
+      {permissionDenied ? (
+        <div className="text-sm text-amber-700">
+          Microphone permission was denied. You can still connect using the
+          browser default device.
+        </div>
+      ) : null}
+      {displayedDeviceError ? (
+        <div className="text-sm text-red-500">
+          {displayedDeviceError.message}
+        </div>
+      ) : null}
     </div>
   );
 

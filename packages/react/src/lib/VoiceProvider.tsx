@@ -25,6 +25,7 @@ import { useMicrophoneStream } from './useMicrophoneStream';
 import { useSoundPlayer } from './useSoundPlayer';
 import { useToolStatus } from './useToolStatus';
 import {
+  type SessionSettingsUpdate,
   type SocketCloseEvent,
   ToolCallHandler,
   useVoiceClient,
@@ -115,9 +116,7 @@ export type VoiceContextType = {
   readyState: VoiceReadyState;
   sendUserInput: (text: string) => void;
   sendAssistantInput: (text: string) => void;
-  sendSessionSettings: (
-    sessionSettings: Omit<Hume.empathicVoice.SessionSettings, 'type'>,
-  ) => void;
+  sendSessionSettings: (sessionSettings: SessionSettingsUpdate) => void;
   sendToolMessage: (
     type:
       | Hume.empathicVoice.ToolResponseMessage
@@ -225,6 +224,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     value: 'disconnected',
   });
   const isConnectingRef = useRef(false);
+  const lifecycleGenerationRef = useRef(0);
+  const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
 
   // stores information about whether certain resources are being disconnected
@@ -422,6 +423,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     }, [startTimer, createConnectMessage]),
     onClose: useCallback(
       (event: SocketCloseEvent, consumerInitiated: boolean) => {
+        const closeGeneration = lifecycleGenerationRef.current;
+        const sharedContextToClose = sharedAudioContextRef.current;
         // onClose handler needs to handle resource cleanup in the event that the
         // websocket connection is closed by the server and not the user/client
         stopTimer();
@@ -434,38 +437,57 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         }
         toolStatusClearStore();
         setIsPaused(false);
-
-        const resourceShutdownFns = [];
+        setStatus({ value: 'disconnected' });
 
         // The microphone always stops at once: the socket is already gone, so
         // continuing to capture only keeps the recording indicator lit.
-        if (resourceStatusRef.current.mic === 'connected') {
-          resourceShutdownFns.push(micStopFnRef.current?.());
+        const shouldStopMic = resourceStatusRef.current.mic === 'connected';
+        const shouldStopPlayer =
+          resourceStatusRef.current.audioPlayer === 'connected';
+        if (shouldStopMic) {
+          resourceStatusRef.current.mic = 'disconnecting';
+        }
+        if (shouldStopPlayer) {
+          resourceStatusRef.current.audioPlayer = 'disconnecting';
         }
 
-        if (resourceStatusRef.current.audioPlayer === 'connected') {
-          // A disconnect the consumer asked for cuts audio immediately. One
-          // the server or the network initiated lets audio that is already
-          // queued finish first, so the assistant's closing sentence is not
-          // clipped. The wait is bounded, so a stuck queue cannot hang here.
-          resourceShutdownFns.push(
-            (consumerInitiated
-              ? Promise.resolve(true)
-              : playerWaitForQueueToDrain()
-            ).then(() => playerStopAll()),
-          );
-        }
+        const micCleanup = shouldStopMic
+          ? Promise.resolve(micStopFnRef.current?.())
+          : Promise.resolve();
+        const playerCleanup = (async () => {
+          if (!shouldStopPlayer) return;
+          if (!consumerInitiated) {
+            await playerWaitForQueueToDrain();
+          }
+          if (closeGeneration !== lifecycleGenerationRef.current) return;
+          await playerStopAll();
+        })();
 
-        if (resourceShutdownFns.length > 0) {
-          void Promise.all(resourceShutdownFns).then(() => {
-            resourceStatusRef.current.audioPlayer = 'disconnected';
-            resourceStatusRef.current.mic = 'disconnected';
-            setStatus({ value: 'disconnected' });
-            onClose.current?.(event);
-          });
-        } else {
-          onClose.current?.(event);
-        }
+        const closeCleanup = Promise.allSettled([
+          micCleanup,
+          playerCleanup,
+        ]).then(async () => {
+          if (closeGeneration !== lifecycleGenerationRef.current) return;
+          if (
+            !consumerInitiated &&
+            sharedContextToClose &&
+            sharedAudioContextRef.current === sharedContextToClose
+          ) {
+            await sharedContextToClose.close().catch(() => {
+              // .close() rejects if already closed; safe to ignore.
+            });
+            sharedAudioContextRef.current = null;
+          }
+          resourceStatusRef.current.audioPlayer = 'disconnected';
+          resourceStatusRef.current.mic = 'disconnected';
+        });
+        pendingCloseCleanupRef.current = closeCleanup;
+        void closeCleanup.finally(() => {
+          if (pendingCloseCleanupRef.current === closeCleanup) {
+            pendingCloseCleanupRef.current = null;
+          }
+        });
+        onClose.current?.(event);
       },
       [
         clearMessagesOnDisconnect,
@@ -559,11 +581,14 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     }
   }, [sendResumeAssistantMessage, updateError]);
 
-  const checkShouldContinueConnecting = useCallback(() => {
+  const checkShouldContinueConnecting = useCallback((generation: number) => {
     // This check exists because if the user disconnects while the
     // connection is in progress, we need to stop the connection
     // attempt and prevent audio resources from being initialized.
-    return isConnectingRef.current !== false;
+    return (
+      isConnectingRef.current !== false &&
+      lifecycleGenerationRef.current === generation
+    );
   }, []);
 
   const connect = useCallback(
@@ -574,12 +599,28 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         devices,
         ...socketConfig
       } = options;
-      if (isConnectingRef.current || status.value === 'connected') {
+      const connectionIsActive = () =>
+        isConnectingRef.current ||
+        resourceStatusRef.current.socket === 'connected';
+      if (connectionIsActive()) {
         console.warn(
           'Already connected or connecting to a chat. Ignoring duplicate connection attempt.',
         );
         return;
       }
+
+      const pendingCloseCleanup = pendingCloseCleanupRef.current;
+      if (pendingCloseCleanup) {
+        await pendingCloseCleanup;
+      }
+      if (connectionIsActive()) {
+        console.warn(
+          'Already connected or connecting to a chat. Ignoring duplicate connection attempt.',
+        );
+        return;
+      }
+
+      const generation = ++lifecycleGenerationRef.current;
 
       updateError(null);
       setStatus({ value: 'connecting' });
@@ -620,7 +661,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
       // Audio Player - must initialize before connecting to the socket
       // because it needs to exist by the time the socket is ready to send audio data
-      if (!checkShouldContinueConnecting()) {
+      if (!checkShouldContinueConnecting(generation)) {
         console.warn('Connection attempt was canceled. Stopping connection.');
         return;
       }
@@ -643,7 +684,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // WEBSOCKET - needs to be connected before the microphone is initialized
       // because a connection needs to be established before the microphone can start sending
       // the audio stream
-      if (!checkShouldContinueConnecting()) {
+      if (!checkShouldContinueConnecting(generation)) {
         console.warn('Connection attempt was canceled. Stopping connection.');
         return;
       }
@@ -667,7 +708,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       resourceStatusRef.current.socket = 'connected';
 
       // MICROPHONE - initialized last
-      if (!checkShouldContinueConnecting()) {
+      if (!checkShouldContinueConnecting(generation)) {
         console.warn('Connection attempt was canceled. Stopping connection.');
         return;
       }
@@ -696,7 +737,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       getStream,
       micStart,
       player.initPlayer,
-      status.value,
       updateError,
     ],
   );
@@ -704,6 +744,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   // `disconnectAndCleanUpResources`: Internal function that is called to actually disconnect
   // from the socket, audio player, and microphone.
   const disconnectAndCleanUpResources = useCallback(async () => {
+    lifecycleGenerationRef.current += 1;
     resourceStatusRef.current.socket = 'disconnecting';
     resourceStatusRef.current.audioPlayer = 'disconnecting';
     resourceStatusRef.current.mic = 'disconnecting';
@@ -842,16 +883,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const sendSessionSettings = useCallback(
-    (sessionSettings: Omit<Hume.empathicVoice.SessionSettings, 'type'>) => {
+    (sessionSettings: SessionSettingsUpdate) => {
       if (resourceStatusRef.current.socket !== 'connected') {
         console.warn('Socket is not connected. Cannot send session settings.');
         return;
       }
       try {
-        clientSendSessionSettings({
-          ...sessionSettings,
-          type: 'session_settings',
-        });
+        clientSendSessionSettings(sessionSettings);
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Unknown error';
         updateError({

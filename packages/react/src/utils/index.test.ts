@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { keepLastN } from '.';
+import { getAllAudioDevices, keepLastN } from '.';
 
 describe('keepLastN', () => {
   it.each([50, 100, 1000])(
@@ -15,4 +15,36 @@ describe('keepLastN', () => {
       expect(result.at(-1)).toBe(arr.length - 1);
     },
   );
+});
+
+describe('getAllAudioDevices', () => {
+  const originalMediaDevices = Object.getOwnPropertyDescriptor(
+    navigator,
+    'mediaDevices',
+  );
+
+  afterEach(() => {
+    if (originalMediaDevices) {
+      Object.defineProperty(navigator, 'mediaDevices', originalMediaDevices);
+    } else {
+      Reflect.deleteProperty(navigator, 'mediaDevices');
+    }
+  });
+
+  it('keeps redacted devices readable without inventing a selectable id', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        enumerateDevices: vi.fn().mockResolvedValue([
+          { deviceId: '', kind: 'audioinput', label: '' },
+          { deviceId: '', kind: 'audiooutput', label: '' },
+        ]),
+      },
+    });
+
+    await expect(getAllAudioDevices()).resolves.toEqual({
+      inputDevices: [{ deviceId: '', kind: 'audioinput', label: 'Microphone' }],
+      outputDevices: [{ deviceId: '', kind: 'audiooutput', label: 'Speaker' }],
+    });
+  });
 });
