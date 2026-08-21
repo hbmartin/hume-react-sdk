@@ -15,9 +15,7 @@ const fftStore = {
 
 vi.mock('./useVoiceClient', async () => {
   const actual =
-    await vi.importActual<typeof import('./useVoiceClient')>(
-      './useVoiceClient',
-    );
+    await vi.importActual<typeof UseVoiceClientModule>('./useVoiceClient');
   return {
     ...actual,
     useVoiceClient: () => ({
@@ -71,6 +69,7 @@ vi.mock('./useMicrophoneStream', () => ({
   }),
 }));
 
+import type * as UseVoiceClientModule from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
 
 describe('VoiceProvider auth validation', () => {

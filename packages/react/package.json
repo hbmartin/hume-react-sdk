@@ -56,8 +56,5 @@
   "peerDependencies": {
     "react": ">=18.2.0",
     "react-dom": ">=18.2.0"
-  },
-  "browserslist": [
-    "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
-  ]
+  }
 }

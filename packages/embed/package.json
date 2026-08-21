@@ -17,7 +17,7 @@
   "scripts": {
     "test": "vitest",
     "test:watch": "vitest --watch",
-    "build": "pnpm lint && tsup",
+    "build": "tsup",
     "dev": "tsup --watch",
     "lint": "eslint ./src/ && tsc --noEmit -p .",
     "pack": "npm pack"
@@ -29,6 +29,7 @@
     "@humeai/eslint-config": "workspace:*",
     "@humeai/typescript-config": "workspace:*",
     "@types/node": "^20.11.30",
+    "eslint": "^8.57.0",
     "jsdom": "^24.0.0",
     "tsup": "^8.3.5",
     "typescript": "^5.4.3",
@@ -37,8 +38,5 @@
   "dependencies": {
     "hume": "0.16.1",
     "zod": "^3.22.4"
-  },
-  "browserslist": [
-    "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
-  ]
+  }
 }

@@ -1,7 +1,6 @@
-/*eslint-env commonjs*/
+/* eslint-env commonjs */
 // @ts-check
-/** @type {import('eslint').ESLint.Options} */
-
+/** @type {import('eslint').Linter.Config} */
 module.exports = {
   root: true,
   extends: [
@@ -9,9 +8,9 @@ module.exports = {
     'plugin:react/recommended',
     'plugin:react-hooks/recommended',
   ],
-  parser: '@typescript-eslint/parser',
   parserOptions: {
     project: './tsconfig.json',
+    tsconfigRootDir: __dirname,
   },
   settings: {
     react: {
@@ -20,7 +19,5 @@ module.exports = {
   },
   rules: {
     'no-console': 'off',
-    'no-unused-vars': 'off',
-    '@typescript-eslint/no-floating-promises': 'error',
   },
 };
