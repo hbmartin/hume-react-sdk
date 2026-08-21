@@ -74,34 +74,40 @@ vi.mock('./useMicrophoneStream', () => ({
 import { useVoice, VoiceProvider } from './VoiceProvider';
 
 describe('VoiceProvider auth validation', () => {
-  it('reports an unusable auth strategy without requesting the microphone', async () => {
-    const onError = vi.fn();
-    const { result } = renderHook(() => useVoice(), {
-      wrapper: ({ children }) => (
-        <VoiceProvider onError={onError}>{children}</VoiceProvider>
-      ),
-    });
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+  ])(
+    'reports an %s auth strategy without requesting the microphone',
+    async (_description, value) => {
+      const onError = vi.fn();
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider onError={onError}>{children}</VoiceProvider>
+        ),
+      });
 
-    await act(() =>
-      result.current.connect({ auth: { type: 'accessToken', value: '' } }),
-    );
+      await act(() =>
+        result.current.connect({ auth: { type: 'accessToken', value } }),
+      );
 
-    const expectedMessage =
-      'A websocket connection could not be established. Error message: auth.value: Access token for the Hume API must not be empty';
-    expect(result.current.error).toMatchObject({
-      type: 'socket_error',
-      reason: 'socket_connection_failure',
-      message: expectedMessage,
-    });
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
+      const expectedMessage =
+        'A websocket connection could not be established. Error message: auth.value: Access token for the Hume API must not be empty';
+      expect(result.current.error).toMatchObject({
         type: 'socket_error',
+        reason: 'socket_connection_failure',
         message: expectedMessage,
-      }),
-    );
-    expect(result.current.status.value).toBe('error');
-    expect(mocks.getStream).not.toHaveBeenCalled();
-    expect(mocks.playerInit).not.toHaveBeenCalled();
-    expect(mocks.clientConnect).not.toHaveBeenCalled();
-  });
+      });
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'socket_error',
+          message: expectedMessage,
+        }),
+      );
+      expect(result.current.status.value).toBe('error');
+      expect(mocks.getStream).not.toHaveBeenCalled();
+      expect(mocks.playerInit).not.toHaveBeenCalled();
+      expect(mocks.clientConnect).not.toHaveBeenCalled();
+    },
+  );
 });

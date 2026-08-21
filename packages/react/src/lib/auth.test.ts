@@ -25,6 +25,19 @@ describe('AuthStrategySchema', () => {
     }
   });
 
+  it('rejects a whitespace-only API key as empty', () => {
+    const result = AuthStrategySchema.safeParse({
+      type: 'apiKey',
+      value: ' \t\n',
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(
+        'API key for the Hume API must not be empty',
+      );
+    }
+  });
+
   it('rejects a missing access token with a descriptive message', () => {
     const result = AuthStrategySchema.safeParse({ type: 'accessToken' });
     expect(result.success).toBe(false);
@@ -56,6 +69,9 @@ describe('getAuthStrategyError', () => {
     );
     expect(getAuthStrategyError({ type: 'accessToken', value: 42 })).toBe(
       'auth.value: Access token for the Hume API must be a string',
+    );
+    expect(getAuthStrategyError({ type: 'accessToken', value: '   ' })).toBe(
+      'auth.value: Access token for the Hume API must not be empty',
     );
   });
 
