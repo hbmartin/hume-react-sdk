@@ -40,42 +40,54 @@ export const useMessages = ({
   const createConnectMessage = useCallback(() => {
     setChatMetadata(null);
     setMessages((prev) =>
-      prev.concat([
-        {
-          type: 'socket_connected',
-          receivedAt: new Date(),
-        },
-      ]),
+      keepLastN(
+        messageHistoryLimit,
+        prev.concat([
+          {
+            type: 'socket_connected',
+            receivedAt: new Date(),
+          },
+        ]),
+      ),
     );
-  }, []);
+  }, [messageHistoryLimit]);
 
   const createSessionSettingsMessage = useCallback(
     (sessionSettings: Hume.empathicVoice.SessionSettings) => {
       setMessages((prev) =>
-        prev.concat([
-          {
-            type: 'session_settings',
-            sessionSettings,
-            receivedAt: new Date(),
-          },
-        ]),
+        keepLastN(
+          messageHistoryLimit,
+          prev.concat([
+            {
+              type: 'session_settings',
+              sessionSettings,
+              receivedAt: new Date(),
+            },
+          ]),
+        ),
       );
     },
-    [],
+    [messageHistoryLimit],
   );
 
-  const createDisconnectMessage = useCallback((event: CloseEvent) => {
-    setMessages((prev) =>
-      prev.concat([
-        {
-          type: 'socket_disconnected',
-          code: event.code,
-          reason: event.reason,
-          receivedAt: new Date(),
-        },
-      ]),
-    );
-  }, []);
+  const createDisconnectMessage = useCallback(
+    (event: CloseEvent) => {
+      setMessages((prev) =>
+        keepLastN(
+          messageHistoryLimit,
+          prev.concat([
+            {
+              type: 'socket_disconnected',
+              code: event.code,
+              reason: event.reason,
+              receivedAt: new Date(),
+            },
+          ]),
+        ),
+      );
+    },
+    [messageHistoryLimit],
+  );
 
   const addMessageKeepingInterimLast = useCallback(
     (

@@ -230,12 +230,6 @@ importers:
       hume:
         specifier: ^0.16.1
         version: 0.16.1
-      react:
-        specifier: ^18.2.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.2.0
-        version: 18.3.1(react@18.3.1)
     devDependencies:
       '@humeai/eslint-config':
         specifier: workspace:*
@@ -279,6 +273,12 @@ importers:
       jsdom:
         specifier: ^24.0.0
         version: 24.1.0
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.3.1(react@18.3.1)
       tsup:
         specifier: ^8.3.5
         version: 8.3.5(jiti@1.21.6)(postcss@8.5.6)(typescript@5.4.5)(yaml@2.4.5)
@@ -297,12 +297,6 @@ importers:
       hume:
         specifier: 0.16.1
         version: 0.16.1
-      react:
-        specifier: ^18.2.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.2.0
-        version: 18.3.1(react@18.3.1)
       type-fest:
         specifier: ^4.26.0
         version: 4.26.0
@@ -355,6 +349,12 @@ importers:
       jsdom:
         specifier: ^24.0.0
         version: 24.1.0
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.3.1(react@18.3.1)
       tsup:
         specifier: ^8.3.5
         version: 8.3.5(jiti@1.21.6)(postcss@8.5.6)(typescript@5.4.5)(yaml@2.4.5)

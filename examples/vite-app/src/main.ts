@@ -16,18 +16,27 @@ const appendMessage = (message: Hume.empathicVoice.SubscribeEvent) => {
   const timestamp = new Date().toLocaleTimeString();
 
   const messageContainer = document.createElement('div');
+  // textContent, not innerHTML: transcript content is server-provided text
+  // and must not be parsed as markup.
   if (message.type === 'assistant_message' || message.type === 'user_message') {
-    messageContainer.innerHTML = `[${timestamp}] ${message.message.role}: ${message.message.content}`;
+    messageContainer.textContent = `[${timestamp}] ${message.message.role}: ${message.message.content}`;
   } else {
-    messageContainer.innerHTML = `[${timestamp}] <Audio Blob>`;
+    messageContainer.textContent = `[${timestamp}] <Audio Blob>`;
   }
 
   messageHistory.appendChild(messageContainer);
 };
 
-const hume = new HumeClient({
-  apiKey: String(import.meta.env['VITE_HUME_API_KEY']),
-});
+// String(...) would turn an unset env var into the literal "undefined",
+// which passes non-empty credential checks and fails only at the server.
+const apiKey = import.meta.env['VITE_HUME_API_KEY'];
+if (typeof apiKey !== 'string' || apiKey.trim() === '') {
+  connectionState.textContent =
+    'Connection State: VITE_HUME_API_KEY is not set. Add it to a .env file.';
+  throw new Error('VITE_HUME_API_KEY is not set');
+}
+
+const hume = new HumeClient({ apiKey });
 
 const client = hume.empathicVoice.chat.connect();
 
