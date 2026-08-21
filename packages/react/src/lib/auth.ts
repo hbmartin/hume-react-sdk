@@ -6,7 +6,10 @@ const credentialSchema = (label: string) =>
       required_error: `${label} for the Hume API is required`,
       invalid_type_error: `${label} for the Hume API must be a string`,
     })
-    .min(1, `${label} for the Hume API must not be empty`);
+    .refine(
+      (value) => value.trim().length > 0,
+      `${label} for the Hume API must not be empty`,
+    );
 
 export const AuthStrategySchema = z.discriminatedUnion(
   'type',

@@ -50,15 +50,14 @@ Here's a simple example to get you started with the `EmbeddedVoice` component:
 import React, { useState } from 'react';
 import { EmbeddedVoice } from '@humeai/voice-embed-react';
 
-function App() {
-  const apiKey = process.env.HUME_API_KEY || '';
+function App({ accessToken }: { accessToken: string }) {
   const [isEmbedOpen, setIsEmbedOpen] = useState(false);
 
   return (
     <div>
       <button onClick={() => setIsEmbedOpen(true)}>Open Widget</button>
       <EmbeddedVoice
-        auth={{ type: 'apiKey', value: apiKey }}
+        auth={{ type: 'accessToken', value: accessToken }}
         onMessage={(msg) => console.log('Message received: ', msg)}
         onClose={() => setIsEmbedOpen(false)}
         isEmbedOpen={isEmbedOpen}
