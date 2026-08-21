@@ -68,6 +68,8 @@ function App() {
 }
 ```
 
+**Keep your API key off the client.** The `auth` value is forwarded from the browser to the widget and used for the WebSocket handshake, so it is visible to your end users. Your Hume API key is a long-lived secret that can bill your account; for production apps use `auth={{ type: 'accessToken', value: accessToken }}` with a short-lived token minted by your server (see [token authentication](https://dev.hume.ai/docs/introduction/api-key#token-authentication)), and reserve `{ type: 'apiKey' }` for local prototyping. The widget rejects an empty or missing credential rather than attempting to connect.
+
 **Note:** For integration within server components, instantiate `EmbeddedVoice` within a client component. For more information checkout the [Next.js documentation on client components](https://nextjs.org/docs/app/building-your-application/rendering/client-components).
 
 ### Component Props

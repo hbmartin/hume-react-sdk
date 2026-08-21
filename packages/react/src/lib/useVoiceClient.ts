@@ -2,7 +2,7 @@ import { Hume, HumeClient } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type Simplify } from 'type-fest';
 
-import { type AuthStrategy } from './auth';
+import { type AuthStrategy, getAuthStrategyError } from './auth';
 import { useLatestRef } from './useLatestRef';
 import type {
   AudioOutputMessage,
@@ -135,6 +135,17 @@ export const useVoiceClient = (props: {
       return new Promise<VoiceReadyState>((resolve, reject) => {
         if (signal.aborted) {
           reject(new Error('Connection attempt has already been aborted'));
+          return;
+        }
+
+        // Fail fast on unusable credentials instead of letting the server
+        // reject the socket with an opaque close event.
+        const authError = getAuthStrategyError(config.auth);
+        if (authError !== null) {
+          const error = new Error(authError);
+          onClientError.current?.(authError, error);
+          reject(error);
+          return;
         }
 
         const hostname = config.hostname || 'api.hume.ai';

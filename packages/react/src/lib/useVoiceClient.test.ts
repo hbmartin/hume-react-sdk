@@ -55,6 +55,28 @@ describe('useVoiceClient', () => {
     expect(hook.result.current.readyState).toBe(VoiceReadyState.IDLE);
   });
 
+  it('rejects an unusable auth strategy before creating a socket', async () => {
+    const onClientError = vi.fn();
+    const { result } = renderHook(() => useVoiceClient({ onClientError }));
+
+    let connectPromise = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connectPromise = result.current.connect({
+        auth: { type: 'apiKey', value: '' },
+      });
+    });
+
+    await expect(connectPromise).rejects.toThrow(
+      'auth.value: API key for the Hume API must not be empty',
+    );
+    expect(onClientError).toHaveBeenCalledWith(
+      'auth.value: API key for the Hume API must not be empty',
+      expect.any(Error),
+    );
+    expect(humeMocks.connect).not.toHaveBeenCalled();
+    expect(result.current.readyState).toBe(VoiceReadyState.IDLE);
+  });
+
   it('ignores a stale socket close after a newer connection becomes active', async () => {
     const firstSocket = createSocket();
     const secondSocket = createSocket();

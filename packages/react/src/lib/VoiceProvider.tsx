@@ -32,6 +32,7 @@ import {
   VoiceReadyState,
 } from './useVoiceClient';
 import { ConnectOptions } from '../models/connect-options';
+import { getAuthStrategyError } from './auth';
 import {
   AssistantProsodyMessage,
   AssistantTranscriptMessage,
@@ -617,6 +618,20 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         console.warn(
           'Already connected or connecting to a chat. Ignoring duplicate connection attempt.',
         );
+        return;
+      }
+
+      // Validate credentials before requesting microphone access so a
+      // misconfigured app fails with a clear message instead of prompting the
+      // user for a microphone it will never use.
+      const authError = getAuthStrategyError(socketConfig.auth);
+      if (authError !== null) {
+        updateError({
+          type: 'socket_error',
+          reason: 'socket_connection_failure',
+          message: `A websocket connection could not be established. Error message: ${authError}`,
+          error: new Error(authError),
+        });
         return;
       }
 
