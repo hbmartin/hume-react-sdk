@@ -16,9 +16,13 @@
   "devDependencies": {
     "@humeai/eslint-config": "workspace:*",
     "@humeai/typescript-config": "workspace:*",
+    "eslint": "^8.56.0",
     "prettier": "^3.7.4",
     "turbo": "^2.9.14"
   },
+  "browserslist": [
+    "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
+  ],
   "packageManager": "pnpm@9.1.4",
   "engines": {
     "node": ">=18"

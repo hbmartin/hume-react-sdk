@@ -25,9 +25,7 @@
   "license": "ISC",
   "dependencies": {
     "@humeai/voice-embed": "workspace:*",
-    "hume": "^0.16.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "hume": "^0.16.1"
   },
   "devDependencies": {
     "@humeai/eslint-config": "workspace:*",
@@ -44,6 +42,8 @@
     "eslint-plugin-react": "^7.34.1",
     "eslint-plugin-react-hooks": "^4.6.0",
     "jsdom": "^24.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "tsup": "^8.3.5",
     "typescript": "^5.4.3",
     "vitest": "^3.2.6"
@@ -51,8 +51,5 @@
   "peerDependencies": {
     "react": ">=18.2.0",
     "react-dom": ">=18.2.0"
-  },
-  "browserslist": [
-    "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
-  ]
+  }
 }

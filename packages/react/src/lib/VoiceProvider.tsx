@@ -1,8 +1,7 @@
 import { type Hume } from 'hume';
+import type { FC, PropsWithChildren } from 'react';
 import React, {
   createContext,
-  FC,
-  PropsWithChildren,
   useCallback,
   useContext,
   useEffect,
@@ -12,28 +11,28 @@ import React, {
   useSyncExternalStore,
 } from 'react';
 
-import { ConnectionMessage } from './connection-message';
-import type { FftSnapshot } from './fftStore';
-import { FftStore, useFftSubscription } from './fftStore';
-import type { CallDurationStore } from './useCallDuration';
-import { useLatestRef } from './useLatestRef';
+import { getAuthStrategyError } from './auth';
+import type { ConnectionMessage } from './connection-message';
+import type { FftSnapshot, FftStore } from './fftStore';
+import { useFftSubscription } from './fftStore';
 import { noop } from './noop';
+import type { CallDurationStore } from './useCallDuration';
 import { useCallDuration } from './useCallDuration';
+import { useLatestRef } from './useLatestRef';
 import { useMessages } from './useMessages';
 import { useMicrophone } from './useMicrophone';
 import { useMicrophoneStream } from './useMicrophoneStream';
 import { useSoundPlayer } from './useSoundPlayer';
 import { useToolStatus } from './useToolStatus';
+import type { ToolCallHandler } from './useVoiceClient';
 import {
   type SessionSettingsUpdate,
   type SocketCloseEvent,
-  ToolCallHandler,
   useVoiceClient,
   VoiceReadyState,
 } from './useVoiceClient';
-import { ConnectOptions } from '../models/connect-options';
-import { getAuthStrategyError } from './auth';
-import {
+import type { ConnectOptions } from '../models/connect-options';
+import type {
   AssistantProsodyMessage,
   AssistantTranscriptMessage,
   AudioOutputMessage,
@@ -304,8 +303,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     [stopTimer, updateError],
   );
 
-  const config = props;
-
   const micStopFnRef = useRef<null | (() => Promise<void>)>(null);
 
   const player = useSoundPlayer({
@@ -379,12 +376,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         }
 
         if (message.type === 'error') {
-          const error: VoiceError = {
+          const voiceError: VoiceError = {
             type: 'socket_error',
             reason: 'received_assistant_error_message',
             message: message.message,
           };
-          onError.current?.(error);
+          onError.current?.(voiceError);
         }
       },
       [
@@ -407,13 +404,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     onClientError,
     onToolCallError: useCallback(
       (message: string, err?: Error) => {
-        const error: VoiceError = {
+        const voiceError: VoiceError = {
           type: 'socket_error',
           reason: 'received_tool_call_error',
           message,
           error: err,
         };
-        updateError(error);
+        updateError(voiceError);
       },
       [updateError],
     ),
@@ -657,7 +654,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       } catch (e) {
         const isPermissionDeniedError =
           e instanceof DOMException && e.name === 'NotAllowedError';
-        const error: VoiceError = {
+        const voiceError: VoiceError = {
           type: 'mic_error',
           reason: isPermissionDeniedError
             ? 'mic_permission_denied'
@@ -667,7 +664,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               ? e.message
               : 'The microphone could not be initialized.',
         };
-        updateError(error);
+        updateError(voiceError);
         return;
       }
 
@@ -930,11 +927,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       try {
         clientSendToolMessage(message);
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
         updateError({
           type: 'socket_error',
           reason: 'failed_to_send_message',
-          message,
+          message: errorMessage,
         });
       }
     },

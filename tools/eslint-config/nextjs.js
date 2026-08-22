@@ -1,70 +1,59 @@
-/*eslint-env commonjs*/
+/* eslint-env commonjs */
 // @ts-check
-/** @type {import('eslint').ESLint.Options} */
+// Resolve the plugins declared below from this package's own dependencies,
+// so consumers only need eslint + this config (not every plugin).
+require('@rushstack/eslint-patch/modern-module-resolution');
+
+/** @type {import('eslint').Linter.Config} */
 module.exports = {
-  root: true,
-  plugins: ['jest', 'react', 'react-hooks', 'jsx-a11y', 'storybook'],
+  plugins: ['react', 'react-hooks', 'jsx-a11y'],
   extends: [
-    '@humeai/eslint-config/base',
-    'eslint:recommended',
+    require.resolve('./base.js'),
+    'plugin:react/recommended',
+    'plugin:react/jsx-runtime',
+    'plugin:react-hooks/recommended',
     'plugin:jsx-a11y/strict',
     'plugin:@next/next/core-web-vitals',
-    'plugin:react/jsx-runtime',
-    'plugin:react/recommended',
-    'plugin:react-hooks/recommended',
-    'plugin:storybook/recommended',
     'plugin:tailwindcss/recommended',
   ],
-  ignorePatterns: ['!.storybook', '!.prettierrc.js', '!next-env.d.ts'],
   settings: {
     react: {
       version: 'detect',
+    },
+    'import/resolver': {
+      node: {
+        extensions: ['.mjs', '.js', '.jsx', '.json', '.ts', '.tsx', '.d.ts'],
+      },
     },
     tailwindcss: {
       config: 'tailwind.config.ts',
       callees: ['classnames', 'cn', 'cva'],
       cssFiles: [
         // load valid classnames from css files
-        './src/**/*.css',
+        '**/*.css',
         '!**/node_modules',
       ],
     },
   },
   overrides: [
-    // don't use default exports unless exporting a next.js api handler or page component
+    // Next.js route files (and config files) must use default exports;
+    // ban default exports everywhere else.
     {
-      files: ['./src/**/*.ts', './src/**/*.tsx'],
+      files: ['*.ts', '*.tsx'],
       excludedFiles: [
-        'src/pages/**/*',
-        'src/**/?(*.)stories.tsx',
-        '.storybook/main.ts',
+        'app/**',
+        'pages/**',
+        'middleware.ts',
+        '*.config.ts',
+        'next-env.d.ts',
       ],
       rules: {
         'import/no-default-export': 'error',
       },
     },
-    {
-      files: ['*.ts', '*.tsx'],
-      extends: ['airbnb-typescript'],
-      rules: {
-        'no-unused-vars': 'off',
-      },
-    },
-    {
-      files: [
-        './src/**/*.ts',
-        './src/**/*.tsx',
-        './src/**/*.js',
-        './src/**/*.jsx',
-      ],
-    },
-    {
-      files: ['./e2e/**.*.ts', './e2e/**.*.tsx'],
-      extends: ['plugin:playwright/recommended'],
-    },
   ],
   rules: {
-    'jest/no-focused-tests': 'error',
+    'react/jsx-filename-extension': ['error', { extensions: ['.jsx', '.tsx'] }],
     'react/jsx-key': [
       'error',
       {
@@ -72,32 +61,9 @@ module.exports = {
       },
     ],
     'react/prop-types': 'off',
-    'react/react-in-jsx-scope': 'off',
     'react/jsx-props-no-spreading': 'off',
     'react/hook-use-state': 'error',
     'react/jsx-no-leaked-render': 'error',
-    'import/order': [
-      'error',
-      {
-        alphabetize: {
-          order: 'asc',
-          caseInsensitive: true,
-        },
-        groups: [
-          //
-          ['external', 'builtin'],
-          ['internal'],
-          ['index', 'sibling', 'parent'],
-        ],
-        // keep "$/" imports within the "external" group
-        pathGroups: [
-          { group: 'external', pattern: '$/**' },
-          { group: 'external', pattern: '$storybook/**' },
-        ],
-        pathGroupsExcludedImportTypes: ['builtin'],
-        'newlines-between': 'always',
-      },
-    ],
     'jsx-a11y/label-has-associated-control': [
       2,
       {

@@ -6,7 +6,7 @@ import { VoiceReadyState } from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
 
 describe('useVoice', () => {
-  it('should in', async () => {
+  it('should in', () => {
     const hook = renderHook(() => useVoice(), {
       wrapper: ({ children }) => {
         return <VoiceProvider>{children}</VoiceProvider>;

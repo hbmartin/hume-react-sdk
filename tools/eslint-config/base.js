@@ -1,9 +1,11 @@
-/* eslint-env commonjs*/
+/* eslint-env commonjs */
 // @ts-check
-/** @type {import('eslint').ESLint.Options} */
+// Resolve the plugins declared below from this package's own dependencies,
+// so consumers only need eslint + this config (not every plugin).
+require('@rushstack/eslint-patch/modern-module-resolution');
 
+/** @type {import('eslint').Linter.Config} */
 module.exports = {
-  root: true,
   plugins: ['import', '@typescript-eslint', 'prettier', 'compat'],
   extends: ['eslint:recommended', 'prettier', 'plugin:compat/recommended'],
   parser: '@typescript-eslint/parser',
@@ -12,22 +14,31 @@ module.exports = {
   },
   overrides: [
     {
-      files: ['*.test.ts'],
+      files: ['*.test.ts', '*.test.tsx'],
       rules: {
         'no-console': 'off',
+        'no-restricted-syntax': [
+          'error',
+          {
+            selector:
+              "CallExpression[callee.object.name=/^(describe|it|test)$/][callee.property.name='only']",
+            message: 'Remove `.only` before committing so the whole suite runs.',
+          },
+        ],
       },
     },
     {
-      files: ['*.ts'],
+      files: ['*.ts', '*.tsx'],
       extends: [
         'airbnb-typescript/base',
         'plugin:@typescript-eslint/recommended',
         'plugin:@typescript-eslint/recommended-requiring-type-checking',
+        // re-apply prettier last so it disables the formatting rules that
+        // airbnb/@typescript-eslint re-enabled inside this override
+        'prettier',
       ],
       rules: {
         'no-unused-vars': 'off',
-        '@typescript-eslint/quotes': 'off',
-        '@typescript-eslint/indent': 'off',
         '@typescript-eslint/consistent-type-imports': 'error',
         '@typescript-eslint/dot-notation': 'off',
         '@typescript-eslint/no-unused-vars': [
@@ -83,7 +94,6 @@ module.exports = {
           ['internal'],
           ['index', 'sibling', 'parent'],
         ],
-        // keep "$/" imports within the "external" group
         pathGroupsExcludedImportTypes: ['builtin'],
         'newlines-between': 'always',
       },

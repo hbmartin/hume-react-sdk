@@ -23,9 +23,7 @@ const fftStore = {
 
 vi.mock('./useVoiceClient', async () => {
   const actual =
-    await vi.importActual<typeof import('./useVoiceClient')>(
-      './useVoiceClient',
-    );
+    await vi.importActual<typeof UseVoiceClientModule>('./useVoiceClient');
   return {
     ...actual,
     useVoiceClient: (props: Parameters<typeof actual.useVoiceClient>[0]) => {
@@ -82,6 +80,7 @@ vi.mock('./useMicrophoneStream', () => ({
   }),
 }));
 
+import type * as UseVoiceClientModule from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
 
 const createDeferred = <T,>() => {
@@ -135,7 +134,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('connected');
 
     act(() => {
-      mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
     expect(result.current.status.value).toBe('disconnected');
     expect(onClose).toHaveBeenCalledWith(
@@ -167,15 +166,16 @@ describe('VoiceProvider close lifecycle', () => {
     const deferredDrain = createDeferred<boolean>();
     mocks.waitForDrain.mockReturnValueOnce(deferredDrain.promise);
     let reconnect = Promise.resolve();
-    const onClose = vi.fn(() => {
-      reconnect = rendered.result.current.connect({
-        auth: { type: 'accessToken', value: 'next-token' },
-      });
-    });
+    const onClose = vi.fn();
     const rendered = renderHook(() => useVoice(), {
       wrapper: ({ children }) => (
         <VoiceProvider onClose={onClose}>{children}</VoiceProvider>
       ),
+    });
+    onClose.mockImplementation(() => {
+      reconnect = rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'next-token' },
+      });
     });
 
     await act(() =>
@@ -186,7 +186,7 @@ describe('VoiceProvider close lifecycle', () => {
     const stopsBeforeClose = mocks.playerStop.mock.calls.length;
 
     act(() => {
-      mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
     expect(onClose).toHaveBeenCalledOnce();
     expect(rendered.result.current.status.value).toBe('disconnected');

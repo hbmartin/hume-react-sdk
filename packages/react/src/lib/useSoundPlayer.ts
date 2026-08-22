@@ -38,6 +38,11 @@ const DRAIN_POLL_INTERVAL_MS = 50;
 const DRAIN_SETTLE_MS = DRAIN_POLL_INTERVAL_MS;
 /** Upper bound on how long a server-initiated disconnect waits for audio. */
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
+/**
+ * When autoplay policy blocks a suspended AudioContext, `resume()` never
+ * settles, so the attempt must be bounded rather than awaited directly.
+ */
+const RESUME_TIMEOUT_MS = 1_000;
 
 export const useSoundPlayer = (props: {
   enableAudioWorklet: boolean;
@@ -109,8 +114,10 @@ export const useSoundPlayer = (props: {
    * It will play the next clip in the queue if there is one.
    */
   const playNextClip = useCallback(() => {
+    // While a clip is mid-playback the queue may still hold entries, so
+    // report its real length instead of zeroing it.
     if (clipQueue.current.length === 0 || isProcessing.current) {
-      setQueueLength(0);
+      setQueueLength(clipQueue.current.length);
       return;
     }
 
@@ -206,6 +213,32 @@ export const useSoundPlayer = (props: {
         const initAudioContext = sharedAudioContext ?? new AudioContext();
         ownsAudioContext.current = !sharedAudioContext;
         audioContext.current = initAudioContext;
+
+        // An AudioContext created outside a user gesture starts 'suspended'
+        // and renders no audio, so every queued clip would pile up silently.
+        // Resume it here, and fail initialization loudly if the browser's
+        // autoplay policy keeps it suspended.
+        if (initAudioContext.state === 'suspended') {
+          const resumed = await Promise.race([
+            initAudioContext.resume().then(
+              () => true,
+              () => false,
+            ),
+            new Promise<boolean>((resolve) =>
+              setTimeout(() => resolve(false), RESUME_TIMEOUT_MS),
+            ),
+          ]);
+          if (generation !== playerGeneration.current) {
+            return;
+          }
+          if (!resumed && initAudioContext.state === 'suspended') {
+            onError.current(
+              'The browser blocked audio playback (autoplay policy). Connect from a user gesture, such as a click handler.',
+              'audio_player_initialization_failure',
+            );
+            return;
+          }
+        }
 
         // Set the speaker device if specified and supported
         if (speakerDeviceId && 'setSinkId' in initAudioContext) {
