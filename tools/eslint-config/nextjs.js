@@ -42,7 +42,9 @@ module.exports = {
       files: ['*.ts', '*.tsx'],
       excludedFiles: [
         'app/**',
+        'src/app/**',
         'pages/**',
+        'src/pages/**',
         'middleware.ts',
         '*.config.ts',
         'next-env.d.ts',

@@ -204,10 +204,25 @@ export const useSoundPlayer = (props: {
   }, [fftStore]);
 
   const initPlayer = useCallback(
-    async (speakerDeviceId?: string, sharedAudioContext?: AudioContext) => {
+    async (
+      speakerDeviceId?: string,
+      sharedAudioContext?: AudioContext,
+    ): Promise<boolean> => {
       const generation = ++playerGeneration.current;
       playbackActivitySequence.current = 0;
       isWorkletActive.current = true;
+
+      const failInitialization = (
+        message: string,
+        reason: AudioPlayerErrorReason,
+      ) => {
+        if (generation === playerGeneration.current) {
+          isInitialized.current = false;
+          isWorkletActive.current = false;
+          onError.current(message, reason);
+        }
+        return false;
+      };
 
       try {
         const initAudioContext = sharedAudioContext ?? new AudioContext();
@@ -219,24 +234,30 @@ export const useSoundPlayer = (props: {
         // Resume it here, and fail initialization loudly if the browser's
         // autoplay policy keeps it suspended.
         if (initAudioContext.state === 'suspended') {
+          let resumeTimeoutId: ReturnType<typeof setTimeout> | undefined;
           const resumed = await Promise.race([
             initAudioContext.resume().then(
               () => true,
               () => false,
             ),
-            new Promise<boolean>((resolve) =>
-              setTimeout(() => resolve(false), RESUME_TIMEOUT_MS),
-            ),
+            new Promise<boolean>((resolve) => {
+              resumeTimeoutId = setTimeout(
+                () => resolve(false),
+                RESUME_TIMEOUT_MS,
+              );
+            }),
           ]);
-          if (generation !== playerGeneration.current) {
-            return;
+          if (resumeTimeoutId !== undefined) {
+            clearTimeout(resumeTimeoutId);
           }
-          if (!resumed && initAudioContext.state === 'suspended') {
-            onError.current(
+          if (generation !== playerGeneration.current) {
+            return false;
+          }
+          if (!resumed || initAudioContext.state === 'suspended') {
+            return failInitialization(
               'The browser blocked audio playback (autoplay policy). Connect from a user gesture, such as a click handler.',
               'audio_player_initialization_failure',
             );
-            return;
           }
         }
 
@@ -251,7 +272,7 @@ export const useSoundPlayer = (props: {
             ).setSinkId(speakerDeviceId);
           } catch (e) {
             if (generation !== playerGeneration.current) {
-              return;
+              return false;
             }
             onError.current(
               `Failed to set speaker device: ${e instanceof Error ? e.message : 'Unknown error'}`,
@@ -261,7 +282,7 @@ export const useSoundPlayer = (props: {
           }
         }
         if (generation !== playerGeneration.current) {
-          return;
+          return false;
         }
 
         // Use AnalyserNode to get fft frequency data for visualizations
@@ -279,14 +300,13 @@ export const useSoundPlayer = (props: {
         if (props.enableAudioWorklet) {
           const isWorkletLoaded = await loadAudioWorklet(initAudioContext);
           if (generation !== playerGeneration.current) {
-            return;
+            return false;
           }
           if (!isWorkletLoaded) {
-            onError.current(
+            return failInitialization(
               'Failed to load audio worklet',
               'audio_worklet_load_failure',
             );
-            return;
           }
 
           const worklet = new AudioWorkletNode(
@@ -348,8 +368,9 @@ export const useSoundPlayer = (props: {
         } else {
           isInitialized.current = true;
         }
+        return true;
       } catch (e) {
-        onError.current(
+        return failInitialization(
           'Failed to initialize audio player',
           'audio_player_initialization_failure',
         );

@@ -73,10 +73,14 @@ describe('useSoundPlayer', () => {
   let bufferSources: FakeBufferSource[];
   let createBufferSource: Mock;
   let decodeAudioData: Mock;
+  let audioContextState: AudioContextState;
+  let resumeAudioContext: Mock;
 
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
     originalAudioWorkletNode = globalThis.AudioWorkletNode;
+    audioContextState = 'running';
+    resumeAudioContext = vi.fn().mockResolvedValue(undefined);
     decodeAudioData = vi.fn((buffer: ArrayBuffer) =>
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       Promise.resolve(createFakeAudioBuffer(new Uint8Array(buffer)[0]!)),
@@ -111,6 +115,10 @@ describe('useSoundPlayer', () => {
       destination: {},
       decodeAudioData,
       close: vi.fn().mockResolvedValue(undefined),
+      get state() {
+        return audioContextState;
+      },
+      resume: resumeAudioContext,
       sampleRate: 48000,
     }));
 
@@ -122,9 +130,89 @@ describe('useSoundPlayer', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     globalThis.AudioContext = originalAudioContext;
     globalThis.AudioWorkletNode = originalAudioWorkletNode;
     vi.restoreAllMocks();
+  });
+
+  it('returns false when a suspended AudioContext rejects resume', async () => {
+    audioContextState = 'suspended';
+    resumeAudioContext.mockRejectedValueOnce(new Error('autoplay blocked'));
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    let initialized = true;
+    await act(async () => {
+      initialized = await result.current.initPlayer();
+    });
+
+    expect(initialized).toBe(false);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('autoplay policy'),
+      'audio_player_initialization_failure',
+    );
+    expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
+  });
+
+  it('returns false when resume resolves but the context stays suspended', async () => {
+    audioContextState = 'suspended';
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    let initialized = true;
+    await act(async () => {
+      initialized = await result.current.initPlayer();
+    });
+
+    expect(initialized).toBe(false);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('autoplay policy'),
+      'audio_player_initialization_failure',
+    );
+    expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
+  });
+
+  it('returns false when resuming a suspended AudioContext times out', async () => {
+    vi.useFakeTimers();
+    audioContextState = 'suspended';
+    resumeAudioContext.mockReturnValueOnce(new Promise<void>(() => {}));
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    let initialization = Promise.resolve(true);
+    act(() => {
+      initialization = result.current.initPlayer();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+
+    await expect(initialization).resolves.toBe(false);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('autoplay policy'),
+      'audio_player_initialization_failure',
+    );
+    expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
   });
 
   it('plays chunks in correct order when received in order', async () => {
@@ -538,7 +626,7 @@ describe('useSoundPlayer', () => {
       }),
     );
 
-    let staleInit = Promise.resolve();
+    let staleInit = Promise.resolve(false);
     act(() => {
       staleInit = result.current.initPlayer('old-speaker');
     });

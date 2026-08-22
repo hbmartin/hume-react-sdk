@@ -14,15 +14,22 @@ module.exports = {
   },
   overrides: [
     {
-      files: ['*.test.ts', '*.test.tsx'],
+      files: ['*.test.ts', '*.test.tsx', '*.spec.ts', '*.spec.tsx'],
       rules: {
         'no-console': 'off',
         'no-restricted-syntax': [
           'error',
           {
             selector:
-              "CallExpression[callee.object.name=/^(describe|it|test)$/][callee.property.name='only']",
-            message: 'Remove `.only` before committing so the whole suite runs.',
+              "MemberExpression[object.name=/^(describe|it|test|suite)$/][property.name='only']",
+            message:
+              'Remove `.only` before committing so the whole suite runs.',
+          },
+          {
+            selector:
+              "MemberExpression[object.object.name=/^(describe|it|test|suite)$/][property.name='only']",
+            message:
+              'Remove `.only` before committing so the whole suite runs.',
           },
         ],
       },

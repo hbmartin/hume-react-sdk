@@ -1,10 +1,16 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+type PlayerErrorHandler = (
+  message: string,
+  reason: 'audio_player_initialization_failure',
+) => void;
 
 const mocks = vi.hoisted(() => ({
   clientConnect: vi.fn(),
   clientDisconnect: vi.fn(),
+  contextClose: vi.fn(),
   getStream: vi.fn(),
   micStart: vi.fn(),
   micStop: vi.fn(),
@@ -12,7 +18,9 @@ const mocks = vi.hoisted(() => ({
     | null
     | ((event: CloseEvent, consumerInitiated: boolean) => void | Promise<void>),
   playerInit: vi.fn(),
+  playerErrorHandler: null as null | PlayerErrorHandler,
   playerStop: vi.fn(),
+  stopStream: vi.fn(),
   waitForDrain: vi.fn(),
 }));
 
@@ -45,21 +53,25 @@ vi.mock('./useVoiceClient', async () => {
 });
 
 vi.mock('./useSoundPlayer', () => ({
-  useSoundPlayer: () => ({
-    addToQueue: vi.fn(),
-    clearQueue: vi.fn(),
-    fftStore,
-    initPlayer: mocks.playerInit,
-    isAudioMuted: false,
-    isPlaying: false,
-    muteAudio: vi.fn(),
-    queueLength: 0,
-    setVolume: vi.fn(),
-    stopAll: mocks.playerStop,
-    unmuteAudio: vi.fn(),
-    volume: 1,
-    waitForQueueToDrain: mocks.waitForDrain,
-  }),
+  useSoundPlayer: (props: { onError: PlayerErrorHandler }) => {
+    mocks.playerErrorHandler = props.onError;
+
+    return {
+      addToQueue: vi.fn(),
+      clearQueue: vi.fn(),
+      fftStore,
+      initPlayer: mocks.playerInit,
+      isAudioMuted: false,
+      isPlaying: false,
+      muteAudio: vi.fn(),
+      queueLength: 0,
+      setVolume: vi.fn(),
+      stopAll: mocks.playerStop,
+      unmuteAudio: vi.fn(),
+      volume: 1,
+      waitForQueueToDrain: mocks.waitForDrain,
+    };
+  },
 }));
 
 vi.mock('./useMicrophone', () => ({
@@ -76,7 +88,7 @@ vi.mock('./useMicrophone', () => ({
 vi.mock('./useMicrophoneStream', () => ({
   useMicrophoneStream: () => ({
     getStream: mocks.getStream,
-    stopStream: vi.fn(),
+    stopStream: mocks.stopStream,
   }),
 }));
 
@@ -99,21 +111,64 @@ describe('VoiceProvider close lifecycle', () => {
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
     globalThis.AudioContext = vi.fn(() => ({
-      close: vi.fn().mockResolvedValue(undefined),
+      close: mocks.contextClose,
     })) as unknown as typeof AudioContext;
 
     mocks.clientConnect.mockResolvedValue('open');
+    mocks.contextClose.mockResolvedValue(undefined);
     mocks.getStream.mockResolvedValue({});
     mocks.micStop.mockResolvedValue(undefined);
-    mocks.playerInit.mockResolvedValue(undefined);
+    mocks.playerInit.mockResolvedValue(true);
     mocks.playerStop.mockResolvedValue(undefined);
     mocks.waitForDrain.mockResolvedValue(true);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await act(async () => {
+      cleanup();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
     globalThis.AudioContext = originalAudioContext;
     vi.clearAllMocks();
     mocks.onCloseHandler = null;
+    mocks.playerErrorHandler = null;
+  });
+
+  it('aborts before opening the socket when player initialization fails', async () => {
+    mocks.playerInit.mockImplementationOnce(() => {
+      mocks.playerErrorHandler?.(
+        'The browser blocked audio playback (autoplay policy).',
+        'audio_player_initialization_failure',
+      );
+      return Promise.resolve(false);
+    });
+    const onError = vi.fn();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider onError={onError}>{children}</VoiceProvider>
+      ),
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    await waitFor(() => expect(result.current.status.value).toBe('error'));
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'audio_error',
+        reason: 'audio_player_initialization_failure',
+      }),
+    );
+    expect(mocks.clientConnect).not.toHaveBeenCalled();
+    expect(mocks.micStart).not.toHaveBeenCalled();
+    expect(mocks.stopStream).toHaveBeenCalledOnce();
+    expect(mocks.playerStop).toHaveBeenCalledOnce();
+    expect(mocks.contextClose).toHaveBeenCalledOnce();
   });
 
   it('publishes socket closure immediately and ignores stale drain teardown', async () => {
