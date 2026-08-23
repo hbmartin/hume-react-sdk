@@ -118,14 +118,21 @@ describe('useMicrophone', () => {
   it('reports an error and refuses to record when MediaRecorder is absent', () => {
     vi.stubGlobal('MediaRecorder', undefined);
     const { result, onError } = renderMicrophone();
+    const context = createAudioContext();
+    const createMediaStreamSource = vi.spyOn(
+      context,
+      'createMediaStreamSource',
+    );
 
     expect(onError).toHaveBeenCalledWith(
       'MediaRecorder is not supported',
       'mime_types_not_supported',
     );
-    expect(() =>
-      result.current.start(createStream(), createAudioContext()),
-    ).toThrow('No MimeType specified');
+    expect(() => result.current.start(createStream(), context)).toThrow(
+      'No MimeType specified',
+    );
+    expect(createMediaStreamSource).not.toHaveBeenCalled();
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
   });
 
   it('reports an error when no candidate mime type is supported', () => {
@@ -143,12 +150,65 @@ describe('useMicrophone', () => {
 
   it('reports an error rather than throwing when MediaRecorder is partially implemented', () => {
     stubMediaRecorder();
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
     const { result, onError } = renderMicrophone();
 
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0]?.[1]).toBe('mime_types_not_supported');
+    expect(onError).toHaveBeenCalledWith(
+      'This browser does not fully support microphone recording.',
+      'mime_types_not_supported',
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to detect supported microphone MIME types.',
+      expect.any(TypeError),
+    );
     expect(() =>
       result.current.start(createStream(), createAudioContext()),
     ).toThrow('No MimeType specified');
+    consoleError.mockRestore();
+  });
+
+  it('rolls back claimed resources when recorder construction fails', () => {
+    class FailingMediaRecorder {
+      static isTypeSupported = vi.fn(() => true);
+
+      constructor() {
+        throw new Error('recorder construction failed');
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FailingMediaRecorder);
+    const sourceDisconnect = vi.fn();
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    const context = {
+      sampleRate: 48000,
+      createMediaStreamSource: vi.fn(() => ({
+        connect: vi.fn(),
+        disconnect: sourceDisconnect,
+      })),
+      createAnalyser: vi.fn(() => ({
+        fftSize: 0,
+        frequencyBinCount: 1024,
+        getByteFrequencyData: vi.fn(),
+      })),
+      close: contextClose,
+    } as unknown as AudioContext;
+    vi.stubGlobal(
+      'AudioContext',
+      vi.fn(() => context),
+    );
+    const trackStop = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: trackStop }],
+    } as unknown as MediaStream;
+    const { result } = renderMicrophone();
+
+    expect(() => result.current.start(stream)).toThrow(
+      'recorder construction failed',
+    );
+    expect(sourceDisconnect).toHaveBeenCalledOnce();
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(trackStop).toHaveBeenCalledOnce();
+    expect(contextClose).toHaveBeenCalledOnce();
   });
 });

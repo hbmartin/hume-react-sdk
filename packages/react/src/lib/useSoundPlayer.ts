@@ -53,6 +53,27 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  * settles, so the attempt must be bounded rather than awaited directly.
  */
 const RESUME_TIMEOUT_MS = 1_000;
+/** Keep teardown from indefinitely blocking errors, replacement, or stop. */
+const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
+
+const closeAudioContextWithTimeout = async (
+  context: AudioContext,
+): Promise<void> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const closePromise = Promise.resolve()
+    .then(() => context.close())
+    .catch(() => undefined);
+
+  await Promise.race([
+    closePromise,
+    new Promise<void>((resolve) => {
+      timeoutId = setTimeout(resolve, AUDIO_CONTEXT_CLOSE_TIMEOUT_MS);
+    }),
+  ]);
+  if (timeoutId !== undefined) {
+    clearTimeout(timeoutId);
+  }
+};
 
 export const useSoundPlayer = (props: {
   enableAudioWorklet: boolean;
@@ -204,11 +225,7 @@ export const useSoundPlayer = (props: {
         audioContext.current = null;
       }
       if (context && shouldCloseContext) {
-        try {
-          await context.close();
-        } catch {
-          // The context may already have been closed by a concurrent stop.
-        }
+        await closeAudioContextWithTimeout(context);
       }
     },
     [cancelPlayerFft],
@@ -362,11 +379,11 @@ export const useSoundPlayer = (props: {
         message: string,
         reason: AudioPlayerErrorReason,
       ) => {
-        await cleanupInitialization();
         if (generation === playerGeneration.current) {
           isInitialized.current = false;
           onError.current(message, reason);
         }
+        await cleanupInitialization();
         return false;
       };
 
@@ -428,7 +445,7 @@ export const useSoundPlayer = (props: {
             ).setSinkId(speakerDeviceId);
           } catch (e) {
             if (generation !== playerGeneration.current) {
-              return abandonInitialization();
+              return await abandonInitialization();
             }
             onError.current(
               `Failed to set speaker device: ${e instanceof Error ? e.message : 'Unknown error'}`,
