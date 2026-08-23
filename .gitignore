@@ -40,3 +40,5 @@ yarn-error.log*
 .DS_Store
 *.pem
 .aider*
+reviews_triage/
+triage_decisions.db
