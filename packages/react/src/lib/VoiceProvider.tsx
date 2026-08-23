@@ -678,9 +678,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return;
       }
       try {
-        await player.initPlayer(devices?.speakerDeviceId, sharedCtx);
+        const playerInitialized = await player.initPlayer(
+          devices?.speakerDeviceId,
+          sharedCtx,
+        );
+        if (!playerInitialized) {
+          resourceStatusRef.current.audioPlayer = 'disconnected';
+          isConnectingRef.current = false;
+          return;
+        }
       } catch (e) {
         resourceStatusRef.current.audioPlayer = 'disconnected';
+        isConnectingRef.current = false;
         updateError({
           type: 'audio_error',
           reason: 'audio_player_initialization_failure',
