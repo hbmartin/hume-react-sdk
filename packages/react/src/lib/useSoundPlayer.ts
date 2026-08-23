@@ -212,10 +212,91 @@ export const useSoundPlayer = (props: {
       playbackActivitySequence.current = 0;
       isWorkletActive.current = true;
 
-      const failInitialization = (
+      let contextForInitialization: AudioContext | null = null;
+      let ownsContextForInitialization = false;
+      let analyserForInitialization: AnalyserNode | null = null;
+      let gainForInitialization: GainNode | null = null;
+      let workletForInitialization: AudioWorkletNode | null = null;
+      let fftRafIdForInitialization: number | null = null;
+
+      const cleanupInitialization = async () => {
+        if (fftRafIdForInitialization !== null) {
+          cancelAnimationFrame(fftRafIdForInitialization);
+          if (fftRafId.current === fftRafIdForInitialization) {
+            fftRafId.current = null;
+          }
+          fftRafIdForInitialization = null;
+        }
+
+        if (workletForInitialization) {
+          workletForInitialization.port.onmessage = null;
+          try {
+            workletForInitialization.port.close();
+          } catch {
+            // Continue releasing the rest of this initialization attempt.
+          }
+          try {
+            workletForInitialization.disconnect();
+          } catch {
+            // The worklet may already have been disconnected.
+          }
+          if (workletNode.current === workletForInitialization) {
+            workletNode.current = null;
+          }
+          workletForInitialization = null;
+        }
+
+        if (analyserForInitialization) {
+          try {
+            analyserForInitialization.disconnect();
+          } catch {
+            // The analyser may already have been disconnected.
+          }
+          if (analyserNode.current === analyserForInitialization) {
+            analyserNode.current = null;
+          }
+          analyserForInitialization = null;
+        }
+
+        if (gainForInitialization) {
+          try {
+            gainForInitialization.disconnect();
+          } catch {
+            // The gain node may already have been disconnected.
+          }
+          if (gainNode.current === gainForInitialization) {
+            gainNode.current = null;
+          }
+          gainForInitialization = null;
+        }
+
+        if (contextForInitialization && ownsContextForInitialization) {
+          try {
+            await contextForInitialization.close();
+          } catch {
+            // The context may already have been closed by a concurrent stop.
+          }
+        }
+        if (
+          generation === playerGeneration.current &&
+          audioContext.current === contextForInitialization
+        ) {
+          audioContext.current = null;
+          ownsAudioContext.current = false;
+        }
+        contextForInitialization = null;
+      };
+
+      const abandonInitialization = async () => {
+        await cleanupInitialization();
+        return false;
+      };
+
+      const failInitialization = async (
         message: string,
         reason: AudioPlayerErrorReason,
       ) => {
+        await cleanupInitialization();
         if (generation === playerGeneration.current) {
           isInitialized.current = false;
           isWorkletActive.current = false;
@@ -226,7 +307,9 @@ export const useSoundPlayer = (props: {
 
       try {
         const initAudioContext = sharedAudioContext ?? new AudioContext();
-        ownsAudioContext.current = !sharedAudioContext;
+        contextForInitialization = initAudioContext;
+        ownsContextForInitialization = !sharedAudioContext;
+        ownsAudioContext.current = ownsContextForInitialization;
         audioContext.current = initAudioContext;
 
         // An AudioContext created outside a user gesture starts 'suspended'
@@ -251,10 +334,10 @@ export const useSoundPlayer = (props: {
             clearTimeout(resumeTimeoutId);
           }
           if (generation !== playerGeneration.current) {
-            return false;
+            return await abandonInitialization();
           }
           if (!resumed || initAudioContext.state === 'suspended') {
-            return failInitialization(
+            return await failInitialization(
               'The browser blocked audio playback (autoplay policy). Connect from a user gesture, such as a click handler.',
               'audio_player_initialization_failure',
             );
@@ -272,7 +355,7 @@ export const useSoundPlayer = (props: {
             ).setSinkId(speakerDeviceId);
           } catch (e) {
             if (generation !== playerGeneration.current) {
-              return false;
+              return abandonInitialization();
             }
             onError.current(
               `Failed to set speaker device: ${e instanceof Error ? e.message : 'Unknown error'}`,
@@ -282,13 +365,15 @@ export const useSoundPlayer = (props: {
           }
         }
         if (generation !== playerGeneration.current) {
-          return false;
+          return await abandonInitialization();
         }
 
         // Use AnalyserNode to get fft frequency data for visualizations
         const analyser = initAudioContext.createAnalyser();
+        analyserForInitialization = analyser;
         // Use GainNode to adjust volume
         const gain = initAudioContext.createGain();
+        gainForInitialization = gain;
 
         analyser.fftSize = 2048; // Must be a power of 2
         analyser.connect(gain);
@@ -300,10 +385,10 @@ export const useSoundPlayer = (props: {
         if (props.enableAudioWorklet) {
           const isWorkletLoaded = await loadAudioWorklet(initAudioContext);
           if (generation !== playerGeneration.current) {
-            return false;
+            return await abandonInitialization();
           }
           if (!isWorkletLoaded) {
-            return failInitialization(
+            return await failInitialization(
               'Failed to load audio worklet',
               'audio_worklet_load_failure',
             );
@@ -313,6 +398,7 @@ export const useSoundPlayer = (props: {
             initAudioContext,
             'audio-processor',
           );
+          workletForInitialization = worklet;
           worklet.connect(analyser);
           workletNode.current = worklet;
 
@@ -360,9 +446,11 @@ export const useSoundPlayer = (props: {
               barkBuffer,
             );
             fftStore.write(barkBuffer);
-            fftRafId.current = requestAnimationFrame(pollFft);
+            fftRafIdForInitialization = requestAnimationFrame(pollFft);
+            fftRafId.current = fftRafIdForInitialization;
           };
-          fftRafId.current = requestAnimationFrame(pollFft);
+          fftRafIdForInitialization = requestAnimationFrame(pollFft);
+          fftRafId.current = fftRafIdForInitialization;
 
           isInitialized.current = true;
         } else {

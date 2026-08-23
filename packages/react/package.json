@@ -15,7 +15,7 @@
     "dist"
   ],
   "scripts": {
-    "test": "vitest",
+    "test": "vitest run",
     "test-watch": "vitest --watch",
     "build": "tsup",
     "dev": "tsup --watch",

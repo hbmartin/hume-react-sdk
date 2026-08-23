@@ -8,6 +8,20 @@ import {
 } from './errors';
 
 /**
+ * The result of parsing a message off the socket: either the decoded message,
+ * or the error explaining why it could not be decoded.
+ */
+export type ParsedMessageResult =
+  | {
+      success: true;
+      message: Hume.empathicVoice.SubscribeEvent | AudioMessage;
+    }
+  | {
+      success: false;
+      error: Error;
+    };
+
+/**
  * @name parseMessageData
  * @description
  * Parse the data of a message from the socket.
@@ -21,16 +35,7 @@ import {
  */
 export const parseMessageData = async (
   data: unknown,
-): Promise<
-  | {
-      success: true;
-      message: Hume.empathicVoice.SubscribeEvent | AudioMessage;
-    }
-  | {
-      success: false;
-      error: Error;
-    }
-> => {
+): Promise<ParsedMessageResult> => {
   if (data instanceof Blob) {
     const message = await parseAudioMessage(data);
 
@@ -90,16 +95,7 @@ export const parseMessageData = async (
  */
 export const parseMessageType = async (
   event: MessageEvent,
-): Promise<
-  | {
-      success: true;
-      message: Hume.empathicVoice.SubscribeEvent | AudioMessage;
-    }
-  | {
-      success: false;
-      error: Error;
-    }
-> => {
+): Promise<ParsedMessageResult> => {
   const data: unknown = event.data;
   return parseMessageData(data);
 };

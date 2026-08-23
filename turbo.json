@@ -17,7 +17,9 @@
       "dependsOn": ["^build", "^test"]
     },
     "test-watch": {
-      "dependsOn": ["^build", "^test-watch"]
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
     },
     "pack": {
       "dependsOn": ["@humeai/voice-react#build"]

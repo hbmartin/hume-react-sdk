@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useSoundPlayer } from './useSoundPlayer';
 import type { AudioOutputMessage } from '../models/messages';
+import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 
 vi.mock('./generateEmptyFft', () => ({
   generateEmptyFft: () => new Uint8Array(32).fill(0),
@@ -75,12 +76,18 @@ describe('useSoundPlayer', () => {
   let decodeAudioData: Mock;
   let audioContextState: AudioContextState;
   let resumeAudioContext: Mock;
+  let closeAudioContext: Mock;
+  let disconnectAnalyserNode: Mock;
+  let disconnectGainNode: Mock;
 
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
     originalAudioWorkletNode = globalThis.AudioWorkletNode;
     audioContextState = 'running';
     resumeAudioContext = vi.fn().mockResolvedValue(undefined);
+    closeAudioContext = vi.fn().mockResolvedValue(undefined);
+    disconnectAnalyserNode = vi.fn();
+    disconnectGainNode = vi.fn();
     decodeAudioData = vi.fn((buffer: ArrayBuffer) =>
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       Promise.resolve(createFakeAudioBuffer(new Uint8Array(buffer)[0]!)),
@@ -103,18 +110,18 @@ describe('useSoundPlayer', () => {
         fftSize: 2048,
         frequencyBinCount: 1024,
         connect: vi.fn(),
-        disconnect: vi.fn(),
+        disconnect: disconnectAnalyserNode,
         getByteFrequencyData: vi.fn(),
       }),
       createGain: () => ({
         connect: vi.fn(),
-        disconnect: vi.fn(),
+        disconnect: disconnectGainNode,
         gain: { setValueAtTime: vi.fn() },
       }),
       createBufferSource,
       destination: {},
       decodeAudioData,
-      close: vi.fn().mockResolvedValue(undefined),
+      close: closeAudioContext,
       get state() {
         return audioContextState;
       },
@@ -160,6 +167,7 @@ describe('useSoundPlayer', () => {
       'audio_player_initialization_failure',
     );
     expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
   it('returns false when resume resolves but the context stays suspended', async () => {
@@ -213,6 +221,153 @@ describe('useSoundPlayer', () => {
       'audio_player_initialization_failure',
     );
     expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
+  });
+
+  it('releases owned nodes and context when worklet loading fails', async () => {
+    vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      'Failed to load audio worklet',
+      'audio_worklet_load_failure',
+    );
+  });
+
+  it('disconnects failed initialization nodes without closing a shared context', async () => {
+    vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
+    const sharedAnalyserDisconnect = vi.fn();
+    const sharedGainDisconnect = vi.fn();
+    const sharedContextClose = vi.fn().mockResolvedValue(undefined);
+    const sharedContext = {
+      state: 'running',
+      createAnalyser: () => ({
+        fftSize: 2048,
+        frequencyBinCount: 1024,
+        connect: vi.fn(),
+        disconnect: sharedAnalyserDisconnect,
+        getByteFrequencyData: vi.fn(),
+      }),
+      createGain: () => ({
+        connect: vi.fn(),
+        disconnect: sharedGainDisconnect,
+        gain: { setValueAtTime: vi.fn() },
+      }),
+      destination: {},
+      sampleRate: 48000,
+      close: sharedContextClose,
+    } as unknown as AudioContext;
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await expect(
+      result.current.initPlayer(undefined, sharedContext),
+    ).resolves.toBe(false);
+
+    expect(sharedAnalyserDisconnect).toHaveBeenCalledOnce();
+    expect(sharedGainDisconnect).toHaveBeenCalledOnce();
+    expect(sharedContextClose).not.toHaveBeenCalled();
+  });
+
+  it('releases a superseded initialization without disturbing the newer player', async () => {
+    const firstWorkletLoad = createDeferred<boolean>();
+    vi.mocked(loadAudioWorklet)
+      .mockImplementationOnce(() => firstWorkletLoad.promise)
+      .mockResolvedValueOnce(true);
+    const firstAnalyserDisconnect = vi.fn();
+    const firstGainDisconnect = vi.fn();
+    const firstContextClose = vi.fn().mockResolvedValue(undefined);
+    const secondContextClose = vi.fn().mockResolvedValue(undefined);
+    const createContext = (
+      analyserDisconnect: Mock,
+      gainDisconnect: Mock,
+      close: Mock,
+    ): AudioContext =>
+      ({
+        state: 'running',
+        createAnalyser: () => ({
+          fftSize: 2048,
+          frequencyBinCount: 1024,
+          connect: vi.fn(),
+          disconnect: analyserDisconnect,
+          getByteFrequencyData: vi.fn(),
+        }),
+        createGain: () => ({
+          connect: vi.fn(),
+          disconnect: gainDisconnect,
+          gain: { setValueAtTime: vi.fn() },
+        }),
+        createBufferSource,
+        decodeAudioData,
+        destination: {},
+        sampleRate: 48000,
+        close,
+      }) as unknown as AudioContext;
+    const firstContext = createContext(
+      firstAnalyserDisconnect,
+      firstGainDisconnect,
+      firstContextClose,
+    );
+    const secondContext = createContext(vi.fn(), vi.fn(), secondContextClose);
+    globalThis.AudioContext = vi
+      .fn()
+      .mockReturnValueOnce(firstContext)
+      .mockReturnValueOnce(secondContext);
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    let supersededInitialization = Promise.resolve(true);
+    act(() => {
+      supersededInitialization = result.current.initPlayer();
+    });
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    await act(async () => {
+      firstWorkletLoad.resolve(true);
+      await expect(supersededInitialization).resolves.toBe(false);
+    });
+
+    expect(firstAnalyserDisconnect).toHaveBeenCalledOnce();
+    expect(firstGainDisconnect).toHaveBeenCalledOnce();
+    expect(firstContextClose).toHaveBeenCalledOnce();
+    expect(secondContextClose).not.toHaveBeenCalled();
+
+    await act(() =>
+      result.current.addToQueue({
+        id: 'new-player',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+    expect(fakePort.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'new-player', type: 'audio' }),
+    );
   });
 
   it('plays chunks in correct order when received in order', async () => {

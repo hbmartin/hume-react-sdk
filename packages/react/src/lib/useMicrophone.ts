@@ -232,7 +232,21 @@ export const useMicrophone = (props: MicrophoneProps) => {
   }, [dataHandler, currentStream]);
 
   useEffect(() => {
-    const mimeTypeResult = getBrowserSupportedMimeType();
+    let mimeTypeResult: ReturnType<typeof getBrowserSupportedMimeType>;
+
+    try {
+      // getBrowserSupportedMimeType only checks that MediaRecorder is defined
+      // before reaching for MediaRecorder.isTypeSupported, so an environment
+      // with a partial MediaRecorder (a polyfill, an embedded WebView) throws
+      // instead of returning a result. Uncaught here, that would tear down the
+      // React tree rather than surface a mic error.
+      mimeTypeResult = getBrowserSupportedMimeType();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      onErrorRef.current(message, 'mime_types_not_supported');
+      return;
+    }
+
     if (mimeTypeResult.success) {
       mimeTypeRef.current = mimeTypeResult.mimeType;
     } else {
