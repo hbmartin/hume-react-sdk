@@ -230,8 +230,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     value: 'disconnected',
   });
   const isConnectingRef = useRef(false);
+  const isFlushingMicrophoneRef = useRef(false);
   const lifecycleGenerationRef = useRef(0);
   const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
+  const pendingDisconnectCleanupRef = useRef<Promise<void> | null>(null);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
   const sharedAudioContextClosePromisesRef = useRef(
     new WeakMap<AudioContext, Promise<AudioContextCloseResult>>(),
@@ -503,11 +505,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           resourceStatusRef.current.mic = 'disconnected';
         });
         pendingCloseCleanupRef.current = closeCleanup;
-        void closeCleanup.finally(() => {
+        const clearCloseCleanup = () => {
           if (pendingCloseCleanupRef.current === closeCleanup) {
             pendingCloseCleanupRef.current = null;
           }
-        });
+        };
+        void closeCleanup.then(clearCloseCleanup, clearCloseCleanup);
         onClose.current?.(event);
       },
       [
@@ -543,8 +546,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     onAudioCaptured: useCallback(
       (arrayBuffer) => {
         if (
-          resourceStatusRef.current.socket === 'disconnecting' ||
-          resourceStatusRef.current.socket === 'disconnected'
+          resourceStatusRef.current.socket === 'disconnected' ||
+          (resourceStatusRef.current.socket === 'disconnecting' &&
+            !isFlushingMicrophoneRef.current)
         ) {
           // if socket is being disconnected, don't try to send audio
           return;
@@ -626,16 +630,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const connectionIsActive = () =>
         isConnectingRef.current ||
         resourceStatusRef.current.socket === 'connected';
-      if (connectionIsActive()) {
-        console.warn(
-          'Already connected or connecting to a chat. Ignoring duplicate connection attempt.',
-        );
-        return;
-      }
 
-      const pendingCloseCleanup = pendingCloseCleanupRef.current;
-      if (pendingCloseCleanup) {
-        await pendingCloseCleanup;
+      const pendingCleanup = Promise.all(
+        [
+          pendingCloseCleanupRef.current,
+          pendingDisconnectCleanupRef.current,
+        ].filter((cleanup): cleanup is Promise<void> => cleanup !== null),
+      );
+      if (
+        pendingCloseCleanupRef.current ||
+        pendingDisconnectCleanupRef.current
+      ) {
+        await pendingCleanup;
       }
       if (connectionIsActive()) {
         console.warn(
@@ -694,7 +700,32 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return;
       }
 
-      const sharedCtx = new AudioContext();
+      let sharedCtx: AudioContext;
+      try {
+        sharedCtx = new AudioContext();
+      } catch (e) {
+        try {
+          stopStream(stream);
+        } catch (cleanupError) {
+          console.error(
+            'Failed to stop the microphone after audio context initialization failed.',
+            cleanupError,
+          );
+        }
+        resourceStatusRef.current.socket = 'disconnected';
+        resourceStatusRef.current.audioPlayer = 'disconnected';
+        resourceStatusRef.current.mic = 'disconnected';
+        isConnectingRef.current = false;
+        updateError({
+          type: 'audio_error',
+          reason: 'audio_player_initialization_failure',
+          message:
+            e instanceof Error
+              ? e.message
+              : 'We could not create an audio context. Please try again.',
+        });
+        return;
+      }
       sharedAudioContextRef.current = sharedCtx;
 
       const cleanupAttemptResources = async (stopPlayer: boolean) => {
@@ -836,57 +867,89 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   // `disconnectAndCleanUpResources`: Internal function that is called to actually disconnect
   // from the socket, audio player, and microphone.
-  const disconnectAndCleanUpResources = useCallback(async () => {
-    lifecycleGenerationRef.current += 1;
-    resourceStatusRef.current.socket = 'disconnecting';
-    resourceStatusRef.current.audioPlayer = 'disconnecting';
-    resourceStatusRef.current.mic = 'disconnecting';
-
-    // set isConnectingRef to false in order to cancel any in-progress
-    // connection attempts
-    isConnectingRef.current = false;
-
-    stopTimer();
-
-    // MICROPHONE - shut this down before shutting down the websocket.
-    // Call stopStream separately because the user could stop the
-    // the connection before the microphone is initialized
-    stopStream();
-    await micStop();
-    resourceStatusRef.current.mic = 'disconnected';
-
-    // WEBSOCKET - shut this down before shutting down the audio player
-    if (clientReadyStateRef.current !== VoiceReadyState.CLOSED) {
-      // socket is open, so close it. resourceStatusRef will be set to 'disconnected'
-      // in the onClose callback of the websocket client.
-      clientDisconnect();
-    } else {
-      // socket is already closed, so ensure that the socket status is appropriately set
-      resourceStatusRef.current.socket = 'disconnected';
+  const disconnectAndCleanUpResources = useCallback(() => {
+    const existingCleanup = pendingDisconnectCleanupRef.current;
+    if (existingCleanup) {
+      return existingCleanup;
     }
-    // resourceStatusRef.current.socket is not set to 'disconnected' here,
-    // but rather in the onClose callback of the client. This is because
-    // onClose signals that the socket is actually disconnected.
 
-    // AUDIO PLAYER
-    await playerStopAll();
-    resourceStatusRef.current.audioPlayer = 'disconnected';
+    const sharedContextToClose = sharedAudioContextRef.current;
+    const cleanup = (async () => {
+      lifecycleGenerationRef.current += 1;
+      resourceStatusRef.current.socket = 'disconnecting';
+      resourceStatusRef.current.audioPlayer = 'disconnecting';
+      resourceStatusRef.current.mic = 'disconnecting';
+      isFlushingMicrophoneRef.current = true;
 
-    await closeSharedAudioContext();
+      // set isConnectingRef to false in order to cancel any in-progress
+      // connection attempts
+      isConnectingRef.current = false;
 
-    // Clean up other state variables that are synchronous
-    if (clearMessagesOnDisconnect) {
-      clearMessageStore();
-    }
-    toolStatusClearStore();
-    setIsPaused(false);
+      stopTimer();
+
+      // MICROPHONE - shut this down before shutting down the websocket. Keep
+      // the socket connected until MediaRecorder's final dataavailable payload
+      // has been delivered by useMicrophone.stop().
+      // Stop MediaRecorder before the underlying track so its final
+      // dataavailable event is not pre-empted. Call stopStream separately
+      // afterward because the user could disconnect before MediaRecorder is
+      // initialized.
+      try {
+        await micStop();
+      } finally {
+        isFlushingMicrophoneRef.current = false;
+      }
+      stopStream();
+      resourceStatusRef.current.mic = 'disconnected';
+
+      // WEBSOCKET - shut this down before shutting down the audio player
+      if (clientReadyStateRef.current !== VoiceReadyState.CLOSED) {
+        // socket is open, so close it. resourceStatusRef will be set to
+        // 'disconnected' in the onClose callback of the websocket client.
+        clientDisconnect();
+      } else {
+        // socket is already closed, so ensure that the socket status is appropriately set
+        resourceStatusRef.current.socket = 'disconnected';
+      }
+
+      // AUDIO PLAYER. Scope teardown to the context owned when this cleanup
+      // began so it can never stop a later player's resources.
+      if (sharedContextToClose) {
+        await playerStopAllForContext(sharedContextToClose);
+      } else {
+        await playerStopAll();
+      }
+      resourceStatusRef.current.audioPlayer = 'disconnected';
+
+      if (sharedContextToClose) {
+        await closeSharedAudioContext(sharedContextToClose);
+      }
+
+      // Clean up other state variables that are synchronous
+      if (clearMessagesOnDisconnect) {
+        clearMessageStore();
+      }
+      toolStatusClearStore();
+      setIsPaused(false);
+    })();
+
+    pendingDisconnectCleanupRef.current = cleanup;
+    const clearCleanup = () => {
+      if (pendingDisconnectCleanupRef.current === cleanup) {
+        pendingDisconnectCleanupRef.current = null;
+      }
+    };
+    void cleanup.then(clearCleanup, clearCleanup);
+    return cleanup;
   }, [
     stopTimer,
     stopStream,
     micStop,
+    clientReadyStateRef,
     clientDisconnect,
     closeSharedAudioContext,
     playerStopAll,
+    playerStopAllForContext,
     clearMessagesOnDisconnect,
     clearMessageStore,
     toolStatusClearStore,

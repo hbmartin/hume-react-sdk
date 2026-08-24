@@ -10,6 +10,8 @@ describe('wire-format constants', () => {
   it('pins channel counts', () => {
     expect(Channels.MONO).toBe(1);
     expect(Channels.STEREO).toBe(2);
+    expect(Channels[1]).toBe('MONO');
+    expect(Channels[2]).toBe('STEREO');
   });
 
   it('pins audio encodings', () => {

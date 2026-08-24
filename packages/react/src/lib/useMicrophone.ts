@@ -14,6 +14,7 @@ const MICROPHONE_RECORDING_UNSUPPORTED_MESSAGE =
   'This browser does not fully support microphone recording.';
 const MICROPHONE_ALREADY_STARTED_MESSAGE =
   'The microphone is already recording. Stop it before starting again.';
+const RECORDER_FINAL_DATA_TIMEOUT_MS = 1_000;
 
 export type MicrophoneProps = {
   onAudioCaptured: (b: ArrayBuffer) => void;
@@ -44,6 +45,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const recorder = useRef<MediaRecorder | null>(null);
   const recordingStarted = useRef(false);
+  const recordingGeneration = useRef(0);
+  const pendingDataTasks = useRef(new Set<Promise<void>>());
 
   const sendAudio = useLatestRef(onAudioCaptured);
 
@@ -69,17 +72,26 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const dataHandler = useCallback(
     (event: BlobEvent) => {
       const blob = event.data;
+      const generation = recordingGeneration.current;
 
-      blob
+      const task = blob
         .arrayBuffer()
         .then((buffer) => {
-          if (buffer.byteLength > 0) {
+          if (
+            buffer.byteLength > 0 &&
+            generation === recordingGeneration.current
+          ) {
             sendAudio.current?.(buffer);
           }
         })
         .catch((err) => {
           console.log(err);
         });
+      pendingDataTasks.current.add(task);
+      void task.then(
+        () => pendingDataTasks.current.delete(task),
+        () => pendingDataTasks.current.delete(task),
+      );
     },
     [sendAudio],
   );
@@ -162,8 +174,20 @@ export const useMicrophone = (props: MicrophoneProps) => {
           console.error('Recorder listener cleanup failed.', error);
         }
       };
+      let resolveRecorderStop = () => {};
+      const recorderStopEvent = new Promise<void>((resolve) => {
+        resolveRecorderStop = resolve;
+      });
       const handleRecorderStop = () => {
         removeDataHandler();
+        try {
+          recorderToStop.removeEventListener('stop', handleRecorderStop);
+        } catch (error) {
+          console.error('Recorder listener cleanup failed.', error);
+        }
+        resolveRecorderStop();
+      };
+      const removeStopHandler = () => {
         try {
           recorderToStop.removeEventListener('stop', handleRecorderStop);
         } catch (error) {
@@ -185,11 +209,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
             ? error.name
             : null;
         if (stopListenerAttached) {
-          try {
-            recorderToStop.removeEventListener('stop', handleRecorderStop);
-          } catch (listenerError) {
-            console.error('Recorder listener cleanup failed.', listenerError);
-          }
+          removeStopHandler();
+          stopListenerAttached = false;
         }
         if (errorName !== 'InvalidStateError') {
           recorderStopped = false;
@@ -198,6 +219,49 @@ export const useMicrophone = (props: MicrophoneProps) => {
           failures.push(`Recorder cleanup failed: ${message}`);
         } else {
           removeDataHandler();
+        }
+      }
+
+      if (recorderStopped && stopListenerAttached) {
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const stopEventReceived = await Promise.race([
+          recorderStopEvent.then(() => true),
+          new Promise<boolean>((resolve) => {
+            timeoutId = setTimeout(
+              () => resolve(false),
+              RECORDER_FINAL_DATA_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        if (!stopEventReceived) {
+          recorderStopped = false;
+          removeDataHandler();
+          removeStopHandler();
+          failures.push('Recorder cleanup failed: stop event timed out');
+        }
+      } else if (recorderStopped) {
+        removeDataHandler();
+      }
+
+      if (recorderStopped && pendingDataTasks.current.size > 0) {
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const finalDataFlushed = await Promise.race([
+          Promise.allSettled([...pendingDataTasks.current]).then(() => true),
+          new Promise<boolean>((resolve) => {
+            timeoutId = setTimeout(
+              () => resolve(false),
+              RECORDER_FINAL_DATA_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        if (!finalDataFlushed) {
+          failures.push('Recorder cleanup failed: final audio data timed out');
         }
       }
     }
@@ -223,8 +287,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
       currentStream.current = null;
     }
 
-    isMutedRef.current = false;
-    setIsMuted(false);
+    if (recorderStopped && tracksStopped) {
+      isMutedRef.current = false;
+      setIsMuted(false);
+    }
 
     if (wasRecording && recorderStopped) {
       try {
@@ -272,6 +338,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       const context = sharedAudioContext ?? new AudioContext();
+      recordingGeneration.current += 1;
       currentStream.current = stream;
       ownsAudioContext.current = !sharedAudioContext;
       audioContext.current = context;
