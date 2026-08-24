@@ -72,11 +72,11 @@ const createStream = () => ({ getTracks: () => [] }) as unknown as MediaStream;
 const renderMicrophone = () => {
   const onError = vi.fn();
   const onAudioCaptured = vi.fn();
-  const { result } = renderHook(() =>
+  const { result, unmount } = renderHook(() =>
     useMicrophone({ onAudioCaptured, onError }),
   );
 
-  return { result, onError, onAudioCaptured };
+  return { result, unmount, onError, onAudioCaptured };
 };
 
 describe('useMicrophone', () => {
@@ -208,6 +208,46 @@ describe('useMicrophone', () => {
     );
     expect(sourceDisconnect).toHaveBeenCalledOnce();
     expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(trackStop).toHaveBeenCalledOnce();
+    expect(contextClose).toHaveBeenCalledOnce();
+  });
+
+  it('releases the stream and owned audio context when recorder cleanup throws', () => {
+    const recorderStop = vi.fn(() => {
+      throw new DOMException('The recorder is inactive', 'InvalidStateError');
+    });
+    class InactiveMediaRecorder {
+      static isTypeSupported = vi.fn(() => true);
+
+      start = vi.fn();
+
+      stop = recorderStop;
+
+      addEventListener = vi.fn();
+
+      removeEventListener = vi.fn();
+    }
+    vi.stubGlobal('MediaRecorder', InactiveMediaRecorder);
+
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    const context = {
+      ...createAudioContext(),
+      close: contextClose,
+    } as AudioContext;
+    vi.stubGlobal(
+      'AudioContext',
+      vi.fn(() => context),
+    );
+
+    const trackStop = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: trackStop }],
+    } as unknown as MediaStream;
+    const { result, unmount } = renderMicrophone();
+    result.current.start(stream);
+
+    expect(() => unmount()).not.toThrow();
+    expect(recorderStop).toHaveBeenCalledOnce();
     expect(trackStop).toHaveBeenCalledOnce();
     expect(contextClose).toHaveBeenCalledOnce();
   });

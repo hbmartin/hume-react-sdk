@@ -23,7 +23,6 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const { onAudioCaptured } = props;
   const onErrorRef = useLatestRef(props.onError);
   const [isMuted, setIsMuted] = useState(false);
-  const isMutedRef = useRef(isMuted);
   const currentStream = useRef<MediaStream | null>(null);
 
   const fftStore = useRef(new FftStore()).current;
@@ -228,7 +227,6 @@ export const useMicrophone = (props: MicrophoneProps) => {
       track.enabled = false;
     });
 
-    isMutedRef.current = true;
     setIsMuted(true);
   }, [fftStore]);
 
@@ -237,33 +235,34 @@ export const useMicrophone = (props: MicrophoneProps) => {
       track.enabled = true;
     });
 
-    isMutedRef.current = false;
     setIsMuted(false);
   }, [currentStream]);
 
   useEffect(() => {
     return () => {
+      const recorderToStop = recorder.current;
+      recorder.current = null;
+      recorderToStop?.removeEventListener('dataavailable', dataHandler);
       try {
-        recorder.current?.stop();
-        recorder.current?.removeEventListener('dataavailable', dataHandler);
+        recorderToStop?.stop();
+      } catch {
+        // The recorder may already be inactive during unmount.
+      }
 
-        stopFftAnalyzer();
+      stopFftAnalyzer();
 
-        currentStream.current?.getTracks().forEach((track) => track.stop());
-        currentStream.current = null;
+      const streamToStop = currentStream.current;
+      currentStream.current = null;
+      streamToStop?.getTracks().forEach((track) => track.stop());
 
-        const contextToClose = audioContext.current;
-        const shouldCloseContext = ownsAudioContext.current;
-        audioContext.current = null;
-        ownsAudioContext.current = false;
-        if (contextToClose && shouldCloseContext) {
-          void contextToClose.close().catch(() => {
-            // .close() rejects if already closed; safe to ignore.
-          });
-        }
-      } catch (e) {
-        console.log(e);
-        void true;
+      const contextToClose = audioContext.current;
+      const shouldCloseContext = ownsAudioContext.current;
+      audioContext.current = null;
+      ownsAudioContext.current = false;
+      if (contextToClose && shouldCloseContext) {
+        void contextToClose.close().catch(() => {
+          // .close() rejects if already closed; safe to ignore.
+        });
       }
     };
   }, [dataHandler, currentStream, stopFftAnalyzer]);
