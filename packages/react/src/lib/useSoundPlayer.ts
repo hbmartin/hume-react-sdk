@@ -68,6 +68,7 @@ export const useSoundPlayer = (props: {
 
   const playerResources = useRef<PlayerResources | null>(null);
   const playerStopPromises = useRef(new WeakMap<AudioContext, Promise<void>>());
+  const implicitPlayerStopPromise = useRef<Promise<void> | null>(null);
   const isInitialized = useRef(false);
 
   const isProcessing = useRef(false);
@@ -911,6 +912,10 @@ export const useSoundPlayer = (props: {
 
   const stopAllAndReport = useCallback(
     (expectedContext?: AudioContext) => {
+      if (expectedContext === undefined && implicitPlayerStopPromise.current) {
+        return implicitPlayerStopPromise.current;
+      }
+
       const context = expectedContext ?? playerResources.current?.context;
       if (context) {
         const existingStop = playerStopPromises.current.get(context);
@@ -930,6 +935,16 @@ export const useSoundPlayer = (props: {
           );
         }
       })();
+
+      if (expectedContext === undefined) {
+        implicitPlayerStopPromise.current = stopping;
+        const clearImplicitStop = () => {
+          if (implicitPlayerStopPromise.current === stopping) {
+            implicitPlayerStopPromise.current = null;
+          }
+        };
+        void stopping.then(clearImplicitStop, clearImplicitStop);
+      }
 
       if (context) {
         playerStopPromises.current.set(context, stopping);

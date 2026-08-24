@@ -461,17 +461,60 @@ describe('useMicrophone', () => {
       enabled: true,
       stop: trackStop,
     } as unknown as MediaStreamTrack;
-    const { result } = renderMicrophone();
+    const { result, onError } = renderMicrophone();
     result.current.start(createStream([track]), createAudioContext());
     act(() => result.current.mute());
 
     await act(() => result.current.stop());
 
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Media track 1 cleanup failed'),
+      'mic_closure_failure',
+    );
     expect(result.current.isMuted).toBe(true);
     expect(track.enabled).toBe(false);
 
     await act(() => result.current.stop());
     expect(result.current.isMuted).toBe(false);
+  });
+
+  it('shares one timeout between recorder stop and final data flushing', async () => {
+    vi.useFakeTimers();
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const pendingBlob = {
+      arrayBuffer: vi.fn(() => new Promise<ArrayBuffer>(() => {})),
+    } as unknown as Blob;
+    const { result, onError } = renderMicrophone();
+    result.current.start(createStream(), createAudioContext());
+    const recorder = recorders[0];
+    if (!recorder) {
+      throw new Error('Expected a MediaRecorder instance.');
+    }
+    recorder.stop.mockImplementationOnce(() => {
+      setTimeout(() => {
+        recorder.emit('dataavailable', {
+          data: pendingBlob,
+        } as unknown as BlobEvent);
+        recorder.emit('stop', new Event('stop'));
+      }, 750);
+    });
+
+    let stopped = false;
+    const stopping = result.current.stop().then(() => {
+      stopped = true;
+    });
+
+    await act(() => vi.advanceTimersByTimeAsync(999));
+    expect(stopped).toBe(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    await stopping;
+    expect(stopped).toBe(true);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('final audio data timed out'),
+      'mic_closure_failure',
+    );
   });
 
   it('continues unmount cleanup when stopping a track throws', async () => {
