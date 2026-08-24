@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   contextClose: vi.fn(),
   getStream: vi.fn(),
   micStart: vi.fn(),
+  micReplace: vi.fn(),
   micStop: vi.fn(),
   microphoneProps: null as null | {
     onAudioCaptured: (buffer: ArrayBuffer) => void;
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
     | null
     | ((event: CloseEvent, consumerInitiated: boolean) => void | Promise<void>),
   playerInit: vi.fn(),
+  playerSetOutputDevice: vi.fn(),
   playerErrorHandler: null as null | PlayerErrorHandler,
   playerStop: vi.fn(),
   playerStopForContext: vi.fn(),
@@ -73,6 +75,7 @@ vi.mock('./useSoundPlayer', () => ({
       muteAudio: vi.fn(),
       queueLength: 0,
       setVolume: vi.fn(),
+      setOutputDevice: mocks.playerSetOutputDevice,
       stopAll: mocks.playerStop,
       stopAllForContext: mocks.playerStopForContext,
       unmuteAudio: vi.fn(),
@@ -93,6 +96,7 @@ vi.mock('./useMicrophone', () => ({
       fftStore,
       isMuted: false,
       mute: vi.fn(),
+      replace: mocks.micReplace,
       start: mocks.micStart,
       stop: mocks.micStop,
       unmute: vi.fn(),
@@ -107,6 +111,7 @@ vi.mock('./useMicrophoneStream', () => ({
   }),
 }));
 
+import { isAudioDeviceSwitchError } from './errors';
 import type * as UseVoiceClientModule from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
 
@@ -133,7 +138,9 @@ describe('VoiceProvider close lifecycle', () => {
     mocks.contextClose.mockResolvedValue(undefined);
     mocks.getStream.mockResolvedValue({});
     mocks.micStop.mockResolvedValue(undefined);
+    mocks.micReplace.mockResolvedValue(undefined);
     mocks.playerInit.mockResolvedValue(true);
+    mocks.playerSetOutputDevice.mockResolvedValue(undefined);
     mocks.playerStop.mockResolvedValue(undefined);
     mocks.playerStopForContext.mockResolvedValue(undefined);
     mocks.waitForDrain.mockResolvedValue(true);
@@ -477,6 +484,223 @@ describe('VoiceProvider close lifecycle', () => {
       await secondConnect;
     });
     expect(result.current.status.value).toBe('connected');
+  });
+
+  it('switches input devices without reconnecting and preserves constraints', async () => {
+    const initialStream = { id: 'initial' } as unknown as MediaStream;
+    const candidateStream = { id: 'candidate' } as unknown as MediaStream;
+    mocks.getStream
+      .mockResolvedValueOnce(initialStream)
+      .mockResolvedValueOnce(candidateStream);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+        audioConstraints: {
+          echoCancellation: false,
+          noiseSuppression: false,
+        },
+        devices: { microphoneDeviceId: 'old-mic' },
+      }),
+    );
+
+    await act(() => result.current.setInputDevice('new-mic'));
+
+    expect(mocks.getStream).toHaveBeenLastCalledWith({
+      echoCancellation: false,
+      noiseSuppression: false,
+      deviceId: { exact: 'new-mic' },
+    });
+    expect(mocks.micReplace).toHaveBeenCalledWith(
+      candidateStream,
+      expect.any(Object),
+    );
+    expect(mocks.clientDisconnect).not.toHaveBeenCalled();
+    expect(result.current.status.value).toBe('connected');
+
+    await act(() => result.current.setInputDevice('new-mic'));
+    expect(mocks.getStream).toHaveBeenCalledTimes(2);
+
+    await act(() => result.current.setInputDevice(null));
+    expect(mocks.getStream).toHaveBeenLastCalledWith({
+      echoCancellation: false,
+      noiseSuppression: false,
+    });
+  });
+
+  it('switches output on the live player and treats the active sink as a no-op', async () => {
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+        devices: { speakerDeviceId: 'old-speaker' },
+      }),
+    );
+
+    await act(() => result.current.setOutputDevice('new-speaker'));
+    await act(() => result.current.setOutputDevice('new-speaker'));
+
+    expect(mocks.playerSetOutputDevice).toHaveBeenCalledOnce();
+    expect(mocks.playerSetOutputDevice).toHaveBeenCalledWith('new-speaker');
+    expect(mocks.playerInit).toHaveBeenCalledOnce();
+    expect(mocks.clientDisconnect).not.toHaveBeenCalled();
+    expect(result.current.status.value).toBe('connected');
+  });
+
+  it('rejects disconnected switches with typed nonfatal errors', async () => {
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+
+    const inputError = await result.current
+      .setInputDevice('mic')
+      .catch((error: unknown) => error);
+    const outputError = await result.current
+      .setOutputDevice('speaker')
+      .catch((error: unknown) => error);
+
+    expect(isAudioDeviceSwitchError(inputError)).toBe(true);
+    expect(inputError).toMatchObject({
+      kind: 'audioinput',
+      reason: 'not_connected',
+    });
+    expect(outputError).toMatchObject({
+      kind: 'audiooutput',
+      reason: 'not_connected',
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('disconnected');
+  });
+
+  it('maps input permission failures without replacing the active microphone', async () => {
+    const permissionError = new DOMException('denied', 'NotAllowedError');
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.getStream.mockRejectedValueOnce(permissionError);
+
+    const switchError = await result.current
+      .setInputDevice('blocked')
+      .catch((error: unknown) => error);
+
+    expect(switchError).toMatchObject({
+      cause: permissionError,
+      kind: 'audioinput',
+      reason: 'permission_denied',
+    });
+    expect(mocks.micReplace).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('connected');
+  });
+
+  it('maps unsupported output switching without disrupting playback', async () => {
+    const unsupportedError = new DOMException(
+      'unavailable',
+      'NotSupportedError',
+    );
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.playerSetOutputDevice.mockRejectedValueOnce(unsupportedError);
+
+    const switchError = await result.current
+      .setOutputDevice('unsupported-speaker')
+      .catch((error: unknown) => error);
+
+    expect(switchError).toMatchObject({
+      cause: unsupportedError,
+      kind: 'audiooutput',
+      reason: 'unsupported',
+    });
+    expect(mocks.playerStop).not.toHaveBeenCalled();
+    expect(mocks.playerInit).toHaveBeenCalledOnce();
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('connected');
+  });
+
+  it('interrupts an input acquisition that outlives disconnect', async () => {
+    const candidateStream = { id: 'late-candidate' } as unknown as MediaStream;
+    const candidateAcquisition = createDeferred<MediaStream>();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.getStream.mockReturnValueOnce(candidateAcquisition.promise);
+
+    let switching = Promise.resolve();
+    act(() => {
+      switching = result.current.setInputDevice('late-mic');
+    });
+    await act(() => Promise.resolve());
+    await act(() => result.current.disconnect());
+    await act(() => {
+      candidateAcquisition.resolve(candidateStream);
+      return Promise.resolve();
+    });
+
+    const switchError = await switching.catch((error: unknown) => error);
+    expect(switchError).toMatchObject({
+      kind: 'audioinput',
+      reason: 'interrupted',
+    });
+    expect(mocks.stopStream).toHaveBeenCalledWith(candidateStream);
+    expect(mocks.micReplace).not.toHaveBeenCalled();
+  });
+
+  it('waits for an in-progress microphone promotion before disconnecting', async () => {
+    const replacement = createDeferred<void>();
+    const candidateStream = { id: 'candidate' } as unknown as MediaStream;
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.getStream.mockResolvedValueOnce(candidateStream);
+    mocks.micReplace.mockReturnValueOnce(replacement.promise);
+
+    const switching = result.current.setInputDevice('next-mic');
+    const switchOutcome = switching.catch((error: unknown) => error);
+    await waitFor(() => expect(mocks.micReplace).toHaveBeenCalledOnce());
+
+    let disconnecting = Promise.resolve();
+    act(() => {
+      disconnecting = result.current.disconnect();
+    });
+    await act(() => Promise.resolve());
+    expect(mocks.micStop).not.toHaveBeenCalled();
+
+    await act(async () => {
+      replacement.resolve();
+      await disconnecting;
+    });
+
+    await expect(switchOutcome).resolves.toMatchObject({
+      kind: 'audioinput',
+      reason: 'interrupted',
+    });
+    expect(mocks.micStop).toHaveBeenCalledOnce();
+    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
   });
 
   it('publishes socket closure immediately and ignores stale drain teardown', async () => {

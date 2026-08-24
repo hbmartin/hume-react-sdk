@@ -1025,6 +1025,30 @@ export const useSoundPlayer = (props: {
     }
   }, []);
 
+  const setOutputDevice = useCallback(async (deviceId: string | null) => {
+    const resources = playerResources.current;
+    const context = resources?.context;
+    if (!resources || !context || !isInitialized.current) {
+      throw new Error('The audio player is not initialized.');
+    }
+
+    if (!('setSinkId' in context)) {
+      if (deviceId === null) {
+        return;
+      }
+      throw new DOMException(
+        'This browser does not support selecting an audio output device.',
+        'NotSupportedError',
+      );
+    }
+
+    await (
+      context as AudioContext & {
+        setSinkId: (sinkId: string) => Promise<void>;
+      }
+    ).setSinkId(deviceId ?? '');
+  }, []);
+
   const muteAudio = useCallback(() => {
     isAudioMutedRef.current = true;
     setIsAudioMuted(true);
@@ -1061,6 +1085,7 @@ export const useSoundPlayer = (props: {
       clearQueue,
       volume,
       setVolume,
+      setOutputDevice,
       queueLength,
     }),
     [
@@ -1077,6 +1102,7 @@ export const useSoundPlayer = (props: {
       clearQueue,
       volume,
       setVolume,
+      setOutputDevice,
       queueLength,
     ],
   );

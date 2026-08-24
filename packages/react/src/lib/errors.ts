@@ -1,3 +1,39 @@
+import type { AudioDeviceKind } from '../models/connect-options';
+
+export type AudioDeviceSwitchErrorReason =
+  | 'not_connected'
+  | 'unsupported'
+  | 'permission_denied'
+  | 'device_not_found'
+  | 'switch_failed'
+  | 'interrupted';
+
+export class AudioDeviceSwitchError extends Error {
+  readonly kind: AudioDeviceKind;
+
+  readonly reason: AudioDeviceSwitchErrorReason;
+
+  override readonly cause: unknown;
+
+  constructor(
+    kind: AudioDeviceKind,
+    reason: AudioDeviceSwitchErrorReason,
+    message: string,
+    cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'AudioDeviceSwitchError';
+    this.kind = kind;
+    this.reason = reason;
+    this.cause = cause;
+  }
+}
+
+/** Check whether an unknown value is an audio device switch error. */
+export const isAudioDeviceSwitchError = (
+  error: unknown,
+): error is AudioDeviceSwitchError => error instanceof AudioDeviceSwitchError;
+
 export class SocketUnknownMessageError extends Error {
   constructor(message?: string) {
     super(`Unknown message type.${message ? ' ' + message : ''}`);

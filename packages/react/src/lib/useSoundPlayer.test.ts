@@ -1255,6 +1255,56 @@ describe('useSoundPlayer', () => {
     expect(bufferSources[0]?.connect).toHaveBeenCalledWith(secondAnalyser);
   });
 
+  it('switches the sink on the existing context without rebuilding playback', async () => {
+    const setSinkId = vi.fn().mockResolvedValue(undefined);
+    const context = Object.assign(new AudioContext(), { setSinkId });
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    await act(() =>
+      result.current.addToQueue({
+        id: 'queued-audio',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+    const createdSources = createBufferSource.mock.calls.length;
+
+    await act(() => result.current.setOutputDevice('speaker-2'));
+    await act(() => result.current.setOutputDevice(null));
+
+    expect(setSinkId.mock.calls).toEqual([['speaker-2'], ['']]);
+    expect(globalThis.AudioContext).toHaveBeenCalledOnce();
+    expect(createBufferSource).toHaveBeenCalledTimes(createdSources);
+    expect(closeAudioContext).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported non-default output switching', async () => {
+    const context = new AudioContext();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+
+    await expect(
+      result.current.setOutputDevice('speaker-2'),
+    ).rejects.toMatchObject({ name: 'NotSupportedError' });
+    await expect(result.current.setOutputDevice(null)).resolves.toBeUndefined();
+  });
+
   describe('waitForQueueToDrain', () => {
     const renderPlayer = (enableAudioWorklet: boolean) =>
       renderHook(() =>

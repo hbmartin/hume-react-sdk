@@ -1,10 +1,12 @@
 'use client';
 
 import {
+  isAudioDeviceSwitchError,
   useAudioDevices,
   useCallDurationTimestamp,
   useVoice,
 } from '@humeai/voice-react';
+import { useState } from 'react';
 import { match } from 'ts-pattern';
 
 import { ChatConnected } from '@/components/ChatConnected';
@@ -23,8 +25,14 @@ export const ExampleComponent = ({
   accessToken: string;
   configId?: string;
 }) => {
-  const { connect, disconnect, status } = useVoice();
+  const { connect, disconnect, setInputDevice, setOutputDevice, status } =
+    useVoice();
   const callDurationTimestamp = useCallDurationTimestamp();
+  const [isSwitchingInput, setIsSwitchingInput] = useState(false);
+  const [isSwitchingOutput, setIsSwitchingOutput] = useState(false);
+  const [deviceSwitchError, setDeviceSwitchError] = useState<Error | null>(
+    null,
+  );
 
   const {
     inputDevices: audioInputDevices,
@@ -46,6 +54,52 @@ export const ExampleComponent = ({
     (device) => device.deviceId !== '',
   );
   const displayedDeviceError = permissionError ?? deviceError;
+
+  const selectInputDevice = async (value: string) => {
+    const deviceId = value === 'default' ? null : value;
+    if (status.value !== 'connected') {
+      setSelectedMicrophoneId(deviceId);
+      return;
+    }
+
+    setIsSwitchingInput(true);
+    setDeviceSwitchError(null);
+    try {
+      await setInputDevice(deviceId);
+      setSelectedMicrophoneId(deviceId);
+    } catch (error) {
+      setDeviceSwitchError(
+        isAudioDeviceSwitchError(error)
+          ? error
+          : new Error('The microphone could not be switched.'),
+      );
+    } finally {
+      setIsSwitchingInput(false);
+    }
+  };
+
+  const selectOutputDevice = async (value: string) => {
+    const deviceId = value === 'default' ? null : value;
+    if (status.value !== 'connected') {
+      setSelectedSpeakerId(deviceId);
+      return;
+    }
+
+    setIsSwitchingOutput(true);
+    setDeviceSwitchError(null);
+    try {
+      await setOutputDevice(deviceId);
+      setSelectedSpeakerId(deviceId);
+    } catch (error) {
+      setDeviceSwitchError(
+        isAudioDeviceSwitchError(error)
+          ? error
+          : new Error('The speaker could not be switched.'),
+      );
+    } finally {
+      setIsSwitchingOutput(false);
+    }
+  };
 
   const connectArgs = {
     auth: {
@@ -73,13 +127,20 @@ export const ExampleComponent = ({
       <div className="flex flex-col gap-2">
         <div className="text-sm font-medium">Microphone</div>
         <Select
-          value={selectedMicrophoneId ?? ''}
-          onValueChange={setSelectedMicrophoneId}
+          disabled={isSwitchingInput}
+          value={selectedMicrophoneId ?? 'default'}
+          onValueChange={(value) => void selectInputDevice(value)}
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Select microphone" />
           </SelectTrigger>
           <SelectContent className="max-h-60 overflow-y-auto rounded-md border bg-white shadow-lg">
+            <SelectItem
+              value="default"
+              className="cursor-pointer px-8 py-2 hover:bg-gray-100"
+            >
+              Browser default
+            </SelectItem>
             {selectableInputDevices.length === 0 ? (
               <div className="px-3 py-2 text-sm text-neutral-500">
                 Grant microphone permission to choose a device.
@@ -102,13 +163,20 @@ export const ExampleComponent = ({
       <div className="flex flex-col gap-2">
         <div className="text-sm font-medium">Speaker</div>
         <Select
-          value={selectedSpeakerId ?? ''}
-          onValueChange={setSelectedSpeakerId}
+          disabled={isSwitchingOutput}
+          value={selectedSpeakerId ?? 'default'}
+          onValueChange={(value) => void selectOutputDevice(value)}
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Select speaker" />
           </SelectTrigger>
           <SelectContent className="max-h-60 overflow-y-auto rounded-md border bg-white shadow-lg">
+            <SelectItem
+              value="default"
+              className="cursor-pointer px-8 py-2 hover:bg-gray-100"
+            >
+              Browser default
+            </SelectItem>
             {selectableOutputDevices.length === 0 ? (
               <div className="px-3 py-2 text-sm text-neutral-500">
                 Grant microphone permission to choose a device.
@@ -150,6 +218,11 @@ export const ExampleComponent = ({
           {displayedDeviceError.message}
         </div>
       ) : null}
+      {deviceSwitchError ? (
+        <div className="text-sm text-red-500">
+          {deviceSwitchError.message} The call is still connected.
+        </div>
+      ) : null}
     </div>
   );
 
@@ -180,7 +253,12 @@ export const ExampleComponent = ({
         </div>
         <div className="flex flex-col gap-4">
           {match(status.value)
-            .with('connected', () => <ChatConnected />)
+            .with('connected', () => (
+              <div className="flex flex-col gap-4">
+                <ChatConnected />
+                {deviceSelectors}
+              </div>
+            ))
             .with('disconnected', () => (
               <div className="flex flex-col gap-4">
                 {!configId && (
