@@ -751,11 +751,17 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return;
       }
       if (!playerInitialized) {
+        if (lifecycleGenerationRef.current !== generation) {
+          return;
+        }
+        await cleanupAttemptResources(true);
+        if (lifecycleGenerationRef.current !== generation) {
+          return;
+        }
         resourceStatusRef.current.socket = 'disconnected';
         resourceStatusRef.current.audioPlayer = 'disconnected';
         resourceStatusRef.current.mic = 'disconnected';
         isConnectingRef.current = false;
-        await cleanupAttemptResources(true);
         setStatus({ value: 'disconnected' });
         return;
       }

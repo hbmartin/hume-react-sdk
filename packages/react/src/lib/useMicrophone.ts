@@ -155,10 +155,27 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
     let recorderStopped = true;
     if (recorderToStop) {
+      const removeDataHandler = () => {
+        try {
+          recorderToStop.removeEventListener('dataavailable', dataHandler);
+        } catch (error) {
+          console.error('Recorder listener cleanup failed.', error);
+        }
+      };
+      const handleRecorderStop = () => {
+        removeDataHandler();
+        try {
+          recorderToStop.removeEventListener('stop', handleRecorderStop);
+        } catch (error) {
+          console.error('Recorder listener cleanup failed.', error);
+        }
+      };
+      let stopListenerAttached = false;
       try {
-        recorderToStop.removeEventListener('dataavailable', dataHandler);
+        recorderToStop.addEventListener('stop', handleRecorderStop);
+        stopListenerAttached = true;
       } catch (error) {
-        console.error('Recorder listener cleanup failed.', error);
+        console.error('Recorder stop listener setup failed.', error);
       }
       try {
         recorderToStop.stop();
@@ -167,11 +184,20 @@ export const useMicrophone = (props: MicrophoneProps) => {
           typeof error === 'object' && error !== null && 'name' in error
             ? error.name
             : null;
+        if (stopListenerAttached) {
+          try {
+            recorderToStop.removeEventListener('stop', handleRecorderStop);
+          } catch (listenerError) {
+            console.error('Recorder listener cleanup failed.', listenerError);
+          }
+        }
         if (errorName !== 'InvalidStateError') {
           recorderStopped = false;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
           failures.push(`Recorder cleanup failed: ${message}`);
+        } else {
+          removeDataHandler();
         }
       }
     }

@@ -226,6 +226,40 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('disconnected');
   });
 
+  it('blocks a new connection until silent player cleanup completes', async () => {
+    const deferredClose = createDeferred<void>();
+    mocks.playerInit.mockResolvedValueOnce(false);
+    mocks.contextClose.mockReturnValueOnce(deferredClose.promise);
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+
+    let firstConnect = Promise.resolve();
+    act(() => {
+      firstConnect = result.current.connect({
+        auth: { type: 'accessToken', value: 'first-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.contextClose).toHaveBeenCalledOnce());
+    expect(result.current.status.value).toBe('connecting');
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'second-token' },
+      }),
+    );
+    expect(mocks.getStream).toHaveBeenCalledOnce();
+    expect(mocks.playerInit).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      deferredClose.resolve();
+      await firstConnect;
+    });
+    expect(result.current.status.value).toBe('disconnected');
+    consoleWarn.mockRestore();
+  });
+
   it('does not let a stale player initialization cancel a newer connection', async () => {
     const firstInitialization = createDeferred<boolean>();
     const secondInitialization = createDeferred<boolean>();

@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { MimeType } from 'hume';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +11,7 @@ type RecorderInstance = {
   stop: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
+  emit: (type: string, event: Event) => void;
 };
 
 /**
@@ -23,13 +24,40 @@ const stubMediaRecorder = (isTypeSupported?: (type: string) => boolean) => {
   const instances: RecorderInstance[] = [];
 
   class MediaRecorderStub {
+    private listeners = new Map<
+      string,
+      Set<EventListenerOrEventListenerObject>
+    >();
+
     start = vi.fn();
 
-    stop = vi.fn();
+    stop = vi.fn(() => {
+      this.emit('stop', new Event('stop'));
+    });
 
-    addEventListener = vi.fn();
+    emit = (type: string, event: Event) => {
+      this.listeners.get(type)?.forEach((listener) => {
+        if (typeof listener === 'function') {
+          listener.call(this as unknown as EventTarget, event);
+        } else {
+          listener.handleEvent(event);
+        }
+      });
+    };
 
-    removeEventListener = vi.fn();
+    addEventListener = vi.fn(
+      (type: string, listener: EventListenerOrEventListenerObject) => {
+        const listeners = this.listeners.get(type) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(type, listeners);
+      },
+    );
+
+    removeEventListener = vi.fn(
+      (type: string, listener: EventListenerOrEventListenerObject) => {
+        this.listeners.get(type)?.delete(listener);
+      },
+    );
 
     constructor(
       public stream: MediaStream,
@@ -193,10 +221,44 @@ describe('useMicrophone', () => {
 
     await act(() => result.current.stop());
 
-    expect(recorders[0]?.removeEventListener).toHaveBeenCalledOnce();
+    expect(recorders[0]?.removeEventListener).toHaveBeenCalledWith(
+      'dataavailable',
+      expect.any(Function),
+    );
     expect(recorders[0]?.stop).toHaveBeenCalledOnce();
     expect(firstTrackStop).toHaveBeenCalledOnce();
     expect(secondTrackStop).not.toHaveBeenCalled();
+  });
+
+  it('captures the final dataavailable blob before removing its listener', async () => {
+    const finalBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const finalBlob = {
+      arrayBuffer: vi.fn().mockResolvedValue(finalBuffer),
+    } as unknown as Blob;
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const { result, onAudioCaptured } = renderMicrophone();
+    result.current.start(createStream(), createAudioContext());
+    const recorder = recorders[0];
+    if (!recorder) {
+      throw new Error('Expected a MediaRecorder instance.');
+    }
+    recorder.stop.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        recorder.emit('dataavailable', {
+          data: finalBlob,
+        } as unknown as BlobEvent);
+        recorder.emit('stop', new Event('stop'));
+      });
+    });
+
+    await act(() => result.current.stop());
+    await waitFor(() =>
+      expect(onAudioCaptured).toHaveBeenCalledWith(finalBuffer),
+    );
+    expect(recorder.removeEventListener).toHaveBeenCalledWith(
+      'dataavailable',
+      expect.any(Function),
+    );
   });
 
   it('preserves a mute requested before a stream existed', () => {
