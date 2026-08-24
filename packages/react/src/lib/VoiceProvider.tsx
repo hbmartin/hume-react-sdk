@@ -16,6 +16,7 @@ import type { ConnectionMessage } from './connection-message';
 import {
   AudioDeviceSwitchError,
   type AudioDeviceSwitchErrorReason,
+  isAudioDeviceSwitchError,
 } from './errors';
 import type { FftSnapshot, FftStore } from './fftStore';
 import { useFftSubscription } from './fftStore';
@@ -145,6 +146,77 @@ const createDeviceSwitchError = (
     interrupted: `The audio ${device} switch was interrupted by a connection lifecycle change.`,
   };
   return new AudioDeviceSwitchError(kind, reason, messages[reason], cause);
+};
+
+type CurrentRef<T> = { current: T };
+
+const getGrantedInputDeviceId = (
+  stream: MediaStream,
+  requestedDeviceId: string | null,
+): string | null => {
+  try {
+    return (
+      stream.getAudioTracks()[0]?.getSettings().deviceId || requestedDeviceId
+    );
+  } catch {
+    return requestedDeviceId;
+  }
+};
+
+const enqueueDeviceSwitch = <T,>({
+  kind,
+  queueRef,
+  lifecycleGenerationRef,
+  isConnected,
+  isAlreadyActive,
+  perform,
+  commit,
+}: {
+  kind: AudioDeviceKind;
+  queueRef: CurrentRef<Promise<void>>;
+  lifecycleGenerationRef: CurrentRef<number>;
+  isConnected: () => boolean;
+  isAlreadyActive: () => boolean;
+  perform: (isCurrent: () => boolean) => Promise<T>;
+  commit: (result: T) => void;
+}): Promise<void> => {
+  if (!isConnected()) {
+    return Promise.reject(createDeviceSwitchError(kind, 'not_connected'));
+  }
+
+  const generation = lifecycleGenerationRef.current;
+  const isCurrent = () =>
+    generation === lifecycleGenerationRef.current && isConnected();
+  const switchDevice = async () => {
+    if (!isCurrent()) {
+      throw createDeviceSwitchError(kind, 'interrupted');
+    }
+    if (isAlreadyActive()) {
+      return;
+    }
+
+    let result: T;
+    try {
+      result = await perform(isCurrent);
+    } catch (cause) {
+      if (!isCurrent()) {
+        throw createDeviceSwitchError(kind, 'interrupted', cause);
+      }
+      if (isAudioDeviceSwitchError(cause)) {
+        throw cause;
+      }
+      throw createDeviceSwitchError(kind, getDeviceSwitchReason(cause), cause);
+    }
+
+    if (!isCurrent()) {
+      throw createDeviceSwitchError(kind, 'interrupted');
+    }
+    commit(result);
+  };
+
+  const switchPromise = queueRef.current.then(switchDevice, switchDevice);
+  queueRef.current = switchPromise.catch(() => undefined);
+  return switchPromise;
 };
 
 export type VoiceContextType = {
@@ -286,6 +358,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const outputSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeAudioConstraintsRef = useRef<AudioConstraints | null>(null);
   const activeInputDeviceIdRef = useRef<string | null>(null);
+  const requestedInputDeviceIdRef = useRef<string | null>(null);
   const activeOutputDeviceIdRef = useRef<string | null>(null);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
   const sharedAudioContextClosePromisesRef = useRef(
@@ -490,15 +563,21 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     onClientError,
     onToolCallError: useCallback(
       (message: string, err?: Error) => {
+        if (checkIsDisconnecting() || checkIsDisconnected()) {
+          return;
+        }
         const voiceError: VoiceError = {
           type: 'socket_error',
           reason: 'received_tool_call_error',
           message,
           error: err,
         };
-        updateError(voiceError);
+        // Tool handlers are application code, not socket infrastructure. Report
+        // their failures without moving the live connection into the provider's
+        // fatal error state.
+        onError.current?.(voiceError);
       },
-      [updateError],
+      [checkIsDisconnected, checkIsDisconnecting, onError],
     ),
     onOpen: useCallback(() => {
       startTimer();
@@ -516,6 +595,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         resourceStatusRef.current.socket = 'disconnected';
         activeAudioConstraintsRef.current = null;
         activeInputDeviceIdRef.current = null;
+        requestedInputDeviceIdRef.current = null;
         activeOutputDeviceIdRef.current = null;
 
         createDisconnectMessage(event);
@@ -648,153 +728,75 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const setInputDevice = useCallback(
-    (deviceId: string | null): Promise<void> => {
-      if (!isConnectedForDeviceSwitch()) {
-        return Promise.reject(
-          createDeviceSwitchError('audioinput', 'not_connected'),
-        );
-      }
-
-      const generation = lifecycleGenerationRef.current;
-      const switchDevice = async () => {
-        if (
-          generation !== lifecycleGenerationRef.current ||
-          !isConnectedForDeviceSwitch()
-        ) {
-          throw createDeviceSwitchError('audioinput', 'interrupted');
-        }
-        if (activeInputDeviceIdRef.current === deviceId) {
-          return;
-        }
-
-        const audioConstraints = activeAudioConstraintsRef.current;
-        const sharedContext = sharedAudioContextRef.current;
-        if (!audioConstraints || !sharedContext) {
-          throw createDeviceSwitchError('audioinput', 'interrupted');
-        }
-
-        const candidateConstraints: MediaTrackConstraints = {
-          ...audioConstraints,
-        };
-        if (deviceId !== null) {
-          candidateConstraints.deviceId = { exact: deviceId };
-        }
-
-        let candidateStream: MediaStream;
-        try {
-          candidateStream = await getStream(candidateConstraints);
-        } catch (cause) {
-          if (
-            generation !== lifecycleGenerationRef.current ||
-            !isConnectedForDeviceSwitch()
-          ) {
-            throw createDeviceSwitchError('audioinput', 'interrupted', cause);
+    (deviceId: string | null): Promise<void> =>
+      enqueueDeviceSwitch({
+        kind: 'audioinput',
+        queueRef: inputSwitchQueueRef,
+        lifecycleGenerationRef,
+        isConnected: isConnectedForDeviceSwitch,
+        isAlreadyActive: () =>
+          deviceId === null
+            ? requestedInputDeviceIdRef.current === null
+            : activeInputDeviceIdRef.current === deviceId,
+        perform: async (isCurrent) => {
+          const audioConstraints = activeAudioConstraintsRef.current;
+          const sharedContext = sharedAudioContextRef.current;
+          if (!audioConstraints || !sharedContext) {
+            throw createDeviceSwitchError('audioinput', 'interrupted');
           }
-          throw createDeviceSwitchError(
-            'audioinput',
-            getDeviceSwitchReason(cause),
-            cause,
-          );
-        }
 
-        if (
-          generation !== lifecycleGenerationRef.current ||
-          !isConnectedForDeviceSwitch()
-        ) {
-          stopStream(candidateStream);
-          throw createDeviceSwitchError('audioinput', 'interrupted');
-        }
-
-        const replacement = micReplace(candidateStream, sharedContext);
-        pendingMicReplacementRef.current = replacement;
-        try {
-          await replacement;
-        } catch (cause) {
-          stopStream(candidateStream);
-          if (
-            generation !== lifecycleGenerationRef.current ||
-            !isConnectedForDeviceSwitch()
-          ) {
-            throw createDeviceSwitchError('audioinput', 'interrupted', cause);
+          const candidateConstraints: MediaTrackConstraints = {
+            ...audioConstraints,
+          };
+          if (deviceId !== null) {
+            candidateConstraints.deviceId = { exact: deviceId };
           }
-          throw createDeviceSwitchError('audioinput', 'switch_failed', cause);
-        } finally {
-          if (pendingMicReplacementRef.current === replacement) {
-            pendingMicReplacementRef.current = null;
+
+          const candidateStream = await getStream(candidateConstraints);
+          if (!isCurrent()) {
+            stopStream(candidateStream);
+            throw createDeviceSwitchError('audioinput', 'interrupted');
           }
-        }
 
-        if (
-          generation !== lifecycleGenerationRef.current ||
-          !isConnectedForDeviceSwitch()
-        ) {
-          throw createDeviceSwitchError('audioinput', 'interrupted');
-        }
-        activeInputDeviceIdRef.current = deviceId;
-      };
+          const replacement = micReplace(candidateStream, sharedContext);
+          pendingMicReplacementRef.current = replacement;
+          try {
+            await replacement;
+          } catch (cause) {
+            stopStream(candidateStream);
+            throw createDeviceSwitchError('audioinput', 'switch_failed', cause);
+          } finally {
+            if (pendingMicReplacementRef.current === replacement) {
+              pendingMicReplacementRef.current = null;
+            }
+          }
 
-      const switchPromise = inputSwitchQueueRef.current.then(
-        switchDevice,
-        switchDevice,
-      );
-      inputSwitchQueueRef.current = switchPromise.catch(() => undefined);
-      return switchPromise;
-    },
+          return getGrantedInputDeviceId(candidateStream, deviceId);
+        },
+        commit: (grantedDeviceId) => {
+          requestedInputDeviceIdRef.current = deviceId;
+          activeInputDeviceIdRef.current = grantedDeviceId;
+        },
+      }),
     [getStream, isConnectedForDeviceSwitch, micReplace, stopStream],
   );
 
   const setOutputDevice = useCallback(
-    (deviceId: string | null): Promise<void> => {
-      if (!isConnectedForDeviceSwitch()) {
-        return Promise.reject(
-          createDeviceSwitchError('audiooutput', 'not_connected'),
-        );
-      }
-
-      const generation = lifecycleGenerationRef.current;
-      const switchDevice = async () => {
-        if (
-          generation !== lifecycleGenerationRef.current ||
-          !isConnectedForDeviceSwitch()
-        ) {
-          throw createDeviceSwitchError('audiooutput', 'interrupted');
-        }
-        if (activeOutputDeviceIdRef.current === deviceId) {
-          return;
-        }
-
-        try {
+    (deviceId: string | null): Promise<void> =>
+      enqueueDeviceSwitch({
+        kind: 'audiooutput',
+        queueRef: outputSwitchQueueRef,
+        lifecycleGenerationRef,
+        isConnected: isConnectedForDeviceSwitch,
+        isAlreadyActive: () => activeOutputDeviceIdRef.current === deviceId,
+        perform: async () => {
           await playerSetOutputDevice(deviceId);
-        } catch (cause) {
-          if (
-            generation !== lifecycleGenerationRef.current ||
-            !isConnectedForDeviceSwitch()
-          ) {
-            throw createDeviceSwitchError('audiooutput', 'interrupted', cause);
-          }
-          throw createDeviceSwitchError(
-            'audiooutput',
-            getDeviceSwitchReason(cause),
-            cause,
-          );
-        }
-
-        if (
-          generation !== lifecycleGenerationRef.current ||
-          !isConnectedForDeviceSwitch()
-        ) {
-          throw createDeviceSwitchError('audiooutput', 'interrupted');
-        }
-        activeOutputDeviceIdRef.current = deviceId;
-      };
-
-      const switchPromise = outputSwitchQueueRef.current.then(
-        switchDevice,
-        switchDevice,
-      );
-      outputSwitchQueueRef.current = switchPromise.catch(() => undefined);
-      return switchPromise;
-    },
+          return deviceId;
+        },
+        commit: (activeDeviceId) => {
+          activeOutputDeviceIdRef.current = activeDeviceId;
+        },
+      }),
     [isConnectedForDeviceSwitch, playerSetOutputDevice],
   );
 
@@ -881,6 +883,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
       activeAudioConstraintsRef.current = null;
       activeInputDeviceIdRef.current = null;
+      requestedInputDeviceIdRef.current = null;
       activeOutputDeviceIdRef.current = null;
 
       updateError(null);
@@ -1079,7 +1082,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       resourceStatusRef.current.mic = 'connected';
 
       activeAudioConstraintsRef.current = { ...audioConstraints };
-      activeInputDeviceIdRef.current = devices?.microphoneDeviceId ?? null;
+      requestedInputDeviceIdRef.current = devices?.microphoneDeviceId ?? null;
+      activeInputDeviceIdRef.current = getGrantedInputDeviceId(
+        stream,
+        requestedInputDeviceIdRef.current,
+      );
       activeOutputDeviceIdRef.current =
         devices?.speakerDeviceId && 'setSinkId' in sharedCtx
           ? devices.speakerDeviceId
@@ -1190,6 +1197,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         };
         activeAudioConstraintsRef.current = null;
         activeInputDeviceIdRef.current = null;
+        requestedInputDeviceIdRef.current = null;
         activeOutputDeviceIdRef.current = null;
         if (clearMessagesOnDisconnect) {
           finalize('Message store cleanup failed', clearMessageStore);

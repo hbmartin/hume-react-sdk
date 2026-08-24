@@ -5,10 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   clientProps: null as null | {
     onMessage?: (message: never) => void;
+    onToolCallError?: (message: string, error?: Error) => void;
   },
   getStream: vi.fn(),
+  micReplace: vi.fn(),
   micStart: vi.fn(),
   playerInit: vi.fn(),
+  playerSetOutputDevice: vi.fn(),
 }));
 
 const fftStore = {
@@ -49,6 +52,7 @@ vi.mock('./useSoundPlayer', () => ({
     isPlaying: false,
     muteAudio: vi.fn(),
     queueLength: 0,
+    setOutputDevice: mocks.playerSetOutputDevice,
     setVolume: vi.fn(),
     stopAll: vi.fn(),
     stopAllForContext: vi.fn(),
@@ -63,6 +67,7 @@ vi.mock('./useMicrophone', () => ({
     fftStore,
     isMuted: false,
     mute: vi.fn(),
+    replace: mocks.micReplace,
     start: mocks.micStart,
     stop: vi.fn(),
     unmute: vi.fn(),
@@ -88,7 +93,9 @@ describe('VoiceProvider tool message state', () => {
       close: vi.fn().mockResolvedValue(undefined),
     })) as unknown as typeof AudioContext;
     mocks.getStream.mockResolvedValue({ getTracks: () => [] });
+    mocks.micReplace.mockResolvedValue(undefined);
     mocks.playerInit.mockResolvedValue(true);
+    mocks.playerSetOutputDevice.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -144,5 +151,37 @@ describe('VoiceProvider tool message state', () => {
     });
     expect(onMessage).toHaveBeenCalledWith(toolCall);
     expect(onMessage).toHaveBeenCalledWith(toolResponse);
+  });
+
+  it('reports tool handler failures without tearing down the connection', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider onError={onError}>{children}</VoiceProvider>
+      ),
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    const handlerError = new Error('handler failed');
+    act(() => {
+      mocks.clientProps?.onToolCallError?.(
+        'Tool call handler failed',
+        handlerError,
+      );
+    });
+
+    expect(onError).toHaveBeenCalledWith({
+      type: 'socket_error',
+      reason: 'received_tool_call_error',
+      message: 'Tool call handler failed',
+      error: handlerError,
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('connected');
   });
 });

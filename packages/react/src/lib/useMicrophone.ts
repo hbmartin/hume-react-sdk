@@ -55,6 +55,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const recordingStarted = useRef(false);
   const recordingGeneration = useRef(0);
   const pendingDataTasks = useRef(new Set<Promise<void>>());
+  const microphoneOperationQueue = useRef<Promise<void>>(Promise.resolve());
 
   const sendAudio = useLatestRef(onAudioCaptured);
 
@@ -357,6 +358,18 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [onErrorRef],
   );
 
+  const enqueueMicrophoneOperation = useCallback(
+    (operation: () => Promise<void>): Promise<void> => {
+      const scheduled = microphoneOperationQueue.current.then(
+        operation,
+        operation,
+      );
+      microphoneOperationQueue.current = scheduled.catch(() => undefined);
+      return scheduled;
+    },
+    [],
+  );
+
   const start = useCallback(
     (stream: MediaStream, sharedAudioContext?: AudioContext) => {
       if (!stream) {
@@ -425,7 +438,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
     ],
   );
 
-  const replace = useCallback(
+  const performReplace = useCallback(
     async (stream: MediaStream, sharedAudioContext?: AudioContext) => {
       if (!stream) {
         throw new Error('No stream connected');
@@ -566,7 +579,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
         pendingDataTasks.current.add(task);
         void task.finally(() => pendingDataTasks.current.delete(task));
       });
-      candidateBuffers.forEach((buffer) => sendAudio.current?.(buffer));
+      const bufferedCandidateAudio = candidateBuffers.splice(0);
+      bufferedCandidateAudio.forEach((buffer) => sendAudio.current?.(buffer));
     },
     [
       disposeMicrophoneResources,
@@ -577,13 +591,29 @@ export const useMicrophone = (props: MicrophoneProps) => {
     ],
   );
 
-  const stop = useCallback(async () => {
-    try {
-      await disposeMicrophoneResources();
-    } catch (e) {
-      reportClosureFailure('Failed to fully stop microphone resources', e);
-    }
-  }, [disposeMicrophoneResources, reportClosureFailure]);
+  const replace = useCallback(
+    (stream: MediaStream, sharedAudioContext?: AudioContext) =>
+      enqueueMicrophoneOperation(() =>
+        performReplace(stream, sharedAudioContext),
+      ),
+    [enqueueMicrophoneOperation, performReplace],
+  );
+
+  const stop = useCallback(
+    () =>
+      enqueueMicrophoneOperation(async () => {
+        try {
+          await disposeMicrophoneResources();
+        } catch (e) {
+          reportClosureFailure('Failed to fully stop microphone resources', e);
+        }
+      }),
+    [
+      disposeMicrophoneResources,
+      enqueueMicrophoneOperation,
+      reportClosureFailure,
+    ],
+  );
 
   const mute = useCallback(() => {
     isMutedRef.current = true;
@@ -609,14 +639,16 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   useEffect(() => {
     return () => {
-      void disposeMicrophoneResources().catch((e) => {
-        console.error(
-          'Failed to fully dispose microphone resources during unmount.',
-          e,
-        );
-      });
+      void enqueueMicrophoneOperation(() => disposeMicrophoneResources()).catch(
+        (e) => {
+          console.error(
+            'Failed to fully dispose microphone resources during unmount.',
+            e,
+          );
+        },
+      );
     };
-  }, [disposeMicrophoneResources]);
+  }, [disposeMicrophoneResources, enqueueMicrophoneOperation]);
 
   useEffect(() => {
     let mimeTypeResult: ReturnType<typeof getBrowserSupportedMimeType>;

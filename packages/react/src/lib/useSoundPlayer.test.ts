@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { Mock } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1285,6 +1285,39 @@ describe('useSoundPlayer', () => {
     expect(globalThis.AudioContext).toHaveBeenCalledOnce();
     expect(createBufferSource).toHaveBeenCalledTimes(createdSources);
     expect(closeAudioContext).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sink selection that finishes after player reinitialization', async () => {
+    const deferredSink = createDeferred<void>();
+    const setSinkId = vi.fn(() => deferredSink.promise);
+    const firstContext = Object.assign(new AudioContext(), { setSinkId });
+    const secondContext = new AudioContext();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, firstContext));
+
+    let switching = Promise.resolve();
+    let switchOutcome: Promise<unknown> = Promise.resolve();
+    act(() => {
+      switching = result.current.setOutputDevice('speaker-2');
+      switchOutcome = switching.catch((error: unknown) => error);
+    });
+    await waitFor(() => expect(setSinkId).toHaveBeenCalledOnce());
+    await act(() => result.current.stopAll());
+    await act(() => result.current.initPlayer(undefined, secondContext));
+
+    await act(async () => {
+      deferredSink.resolve();
+      await switchOutcome;
+    });
+
+    await expect(switchOutcome).resolves.toMatchObject({ name: 'AbortError' });
   });
 
   it('rejects unsupported non-default output switching', async () => {
