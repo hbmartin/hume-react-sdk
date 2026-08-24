@@ -232,55 +232,83 @@ export const useVoiceClient = (props: {
 
             // only pass tool call messages for user defined tools
             if (message.toolType === Hume.empathicVoice.ToolType.Function) {
-              void onToolCall
-                .current?.(
-                  {
-                    ...messageWithReceivedAt,
-                    // we have to do this because even though we are using the correct
-                    // enum on line 30 for the type definition
-                    // fern exports an interface and a value using the same `ToolType`
-                    // identifier so the type comparisons will always fail
-                    toolType: 'function',
-                  },
-                  {
-                    success: (content: unknown) => ({
-                      type: 'tool_response',
-                      toolCallId: messageWithReceivedAt.toolCallId,
-                      content: JSON.stringify(content),
-                    }),
-                    error: ({
-                      error,
-                      code,
-                      level,
-                      content,
-                    }: {
-                      error: string;
-                      code: string;
-                      level: string;
-                      content: string;
-                    }) => ({
-                      type: 'tool_error',
-                      toolCallId: messageWithReceivedAt.toolCallId,
-                      error,
-                      code,
-                      level: level !== null ? 'warn' : undefined, // level can only be warn
-                      content,
-                    }),
-                  },
-                )
-                .then((response) => {
-                  // if valid send it to the socket
-                  // otherwise, report error
-                  if (response.type === 'tool_response') {
-                    socket.sendToolResponseMessage(response);
-                  } else if (response.type === 'tool_error') {
-                    socket.sendToolErrorMessage(response);
-                  } else {
+              const handler = onToolCall.current;
+              if (handler) {
+                void Promise.resolve()
+                  .then(() =>
+                    handler(
+                      {
+                        ...messageWithReceivedAt,
+                        // we have to do this because even though we are using the correct
+                        // enum on line 30 for the type definition
+                        // fern exports an interface and a value using the same `ToolType`
+                        // identifier so the type comparisons will always fail
+                        toolType: 'function',
+                      },
+                      {
+                        success: (content: unknown) => ({
+                          type: 'tool_response',
+                          toolCallId: messageWithReceivedAt.toolCallId,
+                          content: JSON.stringify(content),
+                        }),
+                        error: ({
+                          error,
+                          code,
+                          level,
+                          content,
+                        }: {
+                          error: string;
+                          code: string;
+                          level: string;
+                          content: string;
+                        }) => ({
+                          type: 'tool_error',
+                          toolCallId: messageWithReceivedAt.toolCallId,
+                          error,
+                          code,
+                          level: level !== null ? 'warn' : undefined, // level can only be warn
+                          content,
+                        }),
+                      },
+                    ),
+                  )
+                  .then((response) => {
+                    try {
+                      if (response.type === 'tool_response') {
+                        socket.sendToolResponseMessage(response);
+                      } else if (response.type === 'tool_error') {
+                        socket.sendToolErrorMessage(response);
+                      } else {
+                        onToolCallError.current?.(
+                          'Invalid response from tool call',
+                        );
+                        return;
+                      }
+                    } catch (error) {
+                      const normalizedError =
+                        error instanceof Error
+                          ? error
+                          : new Error(String(error));
+                      onToolCallError.current?.(
+                        'Failed to send tool response',
+                        normalizedError,
+                      );
+                      return;
+                    }
+                    onMessage.current?.({
+                      ...response,
+                      receivedAt: new Date(),
+                    });
+                  })
+                  .catch((error: unknown) => {
+                    const normalizedError =
+                      error instanceof Error ? error : new Error(String(error));
                     onToolCallError.current?.(
-                      'Invalid response from tool call',
+                      'Tool call handler failed',
+                      normalizedError,
                     );
-                  }
-                });
+                  });
+              }
             }
             return;
           }
@@ -391,11 +419,19 @@ export const useVoiceClient = (props: {
       if (readyState !== VoiceReadyState.OPEN) {
         return;
       }
-      if (toolMessage.type === 'tool_error') {
-        client.current?.sendToolErrorMessage(toolMessage);
-      } else {
-        client.current?.sendToolResponseMessage(toolMessage);
+      const socket = client.current;
+      if (!socket) {
+        return;
       }
+      if (toolMessage.type === 'tool_error') {
+        socket.sendToolErrorMessage(toolMessage);
+      } else {
+        socket.sendToolResponseMessage(toolMessage);
+      }
+      onMessage.current?.({
+        ...toolMessage,
+        receivedAt: new Date(),
+      });
     },
     [readyState],
   );

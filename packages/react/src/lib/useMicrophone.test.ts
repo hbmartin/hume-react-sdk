@@ -20,7 +20,10 @@ type RecorderInstance = {
  * WebView — which is the case that makes `getBrowserSupportedMimeType` throw
  * rather than return a result.
  */
-const stubMediaRecorder = (isTypeSupported?: (type: string) => boolean) => {
+const stubMediaRecorder = (
+  isTypeSupported?: (type: string) => boolean,
+  onStart?: (index: number) => void,
+) => {
   const instances: RecorderInstance[] = [];
 
   class MediaRecorderStub {
@@ -29,7 +32,9 @@ const stubMediaRecorder = (isTypeSupported?: (type: string) => boolean) => {
       Set<EventListenerOrEventListenerObject>
     >();
 
-    start = vi.fn();
+    start = vi.fn(() => {
+      onStart?.(instances.indexOf(this as unknown as RecorderInstance));
+    });
 
     stop = vi.fn(() => {
       this.emit('stop', new Event('stop'));
@@ -298,6 +303,133 @@ describe('useMicrophone', () => {
     await act(() => result.current.stop());
 
     expect(onStopRecording).toHaveBeenCalledOnce();
+  });
+
+  it('flushes old final audio before buffered replacement audio', async () => {
+    const oldFinalBuffer = new Uint8Array([1]).buffer;
+    const candidateBuffer = new Uint8Array([2]).buffer;
+    const oldTrackStop = vi.fn();
+    const candidateTrackStop = vi.fn();
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const onStartRecording = vi.fn();
+    const onStopRecording = vi.fn();
+    const { result, onAudioCaptured } = renderMicrophone({
+      onStartRecording,
+      onStopRecording,
+    });
+    const context = createAudioContext();
+    result.current.start(
+      createStream([
+        { enabled: true, stop: oldTrackStop } as unknown as MediaStreamTrack,
+      ]),
+      context,
+    );
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) {
+      throw new Error('Expected the original MediaRecorder.');
+    }
+    oldRecorder.stop.mockImplementationOnce(() => {
+      const candidateRecorder = recorders[1];
+      if (!candidateRecorder) {
+        throw new Error('Expected the candidate MediaRecorder.');
+      }
+      candidateRecorder.emit('dataavailable', {
+        data: {
+          arrayBuffer: vi.fn().mockResolvedValue(candidateBuffer),
+        } as unknown as Blob,
+      } as BlobEvent);
+      oldRecorder.emit('dataavailable', {
+        data: {
+          arrayBuffer: vi.fn().mockResolvedValue(oldFinalBuffer),
+        } as unknown as Blob,
+      } as BlobEvent);
+      oldRecorder.emit('stop', new Event('stop'));
+    });
+
+    await act(() =>
+      result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: candidateTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      ),
+    );
+
+    expect(onAudioCaptured).toHaveBeenNthCalledWith(1, oldFinalBuffer);
+    expect(onAudioCaptured).toHaveBeenNthCalledWith(2, candidateBuffer);
+    expect(oldTrackStop).toHaveBeenCalledOnce();
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+    expect(onStartRecording).toHaveBeenCalledOnce();
+    expect(onStopRecording).not.toHaveBeenCalled();
+
+    await act(() => result.current.stop());
+    expect(onStopRecording).toHaveBeenCalledOnce();
+  });
+
+  it('preserves mute state across a replacement', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(createStream([oldTrack]), context);
+    act(() => result.current.mute());
+
+    await act(() =>
+      result.current.replace(createStream([candidateTrack]), context),
+    );
+
+    expect(result.current.isMuted).toBe(true);
+    expect(candidateTrack.enabled).toBe(false);
+  });
+
+  it('keeps the original capture when candidate recorder startup fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM), (index) => {
+      if (index === 1) {
+        throw new Error('candidate start failed');
+      }
+    });
+    const oldTrackStop = vi.fn();
+    const candidateTrackStop = vi.fn();
+    const oldStream = createStream([
+      { enabled: true, stop: oldTrackStop } as unknown as MediaStreamTrack,
+    ]);
+    const candidateStream = createStream([
+      {
+        enabled: true,
+        stop: candidateTrackStop,
+      } as unknown as MediaStreamTrack,
+    ]);
+    const { result, onAudioCaptured } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(oldStream, context);
+
+    await expect(
+      result.current.replace(candidateStream, context),
+    ).rejects.toThrow('candidate start failed');
+
+    expect(oldTrackStop).not.toHaveBeenCalled();
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(recorders[0]?.stop).not.toHaveBeenCalled();
+
+    const stillActiveBuffer = new Uint8Array([3]).buffer;
+    recorders[0]?.emit('dataavailable', {
+      data: {
+        arrayBuffer: vi.fn().mockResolvedValue(stillActiveBuffer),
+      } as unknown as Blob,
+    } as BlobEvent);
+    await waitFor(() =>
+      expect(onAudioCaptured).toHaveBeenCalledWith(stillActiveBuffer),
+    );
   });
 
   it('reports an error and refuses to record when MediaRecorder is absent', () => {

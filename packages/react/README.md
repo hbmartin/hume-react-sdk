@@ -70,7 +70,10 @@ See a complete list of props accepted by `VoiceProvider` below:
 
 #### `onMessage?`: (message: [JsonMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/JsonMessage.ts) & { receivedAt: Date;}) => void
 
-(_Optional_) Callback function to invoke upon receiving a message through the web socket.
+(_Optional_) Callback function to invoke upon receiving a message through the
+web socket. Locally sent ToolResponse and ToolError messages are also emitted
+after they are successfully passed to the socket so they stay in sync with
+`messages` and `toolStatusStore`.
 
 #### `onToolCall?`: [ToolCallHandler](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L28)
 
@@ -159,10 +162,14 @@ request microphone permission on mount by default; call `requestPermission`
 from a user gesture to reveal device labels and selectable device identifiers.
 
 ```tsx
-import { useAudioDevices, useVoice } from '@humeai/voice-react';
+import {
+  isAudioDeviceSwitchError,
+  useAudioDevices,
+  useVoice,
+} from '@humeai/voice-react';
 
 export function DevicePicker({ accessToken }: { accessToken: string }) {
-  const { connect } = useVoice();
+  const { connect, setInputDevice, status } = useVoice();
   const {
     inputDevices,
     selectedInputDeviceId,
@@ -177,9 +184,21 @@ export function DevicePicker({ accessToken }: { accessToken: string }) {
       </button>
       <select
         value={selectedInputDeviceId ?? ''}
-        onChange={(event) =>
-          setSelectedInputDeviceId(event.target.value || null)
-        }
+        onChange={async (event) => {
+          const deviceId = event.target.value || null;
+          try {
+            if (status.value === 'connected') {
+              await setInputDevice(deviceId);
+            }
+            // Commit the selection only after a live switch succeeds. Before
+            // connecting, it remains the selection passed to connect below.
+            setSelectedInputDeviceId(deviceId);
+          } catch (error) {
+            if (isAudioDeviceSwitchError(error)) {
+              console.error(error.reason, error.message);
+            }
+          }
+        }}
       >
         <option value="">Browser default</option>
         {inputDevices
@@ -209,7 +228,18 @@ export function DevicePicker({ accessToken }: { accessToken: string }) {
 
 Before permission is granted, browsers may expose a privacy-redacted default
 device with an empty `deviceId`. The hook leaves that device unselected so a
-call can safely fall back to the browser default.
+call can safely fall back to the browser default. During an active connection,
+`setInputDevice(deviceId)` and `setOutputDevice(deviceId)` switch the live
+devices without reconnecting; pass `null` to either method to select the
+browser/system default.
+
+Live switching requires a connected session. Failures reject with an
+`AudioDeviceSwitchError` and leave the call and current working device intact.
+Microphone switching can prompt for permission, and output switching depends on
+the browser's `AudioContext.setSinkId` support. Browsers that do not implement
+output selection can still use their default output, but reject non-default
+output switches with the `unsupported` reason. Device enumeration and output
+selection may also require HTTPS and browser-granted media permission.
 
 ### Methods
 
@@ -224,6 +254,17 @@ Opens a socket connection to the voice API and initializes the microphone.
 #### `disconnect`: () => void
 
 Disconnect from the voice API and microphone.
+
+#### `setInputDevice`: (deviceId: string | null) => Promise<void>
+
+Switches the microphone for an active connection. Pass `null` for the browser
+default. Selecting the already-active device is a no-op.
+
+#### `setOutputDevice`: (deviceId: string | null) => Promise<void>
+
+Switches the speaker for an active connection without rebuilding the playback
+graph or clearing queued audio. Pass `null` for the browser/system default.
+Selecting the already-active device is a no-op.
 
 #### `clearMessages`: () => void
 
@@ -265,7 +306,9 @@ Send a text string for the assistant to read out loud.
 
 #### `sendToolMessage`: (toolMessage: [ToolResponse](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ToolResponseMessage.ts) \| [ToolError](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ToolErrorMessage.ts)) => void
 
-Send a tool response or tool error message to the EVI backend.
+Send a tool response or tool error message to the EVI backend. Successfully
+sent tool messages are emitted through `onMessage`, appended to `messages`, and
+recorded in `toolStatusStore`.
 
 #### `pauseAssistant`: () => void
 

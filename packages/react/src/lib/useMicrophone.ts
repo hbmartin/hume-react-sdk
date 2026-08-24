@@ -16,6 +16,13 @@ const MICROPHONE_ALREADY_STARTED_MESSAGE =
   'The microphone is already recording. Stop it before starting again.';
 const RECORDER_FINAL_DATA_TIMEOUT_MS = 1_000;
 
+type DisposeMicrophoneOptions = {
+  notifyStop?: boolean;
+  preserveAudioContext?: boolean;
+  preserveMute?: boolean;
+  restoreOnFailure?: boolean;
+};
+
 export type MicrophoneProps = {
   onAudioCaptured: (b: ArrayBuffer) => void;
   onStartRecording?: () => void;
@@ -44,6 +51,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const ownsAudioContext = useRef(false);
 
   const recorder = useRef<MediaRecorder | null>(null);
+  const recorderDataHandler = useRef<((event: BlobEvent) => void) | null>(null);
   const recordingStarted = useRef(false);
   const recordingGeneration = useRef(0);
   const pendingDataTasks = useRef(new Set<Promise<void>>());
@@ -131,190 +139,215 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [fftStore],
   );
 
-  const disposeMicrophoneResources = useCallback(async () => {
-    const recorderToStop = recorder.current;
-    const wasRecording = recordingStarted.current;
-    const streamToStop = currentStream.current;
-    const contextToClose = audioContext.current;
-    const shouldCloseContext = ownsAudioContext.current;
-    const failures: string[] = [];
+  const disposeMicrophoneResources = useCallback(
+    async (options: DisposeMicrophoneOptions = {}) => {
+      const {
+        notifyStop = true,
+        preserveAudioContext = false,
+        preserveMute = false,
+        restoreOnFailure = true,
+      } = options;
+      const recorderToStop = recorder.current;
+      const recorderHandlerToRemove =
+        recorderDataHandler.current ?? dataHandler;
+      const wasRecording = recordingStarted.current;
+      const streamToStop = currentStream.current;
+      const contextToClose = audioContext.current;
+      const shouldCloseContext = ownsAudioContext.current;
+      const failures: string[] = [];
 
-    // Enumerate tracks before relinquishing the stream. getTracks() is
-    // synchronous, so this cannot race a new start, and retaining the stream
-    // leaves a handle available if a nonstandard implementation throws.
-    let tracksToStop: MediaStreamTrack[] = [];
-    let tracksEnumerated = true;
-    if (streamToStop) {
-      try {
-        tracksToStop = streamToStop.getTracks();
-      } catch (error) {
-        tracksEnumerated = false;
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
-        failures.push(`Media track enumeration failed: ${message}`);
-      }
-    }
-
-    // Detach resources that have durable local handles before awaiting. The
-    // stream remains attached until all of its tracks stop successfully.
-    recorder.current = null;
-    recordingStarted.current = false;
-    audioContext.current = null;
-    ownsAudioContext.current = false;
-
-    stopFftAnalyzer();
-    fftStore.clear();
-
-    let recorderStopped = true;
-    if (recorderToStop) {
-      const removeDataHandler = () => {
+      // Enumerate tracks before relinquishing the stream. getTracks() is
+      // synchronous, so this cannot race a new start, and retaining the stream
+      // leaves a handle available if a nonstandard implementation throws.
+      let tracksToStop: MediaStreamTrack[] = [];
+      let tracksEnumerated = true;
+      if (streamToStop) {
         try {
-          recorderToStop.removeEventListener('dataavailable', dataHandler);
+          tracksToStop = streamToStop.getTracks();
         } catch (error) {
-          console.error('Recorder listener cleanup failed.', error);
-        }
-      };
-      let resolveRecorderStop = () => {};
-      const recorderStopEvent = new Promise<void>((resolve) => {
-        resolveRecorderStop = resolve;
-      });
-      const handleRecorderStop = () => {
-        removeDataHandler();
-        try {
-          recorderToStop.removeEventListener('stop', handleRecorderStop);
-        } catch (error) {
-          console.error('Recorder listener cleanup failed.', error);
-        }
-        resolveRecorderStop();
-      };
-      const removeStopHandler = () => {
-        try {
-          recorderToStop.removeEventListener('stop', handleRecorderStop);
-        } catch (error) {
-          console.error('Recorder listener cleanup failed.', error);
-        }
-      };
-      let stopListenerAttached = false;
-      try {
-        recorderToStop.addEventListener('stop', handleRecorderStop);
-        stopListenerAttached = true;
-      } catch (error) {
-        console.error('Recorder stop listener setup failed.', error);
-      }
-      try {
-        recorderToStop.stop();
-      } catch (error) {
-        const errorName =
-          typeof error === 'object' && error !== null && 'name' in error
-            ? error.name
-            : null;
-        if (stopListenerAttached) {
-          removeStopHandler();
-          stopListenerAttached = false;
-        }
-        if (errorName !== 'InvalidStateError') {
-          recorderStopped = false;
+          tracksEnumerated = false;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
-          failures.push(`Recorder cleanup failed: ${message}`);
-        } else {
-          removeDataHandler();
+          failures.push(`Media track enumeration failed: ${message}`);
         }
       }
 
-      const finalDataDeadline = Date.now() + RECORDER_FINAL_DATA_TIMEOUT_MS;
+      // Detach resources that have durable local handles before awaiting. The
+      // stream remains attached until all of its tracks stop successfully.
+      recorder.current = null;
+      recorderDataHandler.current = null;
+      recordingStarted.current = false;
+      if (!preserveAudioContext) {
+        audioContext.current = null;
+        ownsAudioContext.current = false;
+      }
 
-      if (recorderStopped && stopListenerAttached) {
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        const stopEventReceived = await Promise.race([
-          recorderStopEvent.then(() => true),
-          new Promise<boolean>((resolve) => {
-            timeoutId = setTimeout(
-              () => resolve(false),
-              Math.max(0, finalDataDeadline - Date.now()),
+      stopFftAnalyzer();
+      fftStore.clear();
+
+      let recorderStopped = true;
+      if (recorderToStop) {
+        const removeDataHandler = () => {
+          try {
+            recorderToStop.removeEventListener(
+              'dataavailable',
+              recorderHandlerToRemove,
             );
-          }),
-        ]);
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        if (!stopEventReceived) {
-          recorderStopped = false;
+          } catch (error) {
+            console.error('Recorder listener cleanup failed.', error);
+          }
+        };
+        let resolveRecorderStop = () => {};
+        const recorderStopEvent = new Promise<void>((resolve) => {
+          resolveRecorderStop = resolve;
+        });
+        const handleRecorderStop = () => {
           removeDataHandler();
-          removeStopHandler();
-          failures.push('Recorder cleanup failed: stop event timed out');
-        }
-      } else if (recorderStopped) {
-        removeDataHandler();
-      }
-
-      if (recorderStopped && pendingDataTasks.current.size > 0) {
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        const finalDataFlushed = await Promise.race([
-          Promise.allSettled([...pendingDataTasks.current]).then(() => true),
-          new Promise<boolean>((resolve) => {
-            timeoutId = setTimeout(
-              () => resolve(false),
-              Math.max(0, finalDataDeadline - Date.now()),
-            );
-          }),
-        ]);
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        if (!finalDataFlushed) {
-          failures.push('Recorder cleanup failed: final audio data timed out');
-        }
-      }
-    }
-    if (!recorderStopped) {
-      recorder.current = recorderToStop;
-      recordingStarted.current = wasRecording;
-    }
-
-    let tracksStopped = tracksEnumerated;
-    if (streamToStop && tracksEnumerated) {
-      tracksToStop.forEach((track, index) => {
+          try {
+            recorderToStop.removeEventListener('stop', handleRecorderStop);
+          } catch (error) {
+            console.error('Recorder listener cleanup failed.', error);
+          }
+          resolveRecorderStop();
+        };
+        const removeStopHandler = () => {
+          try {
+            recorderToStop.removeEventListener('stop', handleRecorderStop);
+          } catch (error) {
+            console.error('Recorder listener cleanup failed.', error);
+          }
+        };
+        let stopListenerAttached = false;
         try {
-          track.stop();
+          recorderToStop.addEventListener('stop', handleRecorderStop);
+          stopListenerAttached = true;
         } catch (error) {
-          tracksStopped = false;
-          const message =
-            error instanceof Error ? error.message : 'Unknown error';
-          failures.push(`Media track ${index + 1} cleanup failed: ${message}`);
+          console.error('Recorder stop listener setup failed.', error);
         }
-      });
-    }
-    if (currentStream.current === streamToStop && tracksStopped) {
-      currentStream.current = null;
-    }
+        try {
+          recorderToStop.stop();
+        } catch (error) {
+          const errorName =
+            typeof error === 'object' && error !== null && 'name' in error
+              ? error.name
+              : null;
+          if (stopListenerAttached) {
+            removeStopHandler();
+            stopListenerAttached = false;
+          }
+          if (errorName !== 'InvalidStateError') {
+            recorderStopped = false;
+            const message =
+              error instanceof Error ? error.message : 'Unknown error';
+            failures.push(`Recorder cleanup failed: ${message}`);
+            if (!restoreOnFailure) {
+              removeDataHandler();
+            }
+          } else {
+            removeDataHandler();
+          }
+        }
 
-    if (recorderStopped && tracksStopped) {
-      isMutedRef.current = false;
-      setIsMuted(false);
-    }
+        const finalDataDeadline = Date.now() + RECORDER_FINAL_DATA_TIMEOUT_MS;
 
-    if (wasRecording && recorderStopped) {
-      try {
-        onStopRecordingRef.current?.();
-      } catch (callbackError) {
-        console.error('onStopRecording callback failed.', callbackError);
+        if (recorderStopped && stopListenerAttached) {
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          const stopEventReceived = await Promise.race([
+            recorderStopEvent.then(() => true),
+            new Promise<boolean>((resolve) => {
+              timeoutId = setTimeout(
+                () => resolve(false),
+                Math.max(0, finalDataDeadline - Date.now()),
+              );
+            }),
+          ]);
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+          if (!stopEventReceived) {
+            recorderStopped = false;
+            removeDataHandler();
+            removeStopHandler();
+            failures.push('Recorder cleanup failed: stop event timed out');
+          }
+        } else if (recorderStopped) {
+          removeDataHandler();
+        }
+
+        if (recorderStopped && pendingDataTasks.current.size > 0) {
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          const finalDataFlushed = await Promise.race([
+            Promise.allSettled([...pendingDataTasks.current]).then(() => true),
+            new Promise<boolean>((resolve) => {
+              timeoutId = setTimeout(
+                () => resolve(false),
+                Math.max(0, finalDataDeadline - Date.now()),
+              );
+            }),
+          ]);
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+          if (!finalDataFlushed) {
+            failures.push(
+              'Recorder cleanup failed: final audio data timed out',
+            );
+          }
+        }
       }
-    }
-
-    if (contextToClose && shouldCloseContext) {
-      const closeResult = await closeAudioContextWithTimeout(contextToClose);
-      if (!closeResult.success) {
-        failures.push(
-          `Audio context cleanup failed: ${closeResult.error.message}`,
-        );
+      if (!recorderStopped && restoreOnFailure) {
+        recorder.current = recorderToStop;
+        recorderDataHandler.current = recorderHandlerToRemove;
+        recordingStarted.current = wasRecording;
       }
-    }
 
-    if (failures.length > 0) {
-      throw new Error(failures.join('; '));
-    }
-  }, [dataHandler, fftStore, onStopRecordingRef, stopFftAnalyzer]);
+      let tracksStopped = tracksEnumerated;
+      if (streamToStop && tracksEnumerated) {
+        tracksToStop.forEach((track, index) => {
+          try {
+            track.stop();
+          } catch (error) {
+            tracksStopped = false;
+            const message =
+              error instanceof Error ? error.message : 'Unknown error';
+            failures.push(
+              `Media track ${index + 1} cleanup failed: ${message}`,
+            );
+          }
+        });
+      }
+      if (currentStream.current === streamToStop && tracksStopped) {
+        currentStream.current = null;
+      }
+
+      if (recorderStopped && tracksStopped && !preserveMute) {
+        isMutedRef.current = false;
+        setIsMuted(false);
+      }
+
+      if (wasRecording && recorderStopped && notifyStop) {
+        try {
+          onStopRecordingRef.current?.();
+        } catch (callbackError) {
+          console.error('onStopRecording callback failed.', callbackError);
+        }
+      }
+
+      if (contextToClose && shouldCloseContext && !preserveAudioContext) {
+        const closeResult = await closeAudioContextWithTimeout(contextToClose);
+        if (!closeResult.success) {
+          failures.push(
+            `Audio context cleanup failed: ${closeResult.error.message}`,
+          );
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new Error(failures.join('; '));
+      }
+    },
+    [dataHandler, fftStore, onStopRecordingRef, stopFftAnalyzer],
+  );
 
   const reportClosureFailure = useCallback(
     (message: string, error: unknown) => {
@@ -362,6 +395,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         }
         const nextRecorder = new MediaRecorder(stream, { mimeType });
         recorder.current = nextRecorder;
+        recorderDataHandler.current = dataHandler;
         nextRecorder.addEventListener('dataavailable', dataHandler);
         nextRecorder.start(100);
         recordingStarted.current = true;
@@ -386,6 +420,158 @@ export const useMicrophone = (props: MicrophoneProps) => {
       fftStore,
       onStartRecordingRef,
       reportClosureFailure,
+      startFftAnalyzer,
+      stopFftAnalyzer,
+    ],
+  );
+
+  const replace = useCallback(
+    async (stream: MediaStream, sharedAudioContext?: AudioContext) => {
+      if (!stream) {
+        throw new Error('No stream connected');
+      }
+
+      const mimeType = mimeTypeRef.current;
+      if (!mimeType) {
+        throw new Error('No MimeType specified');
+      }
+
+      const currentContext = audioContext.current;
+      if (
+        !recorder.current ||
+        !currentStream.current ||
+        !currentContext ||
+        !recordingStarted.current
+      ) {
+        throw new Error('The microphone is not recording.');
+      }
+      if (sharedAudioContext && sharedAudioContext !== currentContext) {
+        throw new Error('The microphone audio context changed.');
+      }
+
+      const candidateBuffers: ArrayBuffer[] = [];
+      const candidateTasks = new Set<Promise<void>>();
+      let candidateMode: 'buffering' | 'forwarding' | 'disposed' = 'buffering';
+      let candidateGeneration: number | null = null;
+      let candidateDataChain = Promise.resolve();
+      const candidateDataHandler = (event: BlobEvent) => {
+        const task = candidateDataChain
+          .then(() => event.data.arrayBuffer())
+          .then((buffer) => {
+            if (buffer.byteLength === 0 || candidateMode === 'disposed') {
+              return;
+            }
+            if (candidateMode === 'buffering') {
+              candidateBuffers.push(buffer);
+            } else if (candidateGeneration === recordingGeneration.current) {
+              sendAudio.current?.(buffer);
+            }
+          })
+          .catch((error) => {
+            console.log(error);
+          });
+        candidateDataChain = task;
+        const tasks =
+          candidateMode === 'buffering'
+            ? candidateTasks
+            : pendingDataTasks.current;
+        tasks.add(task);
+        void task.finally(() => tasks.delete(task));
+      };
+
+      let candidateRecorder: MediaRecorder | null = null;
+      let candidateStarted = false;
+      const disposeCandidate = () => {
+        candidateMode = 'disposed';
+        if (candidateRecorder) {
+          try {
+            candidateRecorder.removeEventListener(
+              'dataavailable',
+              candidateDataHandler,
+            );
+          } catch {
+            // The listener may not have been installed.
+          }
+          if (candidateStarted) {
+            try {
+              candidateRecorder.stop();
+            } catch {
+              // The recorder may already have stopped.
+            }
+          }
+        }
+        try {
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {
+          // The caller will receive the original startup failure.
+        }
+      };
+
+      try {
+        if (isMutedRef.current) {
+          stream.getTracks().forEach((track) => {
+            track.enabled = false;
+          });
+        }
+        candidateRecorder = new MediaRecorder(stream, { mimeType });
+        candidateRecorder.addEventListener(
+          'dataavailable',
+          candidateDataHandler,
+        );
+        candidateRecorder.start(100);
+        candidateStarted = true;
+      } catch (error) {
+        disposeCandidate();
+        throw error;
+      }
+
+      try {
+        await disposeMicrophoneResources({
+          notifyStop: false,
+          preserveAudioContext: true,
+          preserveMute: true,
+          restoreOnFailure: false,
+        });
+      } catch (cleanupError) {
+        // The replacement is already recording. Keep it authoritative even if
+        // a nonstandard old recorder or track did not clean up cleanly.
+        console.error(
+          'Failed to fully retire the previous microphone resources.',
+          cleanupError,
+        );
+      }
+
+      recordingGeneration.current += 1;
+      candidateGeneration = recordingGeneration.current;
+      currentStream.current = stream;
+      audioContext.current = currentContext;
+      recorder.current = candidateRecorder;
+      recorderDataHandler.current = candidateDataHandler;
+      recordingStarted.current = true;
+
+      try {
+        startFftAnalyzer(stream);
+      } catch (error) {
+        stopFftAnalyzer();
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
+        console.error(`Failed to start mic analyzer: ${message}`);
+      }
+      if (isMutedRef.current) {
+        fftStore.clear();
+      }
+
+      candidateMode = 'forwarding';
+      candidateTasks.forEach((task) => {
+        pendingDataTasks.current.add(task);
+        void task.finally(() => pendingDataTasks.current.delete(task));
+      });
+      candidateBuffers.forEach((buffer) => sendAudio.current?.(buffer));
+    },
+    [
+      disposeMicrophoneResources,
+      fftStore,
+      sendAudio,
       startFftAnalyzer,
       stopFftAnalyzer,
     ],
@@ -464,12 +650,13 @@ export const useMicrophone = (props: MicrophoneProps) => {
   return useMemo(
     () => ({
       start,
+      replace,
       stop,
       mute,
       unmute,
       isMuted,
       fftStore,
     }),
-    [start, stop, mute, unmute, isMuted, fftStore],
+    [start, replace, stop, mute, unmute, isMuted, fftStore],
   );
 };

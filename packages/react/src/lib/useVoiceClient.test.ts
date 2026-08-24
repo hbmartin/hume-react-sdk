@@ -1,7 +1,15 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useVoiceClient, VoiceReadyState } from './useVoiceClient';
+import {
+  type ToolCallHandler,
+  useVoiceClient,
+  VoiceReadyState,
+} from './useVoiceClient';
+
+type MessageHandler = NonNullable<
+  Parameters<typeof useVoiceClient>[0]['onMessage']
+>;
 
 const humeMocks = vi.hoisted(() => ({
   connect: vi.fn(),
@@ -33,6 +41,8 @@ const createSocket = () => {
       handlers.set(event, handler);
     }),
     sendSessionSettings: vi.fn(),
+    sendToolErrorMessage: vi.fn(),
+    sendToolResponseMessage: vi.fn(),
   };
 };
 
@@ -161,5 +171,267 @@ describe('useVoiceClient', () => {
       type: 'session_settings',
       builtinTools: [{ name: 'web_search' }],
     });
+  });
+
+  it('continues to forward inbound tool responses', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const { result } = renderHook(() => useVoiceClient({ onMessage }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_response',
+        toolCallId: 'builtin-call',
+        content: 'result',
+      } as never);
+    });
+
+    expect(onMessage).toHaveBeenCalledOnce();
+    const receivedMessage = onMessage.mock.calls[0]?.[0];
+    expect(receivedMessage).toMatchObject({
+      type: 'tool_response',
+      toolCallId: 'builtin-call',
+      content: 'result',
+    });
+    expect(receivedMessage?.receivedAt).toBeInstanceOf(Date);
+  });
+
+  it('emits an automatic tool response after sending it', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const onToolCall = vi.fn<ToolCallHandler>((_message, send) =>
+      Promise.resolve(send.success({ answer: 42 })),
+    );
+    const { result } = renderHook(() =>
+      useVoiceClient({ onMessage, onToolCall }),
+    );
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'function-call',
+        name: 'answer',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+
+    await waitFor(() =>
+      expect(socket.sendToolResponseMessage).toHaveBeenCalledWith({
+        type: 'tool_response',
+        toolCallId: 'function-call',
+        content: '{"answer":42}',
+      }),
+    );
+    const sentMessage = onMessage.mock.calls.at(-1)?.[0];
+    expect(sentMessage).toMatchObject({
+      type: 'tool_response',
+      toolCallId: 'function-call',
+      content: '{"answer":42}',
+    });
+    expect(sentMessage?.receivedAt).toBeInstanceOf(Date);
+    expect(
+      socket.sendToolResponseMessage.mock.invocationCallOrder[0],
+    ).toBeLessThan(onMessage.mock.invocationCallOrder.at(-1) ?? 0);
+  });
+
+  it.each([
+    {
+      message: {
+        type: 'tool_response' as const,
+        toolCallId: 'manual-response',
+        content: 'ok',
+      },
+      sendMethod: 'sendToolResponseMessage' as const,
+    },
+    {
+      message: {
+        type: 'tool_error' as const,
+        toolCallId: 'manual-error',
+        error: 'failed',
+        code: 'tool_failed',
+        level: 'warn' as const,
+        content: 'fallback',
+      },
+      sendMethod: 'sendToolErrorMessage' as const,
+    },
+  ])('emits a manually sent $message.type', async ({ message, sendMethod }) => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const { result } = renderHook(() => useVoiceClient({ onMessage }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      result.current.sendToolMessage(message);
+    });
+
+    expect(socket[sendMethod]).toHaveBeenCalledWith(message);
+    const sentMessage = onMessage.mock.calls[0]?.[0];
+    expect(sentMessage).toMatchObject({
+      ...message,
+    });
+    expect(sentMessage?.receivedAt).toBeInstanceOf(Date);
+    expect(socket[sendMethod].mock.invocationCallOrder[0]).toBeLessThan(
+      onMessage.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('does not emit a manual tool response when the socket send fails', async () => {
+    const socket = createSocket();
+    socket.sendToolResponseMessage.mockImplementation(() => {
+      throw new Error('send failed');
+    });
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const { result } = renderHook(() => useVoiceClient({ onMessage }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    expect(() =>
+      act(() => {
+        result.current.sendToolMessage({
+          type: 'tool_response',
+          toolCallId: 'failed-call',
+          content: 'nope',
+        });
+      }),
+    ).toThrow('send failed');
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it('reports automatic tool handler and send failures without emitting', async () => {
+    const socket = createSocket();
+    socket.sendToolResponseMessage.mockImplementation(() => {
+      throw new Error('send failed');
+    });
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const onToolCallError = vi.fn();
+    const onToolCall = vi.fn<ToolCallHandler>((_message, send) =>
+      Promise.resolve(send.success('result')),
+    );
+    const { result } = renderHook(() =>
+      useVoiceClient({ onMessage, onToolCall, onToolCallError }),
+    );
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'failed-call',
+        name: 'fail',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+
+    await waitFor(() =>
+      expect(onToolCallError).toHaveBeenCalledWith(
+        'Failed to send tool response',
+        expect.objectContaining({ message: 'send failed' }),
+      ),
+    );
+    expect(onMessage).toHaveBeenCalledOnce();
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'tool_call' }),
+    );
+  });
+
+  it('reports a synchronous automatic tool handler failure', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const onToolCallError = vi.fn();
+    const onToolCall = vi.fn<ToolCallHandler>(() => {
+      throw new Error('handler failed');
+    });
+    const { result } = renderHook(() =>
+      useVoiceClient({ onMessage, onToolCall, onToolCallError }),
+    );
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'failed-handler',
+        name: 'fail',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+
+    await waitFor(() =>
+      expect(onToolCallError).toHaveBeenCalledWith(
+        'Tool call handler failed',
+        expect.objectContaining({ message: 'handler failed' }),
+      ),
+    );
+    expect(socket.sendToolResponseMessage).not.toHaveBeenCalled();
+    expect(socket.sendToolErrorMessage).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledOnce();
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'tool_call' }),
+    );
   });
 });
