@@ -177,7 +177,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
     const recorderToStop = recorder.current;
     recorder.current = null;
     recorderToStop?.removeEventListener('dataavailable', dataHandler);
-    recorderToStop?.stop();
+    try {
+      recorderToStop?.stop();
+    } catch {
+      // The recorder may already be inactive.
+    }
 
     const streamToStop = currentStream.current;
     currentStream.current = null;

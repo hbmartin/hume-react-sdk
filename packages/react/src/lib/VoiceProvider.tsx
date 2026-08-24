@@ -41,6 +41,7 @@ import type {
   UserInterruptionMessage,
   UserTranscriptMessage,
 } from '../models/messages';
+import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 
 export type SocketErrorReason =
   | 'socket_connection_failure'
@@ -97,8 +98,6 @@ type ResourceStatus =
   | 'connected'
   | 'disconnecting'
   | 'disconnected';
-
-const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
 
 export type VoiceContextType = {
   connect: (options: ConnectOptions) => Promise<void>;
@@ -238,19 +237,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // Relinquish ownership before awaiting so concurrent cleanup cannot close
       // this context twice or clear a newer connection's context.
       sharedAudioContextRef.current = null;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      const closePromise = Promise.resolve()
-        .then(() => context.close())
-        .catch(() => undefined);
-      await Promise.race([
-        closePromise,
-        new Promise<void>((resolve) => {
-          timeoutId = setTimeout(resolve, AUDIO_CONTEXT_CLOSE_TIMEOUT_MS);
-        }),
-      ]);
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
+      await closeAudioContextWithTimeout(context);
     },
     [],
   );

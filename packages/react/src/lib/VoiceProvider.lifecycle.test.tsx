@@ -187,6 +187,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.contextClose).toHaveBeenCalledOnce();
     expect(mocks.clientConnect).not.toHaveBeenCalled();
     expect(mocks.micStart).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
   });
 
   it('publishes socket closure immediately and ignores stale drain teardown', async () => {
