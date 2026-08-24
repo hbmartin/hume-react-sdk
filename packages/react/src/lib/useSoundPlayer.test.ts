@@ -666,6 +666,39 @@ describe('useSoundPlayer', () => {
     expect(secondSettled).toBe(true);
   });
 
+  it('joins concurrent cleanup requests without an explicit context', async () => {
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+
+    let firstStop = Promise.resolve();
+    let secondStop = Promise.resolve();
+    let secondSettled = false;
+    act(() => {
+      firstStop = result.current.stopAll();
+      secondStop = result.current.stopAll().then(() => {
+        secondSettled = true;
+      });
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+    expect(fakePort.postMessage).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(() => Promise.all([firstStop, secondStop]));
+    expect(secondSettled).toBe(true);
+  });
+
   it('plays chunks in correct order when received in order', async () => {
     const onError = vi.fn();
     const onPlayAudio = vi.fn();
@@ -1057,10 +1090,12 @@ describe('useSoundPlayer', () => {
     const source = bufferSources[0];
 
     act(() => result.current.clearQueue());
-    act(() => source?.onended?.());
-
     expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
     expect(onStopAudio).toHaveBeenCalledWith('interrupted');
+    expect(source?.onended).toBeNull();
+
+    act(() => source?.onended?.());
+    expect(onStopAudio).toHaveBeenCalledOnce();
   });
 
   it('preserves volume and mute state across stop and reinitialization', async () => {

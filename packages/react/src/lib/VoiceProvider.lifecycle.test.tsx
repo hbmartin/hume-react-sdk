@@ -193,11 +193,56 @@ describe('VoiceProvider close lifecycle', () => {
 
     expect(mocks.clientSendAudio).toHaveBeenCalledWith(finalBuffer);
     expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
-    expect(
-      mocks.micStop.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    ).toBeLessThan(
-      mocks.stopStream.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(mocks.micStop).toHaveBeenCalledOnce();
+    expect(mocks.stopStream).toHaveBeenCalledOnce();
+    const micStopOrder = mocks.micStop.mock.invocationCallOrder[0];
+    const stopStreamOrder = mocks.stopStream.mock.invocationCallOrder[0];
+    if (micStopOrder === undefined || stopStreamOrder === undefined) {
+      throw new Error('Expected microphone and stream cleanup calls.');
+    }
+    expect(micStopOrder).toBeLessThan(stopStreamOrder);
+  });
+
+  it('continues teardown and allows reconnect after microphone cleanup fails', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'first-token' },
+      }),
     );
+    mocks.micStop.mockRejectedValueOnce(new Error('microphone stop failed'));
+
+    await act(async () => {
+      await expect(result.current.disconnect()).resolves.toBeUndefined();
+    });
+
+    expect(mocks.stopStream).toHaveBeenCalledOnce();
+    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
+    expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
+    expect(mocks.contextClose).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(consoleError.mock.calls[0]?.[0]).toBe(
+      'Failed to fully disconnect voice resources.',
+    );
+    const loggedFailure: unknown = consoleError.mock.calls[0]?.[1];
+    if (!(loggedFailure instanceof Error)) {
+      throw new Error('Expected teardown to log an Error.');
+    }
+    expect(loggedFailure.message).toContain('microphone');
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'second-token' },
+      }),
+    );
+    expect(mocks.getStream).toHaveBeenCalledTimes(2);
+    expect(result.current.status.value).toBe('connected');
+    consoleError.mockRestore();
   });
 
   it('blocks reconnect until an explicit disconnect has released old resources', async () => {
@@ -264,6 +309,38 @@ describe('VoiceProvider close lifecycle', () => {
         type: 'audio_error',
       }),
     );
+  });
+
+  it('does not publish an AudioContext error from a canceled connection', async () => {
+    const onError = vi.fn();
+    let cancelConnection = () => {};
+    let disconnecting = Promise.resolve();
+    globalThis.AudioContext = vi.fn(() => {
+      cancelConnection();
+      throw new DOMException('context unavailable', 'NotSupportedError');
+    }) as unknown as typeof AudioContext;
+    const stream = { id: 'stale-stream' } as unknown as MediaStream;
+    mocks.getStream.mockResolvedValueOnce(stream);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider onError={onError}>{children}</VoiceProvider>
+      ),
+    });
+    cancelConnection = () => {
+      disconnecting = result.current.disconnect();
+    };
+
+    await act(async () => {
+      await result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      });
+      await disconnecting;
+    });
+
+    expect(mocks.stopStream).toHaveBeenCalledWith(stream);
+    expect(onError).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('disconnected');
   });
 
   it('aborts before opening the socket when player initialization fails', async () => {

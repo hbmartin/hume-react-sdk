@@ -222,6 +222,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
         }
       }
 
+      const finalDataDeadline = Date.now() + RECORDER_FINAL_DATA_TIMEOUT_MS;
+
       if (recorderStopped && stopListenerAttached) {
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const stopEventReceived = await Promise.race([
@@ -229,7 +231,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           new Promise<boolean>((resolve) => {
             timeoutId = setTimeout(
               () => resolve(false),
-              RECORDER_FINAL_DATA_TIMEOUT_MS,
+              Math.max(0, finalDataDeadline - Date.now()),
             );
           }),
         ]);
@@ -253,7 +255,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           new Promise<boolean>((resolve) => {
             timeoutId = setTimeout(
               () => resolve(false),
-              RECORDER_FINAL_DATA_TIMEOUT_MS,
+              Math.max(0, finalDataDeadline - Date.now()),
             );
           }),
         ]);
