@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   clientProps: null as null | {
     onMessage?: (message: never) => void;
-    onToolCallError?: (message: string, error?: Error) => void;
+    onToolCallError?: (
+      message: string,
+      error?: Error,
+      source?: 'handler_failure' | 'invalid_response' | 'send_failure',
+    ) => void;
   },
   getStream: vi.fn(),
   micReplace: vi.fn(),
@@ -183,5 +187,40 @@ describe('VoiceProvider tool message state', () => {
     });
     expect(result.current.error).toBeNull();
     expect(result.current.status.value).toBe('connected');
+  });
+
+  it('treats an automatic tool response send failure as fatal', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider onError={onError}>{children}</VoiceProvider>
+      ),
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    const sendError = new Error('send failed');
+    act(() => {
+      mocks.clientProps?.onToolCallError?.(
+        'Failed to send tool response',
+        sendError,
+        'send_failure',
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).toEqual({
+        type: 'socket_error',
+        reason: 'failed_to_send_message',
+        message: 'Failed to send tool response',
+        error: sendError,
+      });
+      expect(result.current.status.value).toBe('error');
+    });
+    expect(onError).toHaveBeenCalledWith(result.current.error);
   });
 });

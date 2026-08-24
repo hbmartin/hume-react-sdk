@@ -430,6 +430,7 @@ describe('useVoiceClient', () => {
       expect(onToolCallError).toHaveBeenCalledWith(
         'Failed to send tool response',
         expect.objectContaining({ message: 'send failed' }),
+        'send_failure',
       ),
     );
     expect(onMessage).toHaveBeenCalledOnce();
@@ -475,6 +476,7 @@ describe('useVoiceClient', () => {
       expect(onToolCallError).toHaveBeenCalledWith(
         'Tool call handler failed',
         expect.objectContaining({ message: 'handler failed' }),
+        'handler_failure',
       ),
     );
     expect(socket.sendToolResponseMessage).not.toHaveBeenCalled();
@@ -483,6 +485,48 @@ describe('useVoiceClient', () => {
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool_call' }),
     );
+  });
+
+  it('reports an undefined tool handler result as invalid', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onToolCallError = vi.fn();
+    const onToolCall = vi.fn<ToolCallHandler>(() =>
+      Promise.resolve(undefined as never),
+    );
+    const { result } = renderHook(() =>
+      useVoiceClient({ onToolCall, onToolCallError }),
+    );
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'undefined-handler',
+        name: 'invalid',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+
+    await waitFor(() =>
+      expect(onToolCallError).toHaveBeenCalledWith(
+        'Invalid response from tool call',
+        undefined,
+        'invalid_response',
+      ),
+    );
+    expect(socket.sendToolResponseMessage).not.toHaveBeenCalled();
+    expect(socket.sendToolErrorMessage).not.toHaveBeenCalled();
   });
 
   it('ignores a tool handler result that settles after disconnect', async () => {

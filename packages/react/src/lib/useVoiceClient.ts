@@ -46,6 +46,13 @@ type ActiveConnection = {
   consumerInitiated: boolean;
   socket: Hume.empathicVoice.chat.ChatSocket;
 };
+
+export type ToolCallErrorSource =
+  | 'handler_failure'
+  | 'invalid_response'
+  | 'send_failure';
+
+const SKIPPED_TOOL_CALL = Symbol('skipped_tool_call');
 /**
  * Extracts session settings that can be sent as query params when the websocket connects.
  * Matches ConnectSessionSettings in the TypeScript SDK (systemPrompt, voiceId, context, etc. are supported).
@@ -93,7 +100,11 @@ export const useVoiceClient = (props: {
     sessionSettings: Hume.empathicVoice.SessionSettings,
   ) => void;
   onToolCall?: ToolCallHandler;
-  onToolCallError?: (message: string, error?: Error) => void;
+  onToolCallError?: (
+    message: string,
+    error?: Error,
+    source?: ToolCallErrorSource,
+  ) => void;
   onClientError?: (message: string, error?: Error) => void;
   onOpen?: () => void;
   onClose?: (
@@ -223,9 +234,6 @@ export const useVoiceClient = (props: {
               ...message,
               receivedAt: new Date(),
             };
-            if (!isConnectionActive()) {
-              return;
-            }
             onMessage.current?.(messageWithReceivedAt);
             return;
           }
@@ -235,9 +243,6 @@ export const useVoiceClient = (props: {
               ...message,
               receivedAt: new Date(),
             };
-            if (!isConnectionActive()) {
-              return;
-            }
             onMessage.current?.(messageWithReceivedAt);
 
             // only pass tool call messages for user defined tools
@@ -245,9 +250,12 @@ export const useVoiceClient = (props: {
               const handler = onToolCall.current;
               if (handler) {
                 void Promise.resolve()
-                  .then(() => {
+                  .then<
+                    | Awaited<ReturnType<ToolCallHandler>>
+                    | typeof SKIPPED_TOOL_CALL
+                  >(() => {
                     if (!isConnectionActive()) {
-                      return undefined;
+                      return SKIPPED_TOOL_CALL;
                     }
                     return handler(
                       {
@@ -286,7 +294,18 @@ export const useVoiceClient = (props: {
                     );
                   })
                   .then((response) => {
-                    if (!isConnectionActive() || response === undefined) {
+                    if (
+                      !isConnectionActive() ||
+                      response === SKIPPED_TOOL_CALL
+                    ) {
+                      return;
+                    }
+                    if (response === undefined || response === null) {
+                      onToolCallError.current?.(
+                        'Invalid response from tool call',
+                        undefined,
+                        'invalid_response',
+                      );
                       return;
                     }
                     try {
@@ -297,6 +316,8 @@ export const useVoiceClient = (props: {
                       } else {
                         onToolCallError.current?.(
                           'Invalid response from tool call',
+                          undefined,
+                          'invalid_response',
                         );
                         return;
                       }
@@ -311,6 +332,7 @@ export const useVoiceClient = (props: {
                       onToolCallError.current?.(
                         'Failed to send tool response',
                         normalizedError,
+                        'send_failure',
                       );
                       return;
                     }
@@ -331,6 +353,7 @@ export const useVoiceClient = (props: {
                     onToolCallError.current?.(
                       'Tool call handler failed',
                       normalizedError,
+                      'handler_failure',
                     );
                   });
               }

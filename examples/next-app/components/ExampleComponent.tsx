@@ -36,19 +36,21 @@ export const ExampleComponent = ({
   accessToken: string;
   configId?: string;
 }) => {
-  const { connect, disconnect, setInputDevice, setOutputDevice, status } =
-    useVoice();
+  const {
+    activeInputDeviceId,
+    activeOutputDeviceId,
+    connect,
+    disconnect,
+    setInputDevice,
+    setOutputDevice,
+    status,
+  } = useVoice();
   const callDurationTimestamp = useCallDurationTimestamp();
   const [isSwitchingInput, setIsSwitchingInput] = useState(false);
   const [isSwitchingOutput, setIsSwitchingOutput] = useState(false);
   const [deviceSwitchError, setDeviceSwitchError] = useState<Error | null>(
     null,
   );
-  const [appliedMicrophoneId, setAppliedMicrophoneId] = useState<string | null>(
-    null,
-  );
-  const [appliedSpeakerId, setAppliedSpeakerId] = useState<string | null>(null);
-
   const {
     inputDevices: audioInputDevices,
     outputDevices: audioOutputDevices,
@@ -70,9 +72,9 @@ export const ExampleComponent = ({
   );
   const displayedDeviceError = permissionError ?? deviceError;
   const displayedMicrophoneId =
-    status.value === 'connected' ? appliedMicrophoneId : selectedMicrophoneId;
+    status.value === 'connected' ? activeInputDeviceId : selectedMicrophoneId;
   const displayedSpeakerId =
-    status.value === 'connected' ? appliedSpeakerId : selectedSpeakerId;
+    status.value === 'connected' ? activeOutputDeviceId : selectedSpeakerId;
 
   const selectInputDevice = async (value: string) => {
     const deviceId = fromDeviceValue(value);
@@ -86,7 +88,6 @@ export const ExampleComponent = ({
     try {
       await setInputDevice(deviceId);
       setSelectedMicrophoneId(deviceId);
-      setAppliedMicrophoneId(deviceId);
     } catch (error) {
       setDeviceSwitchError(
         isAudioDeviceSwitchError(error)
@@ -110,7 +111,6 @@ export const ExampleComponent = ({
     try {
       await setOutputDevice(deviceId);
       setSelectedSpeakerId(deviceId);
-      setAppliedSpeakerId(deviceId);
     } catch (error) {
       setDeviceSwitchError(
         isAudioDeviceSwitchError(error)
@@ -239,7 +239,7 @@ export const ExampleComponent = ({
           {displayedDeviceError.message}
         </div>
       ) : null}
-      {deviceSwitchError ? (
+      {status.value === 'connected' && deviceSwitchError ? (
         <div className="text-sm text-red-500">
           {deviceSwitchError.message} The call is still connected.
         </div>
@@ -251,8 +251,7 @@ export const ExampleComponent = ({
     <button
       className="max-w-sm rounded border border-neutral-500 p-2"
       onClick={() => {
-        setAppliedMicrophoneId(selectedMicrophoneId);
-        setAppliedSpeakerId(selectedSpeakerId);
+        setDeviceSwitchError(null);
         void connect(connectArgs);
       }}
     >

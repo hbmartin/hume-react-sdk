@@ -29,7 +29,7 @@ import { useMicrophone } from './useMicrophone';
 import { useMicrophoneStream } from './useMicrophoneStream';
 import { useSoundPlayer } from './useSoundPlayer';
 import { useToolStatus } from './useToolStatus';
-import type { ToolCallHandler } from './useVoiceClient';
+import type { ToolCallErrorSource, ToolCallHandler } from './useVoiceClient';
 import {
   type SessionSettingsUpdate,
   type SocketCloseEvent,
@@ -127,6 +127,9 @@ const getDeviceSwitchReason = (
   if (name === 'NotSupportedError') {
     return 'unsupported';
   }
+  if (name === 'AbortError') {
+    return 'interrupted';
+  }
   return 'switch_failed';
 };
 
@@ -169,6 +172,7 @@ const enqueueDeviceSwitch = <T,>({
   lifecycleGenerationRef,
   isConnected,
   isAlreadyActive,
+  onAlreadyActive,
   perform,
   commit,
 }: {
@@ -177,6 +181,7 @@ const enqueueDeviceSwitch = <T,>({
   lifecycleGenerationRef: CurrentRef<number>;
   isConnected: () => boolean;
   isAlreadyActive: () => boolean;
+  onAlreadyActive?: () => void;
   perform: (isCurrent: () => boolean) => Promise<T>;
   commit: (result: T) => void;
 }): Promise<void> => {
@@ -192,6 +197,7 @@ const enqueueDeviceSwitch = <T,>({
       throw createDeviceSwitchError(kind, 'interrupted');
     }
     if (isAlreadyActive()) {
+      onAlreadyActive?.();
       return;
     }
 
@@ -219,7 +225,21 @@ const enqueueDeviceSwitch = <T,>({
   return switchPromise;
 };
 
-export type VoiceContextType = {
+export type VoiceAudioDeviceState = {
+  requestedInputDeviceId: string | null;
+  activeInputDeviceId: string | null;
+  requestedOutputDeviceId: string | null;
+  activeOutputDeviceId: string | null;
+};
+
+const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
+  requestedInputDeviceId: null,
+  activeInputDeviceId: null,
+  requestedOutputDeviceId: null,
+  activeOutputDeviceId: null,
+};
+
+export type VoiceContextType = VoiceAudioDeviceState & {
   connect: (options: ConnectOptions) => Promise<void>;
   disconnect: () => Promise<void>;
   setInputDevice: (deviceId: string | null) => Promise<void>;
@@ -353,17 +373,57 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const lifecycleGenerationRef = useRef(0);
   const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
   const pendingDisconnectCleanupRef = useRef<Promise<void> | null>(null);
-  const pendingMicReplacementRef = useRef<Promise<void> | null>(null);
   const inputSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const outputSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeAudioConstraintsRef = useRef<AudioConstraints | null>(null);
   const activeInputDeviceIdRef = useRef<string | null>(null);
-  const requestedInputDeviceIdRef = useRef<string | null>(null);
   const activeOutputDeviceIdRef = useRef<string | null>(null);
+  const [audioDeviceState, setAudioDeviceState] =
+    useState<VoiceAudioDeviceState>(DISCONNECTED_AUDIO_DEVICE_STATE);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
   const sharedAudioContextClosePromisesRef = useRef(
     new WeakMap<AudioContext, Promise<AudioContextCloseResult>>(),
   );
+
+  const publishInputDeviceState = useCallback(
+    (requestedDeviceId: string | null, activeDeviceId: string | null) => {
+      activeInputDeviceIdRef.current = activeDeviceId;
+      setAudioDeviceState((current) =>
+        current.requestedInputDeviceId === requestedDeviceId &&
+        current.activeInputDeviceId === activeDeviceId
+          ? current
+          : {
+              ...current,
+              requestedInputDeviceId: requestedDeviceId,
+              activeInputDeviceId: activeDeviceId,
+            },
+      );
+    },
+    [],
+  );
+
+  const publishOutputDeviceState = useCallback(
+    (requestedDeviceId: string | null, activeDeviceId: string | null) => {
+      activeOutputDeviceIdRef.current = activeDeviceId;
+      setAudioDeviceState((current) =>
+        current.requestedOutputDeviceId === requestedDeviceId &&
+        current.activeOutputDeviceId === activeDeviceId
+          ? current
+          : {
+              ...current,
+              requestedOutputDeviceId: requestedDeviceId,
+              activeOutputDeviceId: activeDeviceId,
+            },
+      );
+    },
+    [],
+  );
+
+  const resetAudioDeviceState = useCallback(() => {
+    activeInputDeviceIdRef.current = null;
+    activeOutputDeviceIdRef.current = null;
+    setAudioDeviceState(DISCONNECTED_AUDIO_DEVICE_STATE);
+  }, []);
 
   const closeSharedAudioContext = useCallback(
     async (context = sharedAudioContextRef.current) => {
@@ -562,8 +622,17 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     ),
     onClientError,
     onToolCallError: useCallback(
-      (message: string, err?: Error) => {
+      (message: string, err?: Error, source?: ToolCallErrorSource) => {
         if (checkIsDisconnecting() || checkIsDisconnected()) {
+          return;
+        }
+        if (source === 'send_failure') {
+          updateError({
+            type: 'socket_error',
+            reason: 'failed_to_send_message',
+            message,
+            error: err,
+          });
           return;
         }
         const voiceError: VoiceError = {
@@ -577,7 +646,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // fatal error state.
         onError.current?.(voiceError);
       },
-      [checkIsDisconnected, checkIsDisconnecting, onError],
+      [checkIsDisconnected, checkIsDisconnecting, onError, updateError],
     ),
     onOpen: useCallback(() => {
       startTimer();
@@ -594,9 +663,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         isConnectingRef.current = false;
         resourceStatusRef.current.socket = 'disconnected';
         activeAudioConstraintsRef.current = null;
-        activeInputDeviceIdRef.current = null;
-        requestedInputDeviceIdRef.current = null;
-        activeOutputDeviceIdRef.current = null;
+        resetAudioDeviceState();
 
         createDisconnectMessage(event);
         if (clearMessagesOnDisconnect) {
@@ -619,9 +686,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         }
 
         const micCleanup = shouldStopMic
-          ? Promise.resolve(pendingMicReplacementRef.current)
-              .catch(() => undefined)
-              .then(() => micStopFnRef.current?.())
+          ? Promise.resolve(micStopFnRef.current?.())
           : Promise.resolve();
         const playerCleanup = (async () => {
           if (!shouldStopPlayer) return;
@@ -659,6 +724,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         clearMessageStore,
         playerStopAll,
         playerWaitForQueueToDrain,
+        resetAudioDeviceState,
         stopTimer,
         toolStatusClearStore,
       ],
@@ -735,10 +801,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         lifecycleGenerationRef,
         isConnected: isConnectedForDeviceSwitch,
         isAlreadyActive: () =>
-          deviceId === null
-            ? requestedInputDeviceIdRef.current === null
-            : activeInputDeviceIdRef.current === deviceId &&
-              requestedInputDeviceIdRef.current === deviceId,
+          deviceId !== null && activeInputDeviceIdRef.current === deviceId,
+        onAlreadyActive: () => {
+          publishInputDeviceState(deviceId, activeInputDeviceIdRef.current);
+        },
         perform: async (isCurrent) => {
           const audioConstraints = activeAudioConstraintsRef.current;
           const sharedContext = sharedAudioContextRef.current;
@@ -759,27 +825,26 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             throw createDeviceSwitchError('audioinput', 'interrupted');
           }
 
-          const replacement = micReplace(candidateStream, sharedContext);
-          pendingMicReplacementRef.current = replacement;
           try {
-            await replacement;
+            await micReplace(candidateStream, sharedContext);
           } catch (cause) {
             stopStream(candidateStream);
             throw createDeviceSwitchError('audioinput', 'switch_failed', cause);
-          } finally {
-            if (pendingMicReplacementRef.current === replacement) {
-              pendingMicReplacementRef.current = null;
-            }
           }
 
           return getGrantedInputDeviceId(candidateStream, deviceId);
         },
         commit: (grantedDeviceId) => {
-          requestedInputDeviceIdRef.current = deviceId;
-          activeInputDeviceIdRef.current = grantedDeviceId;
+          publishInputDeviceState(deviceId, grantedDeviceId);
         },
       }),
-    [getStream, isConnectedForDeviceSwitch, micReplace, stopStream],
+    [
+      getStream,
+      isConnectedForDeviceSwitch,
+      micReplace,
+      publishInputDeviceState,
+      stopStream,
+    ],
   );
 
   const setOutputDevice = useCallback(
@@ -790,15 +855,22 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         lifecycleGenerationRef,
         isConnected: isConnectedForDeviceSwitch,
         isAlreadyActive: () => activeOutputDeviceIdRef.current === deviceId,
+        onAlreadyActive: () => {
+          publishOutputDeviceState(deviceId, activeOutputDeviceIdRef.current);
+        },
         perform: async () => {
           await playerSetOutputDevice(deviceId);
           return deviceId;
         },
         commit: (activeDeviceId) => {
-          activeOutputDeviceIdRef.current = activeDeviceId;
+          publishOutputDeviceState(deviceId, activeDeviceId);
         },
       }),
-    [isConnectedForDeviceSwitch, playerSetOutputDevice],
+    [
+      isConnectedForDeviceSwitch,
+      playerSetOutputDevice,
+      publishOutputDeviceState,
+    ],
   );
 
   const pauseAssistant = useCallback(() => {
@@ -883,9 +955,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const generation = ++lifecycleGenerationRef.current;
 
       activeAudioConstraintsRef.current = null;
-      activeInputDeviceIdRef.current = null;
-      requestedInputDeviceIdRef.current = null;
-      activeOutputDeviceIdRef.current = null;
+      resetAudioDeviceState();
 
       updateError(null);
       setStatus({ value: 'connecting' });
@@ -1083,15 +1153,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       resourceStatusRef.current.mic = 'connected';
 
       activeAudioConstraintsRef.current = { ...audioConstraints };
-      requestedInputDeviceIdRef.current = devices?.microphoneDeviceId ?? null;
-      activeInputDeviceIdRef.current = getGrantedInputDeviceId(
-        stream,
-        requestedInputDeviceIdRef.current,
+      const requestedInputDeviceId = devices?.microphoneDeviceId ?? null;
+      publishInputDeviceState(
+        requestedInputDeviceId,
+        getGrantedInputDeviceId(stream, requestedInputDeviceId),
       );
-      activeOutputDeviceIdRef.current =
-        devices?.speakerDeviceId && 'setSinkId' in sharedCtx
-          ? devices.speakerDeviceId
-          : null;
+      const requestedOutputDeviceId = devices?.speakerDeviceId ?? null;
+      publishOutputDeviceState(
+        requestedOutputDeviceId,
+        requestedOutputDeviceId !== null && 'setSinkId' in sharedCtx
+          ? requestedOutputDeviceId
+          : null,
+      );
 
       setStatus({ value: 'connected' });
       isConnectingRef.current = false;
@@ -1104,6 +1177,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       micStart,
       playerInitPlayer,
       playerStopAllForContext,
+      publishInputDeviceState,
+      publishOutputDeviceState,
+      resetAudioDeviceState,
       stopStream,
       updateError,
     ],
@@ -1155,11 +1231,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
         await attempt('Call timer cleanup failed', stopTimer);
 
-        const pendingMicReplacement = pendingMicReplacementRef.current;
-        if (pendingMicReplacement) {
-          await Promise.allSettled([pendingMicReplacement]);
-        }
-
         // Keep the socket connected until MediaRecorder has delivered its final
         // dataavailable payload, then release the underlying stream.
         await attempt('Microphone cleanup failed', micStop);
@@ -1197,9 +1268,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           socket: 'disconnected',
         };
         activeAudioConstraintsRef.current = null;
-        activeInputDeviceIdRef.current = null;
-        requestedInputDeviceIdRef.current = null;
-        activeOutputDeviceIdRef.current = null;
+        resetAudioDeviceState();
         if (clearMessagesOnDisconnect) {
           finalize('Message store cleanup failed', clearMessageStore);
         }
@@ -1236,6 +1305,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     closeSharedAudioContext,
     playerStopAll,
     playerStopAllForContext,
+    resetAudioDeviceState,
     clearMessagesOnDisconnect,
     clearMessageStore,
     toolStatusClearStore,
@@ -1380,6 +1450,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         disconnect,
         setInputDevice,
         setOutputDevice,
+        ...audioDeviceState,
         isMuted: mic.isMuted,
         isAudioMuted: player.isAudioMuted,
         isPlaying: player.isPlaying,
@@ -1417,6 +1488,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       disconnect,
       setInputDevice,
       setOutputDevice,
+      audioDeviceState,
       player.isAudioMuted,
       player.isPlaying,
       player.muteAudio,
