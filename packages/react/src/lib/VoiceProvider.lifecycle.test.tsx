@@ -553,6 +553,8 @@ describe('VoiceProvider close lifecycle', () => {
         devices: { microphoneDeviceId: 'requested-mic' },
       }),
     );
+    expect(result.current.requestedInputDeviceId).toBe('requested-mic');
+    expect(result.current.activeInputDeviceId).toBe('granted-mic');
 
     await act(() => result.current.setInputDevice('requested-mic'));
     await act(() => result.current.setInputDevice('requested-mic'));
@@ -562,6 +564,40 @@ describe('VoiceProvider close lifecycle', () => {
       deviceId: { exact: 'requested-mic' },
     });
     expect(mocks.micReplace).toHaveBeenCalledOnce();
+    expect(result.current.requestedInputDeviceId).toBe('requested-mic');
+    expect(result.current.activeInputDeviceId).toBe('requested-mic');
+  });
+
+  it('reacquires the default and records explicit intent without rebuilding the active mic', async () => {
+    const createStream = (activeDeviceId: string) =>
+      ({
+        getAudioTracks: () => [
+          { getSettings: () => ({ deviceId: activeDeviceId }) },
+        ],
+      }) as unknown as MediaStream;
+    mocks.getStream
+      .mockResolvedValueOnce(createStream('initial-physical-mic'))
+      .mockResolvedValueOnce(createStream('first-default-mic'))
+      .mockResolvedValueOnce(createStream('second-default-mic'));
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+        devices: { microphoneDeviceId: 'initial-request' },
+      }),
+    );
+
+    await act(() => result.current.setInputDevice(null));
+    await act(() => result.current.setInputDevice(null));
+    await act(() => result.current.setInputDevice('second-default-mic'));
+
+    expect(mocks.getStream).toHaveBeenCalledTimes(3);
+    expect(mocks.getStream).toHaveBeenLastCalledWith({});
+    expect(mocks.micReplace).toHaveBeenCalledTimes(2);
+    expect(result.current.requestedInputDeviceId).toBe('second-default-mic');
+    expect(result.current.activeInputDeviceId).toBe('second-default-mic');
   });
 
   it('switches output on the live player and treats the active sink as a no-op', async () => {
@@ -583,6 +619,8 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.playerInit).toHaveBeenCalledOnce();
     expect(mocks.clientDisconnect).not.toHaveBeenCalled();
     expect(result.current.status.value).toBe('connected');
+    expect(result.current.requestedOutputDeviceId).toBe('new-speaker');
+    expect(result.current.activeOutputDeviceId).toBe('new-speaker');
   });
 
   it('rejects disconnected switches with typed nonfatal errors', async () => {
@@ -666,6 +704,30 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('connected');
   });
 
+  it('maps an aborted output switch to an interrupted device change', async () => {
+    const abortError = new DOMException('player changed', 'AbortError');
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.playerSetOutputDevice.mockRejectedValueOnce(abortError);
+
+    const switchError = await result.current
+      .setOutputDevice('new-speaker')
+      .catch((error: unknown) => error);
+
+    expect(switchError).toMatchObject({
+      cause: abortError,
+      kind: 'audiooutput',
+      reason: 'interrupted',
+    });
+    expect(result.current.status.value).toBe('connected');
+  });
+
   it('interrupts an input acquisition that outlives disconnect', async () => {
     const candidateStream = { id: 'late-candidate' } as unknown as MediaStream;
     const candidateAcquisition = createDeferred<MediaStream>();
@@ -699,7 +761,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.micReplace).not.toHaveBeenCalled();
   });
 
-  it('waits for an in-progress microphone promotion before disconnecting', async () => {
+  it('delegates microphone stop while a replacement is still pending', async () => {
     const replacement = createDeferred<void>();
     const candidateStream = { id: 'candidate' } as unknown as MediaStream;
     const { result } = renderHook(() => useVoice(), {
@@ -721,20 +783,23 @@ describe('VoiceProvider close lifecycle', () => {
     act(() => {
       disconnecting = result.current.disconnect();
     });
-    await act(() => Promise.resolve());
-    expect(mocks.micStop).not.toHaveBeenCalled();
+    await act(() => disconnecting);
+    expect(mocks.micStop).toHaveBeenCalledOnce();
+    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
+    expect(result.current.requestedInputDeviceId).toBeNull();
+    expect(result.current.activeInputDeviceId).toBeNull();
+    expect(result.current.requestedOutputDeviceId).toBeNull();
+    expect(result.current.activeOutputDeviceId).toBeNull();
 
     await act(async () => {
       replacement.resolve();
-      await disconnecting;
+      await replacement.promise;
     });
 
     await expect(switchOutcome).resolves.toMatchObject({
       kind: 'audioinput',
       reason: 'interrupted',
     });
-    expect(mocks.micStop).toHaveBeenCalledOnce();
-    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
   });
 
   it('publishes socket closure immediately and ignores stale drain teardown', async () => {

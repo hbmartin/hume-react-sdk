@@ -14,7 +14,15 @@ const MICROPHONE_RECORDING_UNSUPPORTED_MESSAGE =
   'This browser does not fully support microphone recording.';
 const MICROPHONE_ALREADY_STARTED_MESSAGE =
   'The microphone is already recording. Stop it before starting again.';
+const MICROPHONE_OPERATION_IN_PROGRESS_MESSAGE =
+  'A microphone operation is still in progress. Wait for it before starting again.';
 const RECORDER_FINAL_DATA_TIMEOUT_MS = 1_000;
+
+const createMicrophoneAbortError = () =>
+  new DOMException(
+    'The microphone operation was interrupted by a lifecycle change.',
+    'AbortError',
+  );
 
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
@@ -56,6 +64,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const recordingGeneration = useRef(0);
   const pendingDataTasks = useRef(new Set<Promise<void>>());
   const microphoneOperationQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingMicrophoneOperationCount = useRef(0);
+  const microphoneLifecycleGeneration = useRef(0);
+  const microphoneMounted = useRef(false);
 
   const sendAudio = useLatestRef(onAudioCaptured);
 
@@ -360,12 +371,16 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const enqueueMicrophoneOperation = useCallback(
     (operation: () => Promise<void>): Promise<void> => {
+      pendingMicrophoneOperationCount.current += 1;
       const scheduled = microphoneOperationQueue.current.then(
         operation,
         operation,
       );
-      microphoneOperationQueue.current = scheduled.catch(() => undefined);
-      return scheduled;
+      const tracked = scheduled.finally(() => {
+        pendingMicrophoneOperationCount.current -= 1;
+      });
+      microphoneOperationQueue.current = tracked.catch(() => undefined);
+      return tracked;
     },
     [],
   );
@@ -374,6 +389,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
     (stream: MediaStream, sharedAudioContext?: AudioContext) => {
       if (!stream) {
         throw new Error('No stream connected');
+      }
+      if (
+        !microphoneMounted.current ||
+        pendingMicrophoneOperationCount.current > 0
+      ) {
+        throw new Error(MICROPHONE_OPERATION_IN_PROGRESS_MESSAGE);
       }
 
       const mimeType = mimeTypeRef.current;
@@ -418,7 +439,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
           console.error('onStartRecording callback failed.', callbackError);
         }
       } catch (e) {
-        void disposeMicrophoneResources().catch((cleanupError) => {
+        void enqueueMicrophoneOperation(() =>
+          disposeMicrophoneResources(),
+        ).catch((cleanupError) => {
           reportClosureFailure(
             'Failed to fully roll back microphone initialization',
             cleanupError,
@@ -430,6 +453,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [
       dataHandler,
       disposeMicrophoneResources,
+      enqueueMicrophoneOperation,
       fftStore,
       onStartRecordingRef,
       reportClosureFailure,
@@ -439,9 +463,25 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
 
   const performReplace = useCallback(
-    async (stream: MediaStream, sharedAudioContext?: AudioContext) => {
+    async (
+      stream: MediaStream,
+      sharedAudioContext: AudioContext | undefined,
+      isCurrent: () => boolean,
+    ) => {
       if (!stream) {
         throw new Error('No stream connected');
+      }
+
+      const stopCandidateStream = () => {
+        try {
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {
+          // A stale candidate must not mask the lifecycle interruption.
+        }
+      };
+      if (!isCurrent()) {
+        stopCandidateStream();
+        throw createMicrophoneAbortError();
       }
 
       const mimeType = mimeTypeRef.current;
@@ -513,11 +553,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             }
           }
         }
-        try {
-          stream.getTracks().forEach((track) => track.stop());
-        } catch {
-          // The caller will receive the original startup failure.
-        }
+        stopCandidateStream();
       };
 
       try {
@@ -552,6 +588,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
           'Failed to fully retire the previous microphone resources.',
           cleanupError,
         );
+      }
+
+      if (!isCurrent()) {
+        disposeCandidate();
+        throw createMicrophoneAbortError();
       }
 
       recordingGeneration.current += 1;
@@ -592,28 +633,38 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
 
   const replace = useCallback(
-    (stream: MediaStream, sharedAudioContext?: AudioContext) =>
-      enqueueMicrophoneOperation(() =>
-        performReplace(stream, sharedAudioContext),
-      ),
+    (stream: MediaStream, sharedAudioContext?: AudioContext) => {
+      const generation = microphoneLifecycleGeneration.current;
+      const isCurrent = () =>
+        microphoneMounted.current &&
+        generation === microphoneLifecycleGeneration.current;
+      return enqueueMicrophoneOperation(() =>
+        performReplace(stream, sharedAudioContext, isCurrent),
+      );
+    },
     [enqueueMicrophoneOperation, performReplace],
   );
 
-  const stop = useCallback(
-    () =>
-      enqueueMicrophoneOperation(async () => {
-        try {
-          await disposeMicrophoneResources();
-        } catch (e) {
-          reportClosureFailure('Failed to fully stop microphone resources', e);
-        }
-      }),
-    [
-      disposeMicrophoneResources,
-      enqueueMicrophoneOperation,
-      reportClosureFailure,
-    ],
-  );
+  const stop = useCallback(() => {
+    const generation = microphoneLifecycleGeneration.current;
+    return enqueueMicrophoneOperation(async () => {
+      if (
+        !microphoneMounted.current ||
+        generation !== microphoneLifecycleGeneration.current
+      ) {
+        return;
+      }
+      try {
+        await disposeMicrophoneResources();
+      } catch (e) {
+        reportClosureFailure('Failed to fully stop microphone resources', e);
+      }
+    });
+  }, [
+    disposeMicrophoneResources,
+    enqueueMicrophoneOperation,
+    reportClosureFailure,
+  ]);
 
   const mute = useCallback(() => {
     isMutedRef.current = true;
@@ -638,15 +689,26 @@ export const useMicrophone = (props: MicrophoneProps) => {
   }, []);
 
   useEffect(() => {
+    microphoneMounted.current = true;
+    microphoneLifecycleGeneration.current += 1;
+
     return () => {
-      void enqueueMicrophoneOperation(() => disposeMicrophoneResources()).catch(
-        (e) => {
-          console.error(
-            'Failed to fully dispose microphone resources during unmount.',
-            e,
-          );
-        },
-      );
+      microphoneMounted.current = false;
+      const cleanupGeneration = ++microphoneLifecycleGeneration.current;
+      void enqueueMicrophoneOperation(async () => {
+        if (
+          microphoneMounted.current ||
+          cleanupGeneration !== microphoneLifecycleGeneration.current
+        ) {
+          return;
+        }
+        await disposeMicrophoneResources();
+      }).catch((e) => {
+        console.error(
+          'Failed to fully dispose microphone resources during unmount.',
+          e,
+        );
+      });
     };
   }, [disposeMicrophoneResources, enqueueMicrophoneOperation]);
 

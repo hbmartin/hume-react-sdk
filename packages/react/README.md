@@ -169,7 +169,7 @@ import {
 } from '@humeai/voice-react';
 
 export function DevicePicker({ accessToken }: { accessToken: string }) {
-  const { connect, setInputDevice, status } = useVoice();
+  const { activeInputDeviceId, connect, setInputDevice, status } = useVoice();
   const {
     inputDevices,
     selectedInputDeviceId,
@@ -183,7 +183,11 @@ export function DevicePicker({ accessToken }: { accessToken: string }) {
         Refresh microphones
       </button>
       <select
-        value={selectedInputDeviceId ?? ''}
+        value={
+          (status.value === 'connected'
+            ? activeInputDeviceId
+            : selectedInputDeviceId) ?? ''
+        }
         onChange={async (event) => {
           const deviceId = event.target.value || null;
           try {
@@ -233,6 +237,12 @@ call can safely fall back to the browser default. During an active connection,
 devices without reconnecting; pass `null` to either method to select the
 browser/system default.
 
+`useVoice` publishes `requestedInputDeviceId`, `activeInputDeviceId`,
+`requestedOutputDeviceId`, and `activeOutputDeviceId`. The requested input can
+differ from the active microphone when the browser grants a fallback device;
+render `activeInputDeviceId` during a connected call so device controls reflect
+what is actually capturing.
+
 Live switching requires a connected session. Failures reject with an
 `AudioDeviceSwitchError` and leave the call and current working device intact.
 Microphone switching can prompt for permission, and output switching depends on
@@ -258,7 +268,9 @@ Disconnect from the voice API and microphone.
 #### `setInputDevice`: (deviceId: string | null) => Promise<void>
 
 Switches the microphone for an active connection. Pass `null` for the browser
-default. Selecting the already-active device is a no-op.
+default; selecting it again reacquires the current browser/OS default. Selecting
+an explicit device that is already capturing updates the requested-device state
+without rebuilding the recorder.
 
 #### `setOutputDevice`: (deviceId: string | null) => Promise<void>
 
