@@ -9,6 +9,8 @@ import { useLatestRef } from './useLatestRef';
 import type { MicErrorReason } from './VoiceProvider';
 
 const BARK_BAND_COUNT = 24;
+const MICROPHONE_RECORDING_UNSUPPORTED_MESSAGE =
+  'This browser does not fully support microphone recording.';
 
 export type MicrophoneProps = {
   onAudioCaptured: (b: ArrayBuffer) => void;
@@ -38,6 +40,25 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const recorder = useRef<MediaRecorder | null>(null);
 
   const sendAudio = useLatestRef(onAudioCaptured);
+
+  const stopFftAnalyzer = useCallback(() => {
+    const animationId = fftAnimationId.current;
+    fftAnimationId.current = null;
+    if (animationId !== null) {
+      cancelAnimationFrame(animationId);
+    }
+
+    const source = analyzerSource.current;
+    analyzerSource.current = null;
+    if (source) {
+      try {
+        source.disconnect();
+      } catch {
+        // The source may already have been disconnected.
+      }
+    }
+    currentAnalyzer.current = null;
+  }, []);
 
   const dataHandler = useCallback((event: BlobEvent) => {
     const blob = event.data;
@@ -95,10 +116,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
         throw new Error('No stream connected');
       }
 
-      if (fftAnimationId.current) {
-        cancelAnimationFrame(fftAnimationId.current);
+      const mimeType = mimeTypeRef.current;
+      if (!mimeType) {
+        throw new Error('No MimeType specified');
       }
 
+      stopFftAnalyzer();
       currentStream.current = stream;
 
       const context = sharedAudioContext ?? new AudioContext();
@@ -108,60 +131,71 @@ export const useMicrophone = (props: MicrophoneProps) => {
       try {
         startFftAnalyzer(stream);
       } catch (e: unknown) {
+        stopFftAnalyzer();
         const message = e instanceof Error ? e.message : 'Unknown error';
         console.error(`Failed to start mic analyzer: ${message}`);
       }
-      const mimeType = mimeTypeRef.current;
-      if (!mimeType) {
-        throw new Error('No MimeType specified');
-      }
 
-      recorder.current = new MediaRecorder(stream, {
-        mimeType,
-      });
-      recorder.current.addEventListener('dataavailable', dataHandler);
-      recorder.current.start(100);
+      try {
+        const nextRecorder = new MediaRecorder(stream, { mimeType });
+        recorder.current = nextRecorder;
+        nextRecorder.addEventListener('dataavailable', dataHandler);
+        nextRecorder.start(100);
+      } catch (e) {
+        const failedRecorder = recorder.current;
+        recorder.current = null;
+        if (failedRecorder) {
+          failedRecorder.removeEventListener('dataavailable', dataHandler);
+          try {
+            failedRecorder.stop();
+          } catch {
+            // The recorder may not have reached its recording state.
+          }
+        }
+        stopFftAnalyzer();
+        if (currentStream.current === stream) {
+          currentStream.current = null;
+          stream.getTracks().forEach((track) => track.stop());
+        }
+        if (audioContext.current === context) {
+          audioContext.current = null;
+          ownsAudioContext.current = false;
+        }
+        if (!sharedAudioContext) {
+          void context.close().catch(() => {
+            // The context may already have been closed.
+          });
+        }
+        throw e;
+      }
     },
-    [dataHandler, startFftAnalyzer],
+    [dataHandler, startFftAnalyzer, stopFftAnalyzer],
   );
 
   const stop = useCallback(async () => {
-    if (analyzerSource.current) {
-      analyzerSource.current.disconnect();
-      analyzerSource.current = null;
-    }
+    stopFftAnalyzer();
 
-    if (currentAnalyzer.current) {
-      if (fftAnimationId.current) {
-        cancelAnimationFrame(fftAnimationId.current);
-      }
-      fftAnimationId.current = null;
-      currentAnalyzer.current = null;
-    }
-
-    if (audioContext.current && ownsAudioContext.current) {
-      await audioContext.current
-        .close()
-        .then(() => {
-          audioContext.current = null;
-        })
-        .catch(() => {
-          // .close() rejects if the audio context is already closed.
-          // Therefore, we just need to catch the error, but we don't need to
-          // do anything with it.
-          return null;
-        });
-    } else {
-      audioContext.current = null;
-    }
-
-    recorder.current?.stop();
-    recorder.current?.removeEventListener('dataavailable', dataHandler);
+    const recorderToStop = recorder.current;
     recorder.current = null;
-    currentStream.current?.getTracks().forEach((track) => track.stop());
+    recorderToStop?.removeEventListener('dataavailable', dataHandler);
+    recorderToStop?.stop();
+
+    const streamToStop = currentStream.current;
+    currentStream.current = null;
+    streamToStop?.getTracks().forEach((track) => track.stop());
+
+    const contextToClose = audioContext.current;
+    const shouldCloseContext = ownsAudioContext.current;
+    audioContext.current = null;
+    ownsAudioContext.current = false;
+    if (contextToClose && shouldCloseContext) {
+      await contextToClose.close().catch(() => {
+        // .close() rejects if already closed; safe to ignore.
+      });
+    }
 
     setIsMuted(false);
-  }, [dataHandler]);
+  }, [dataHandler, stopFftAnalyzer]);
 
   const stopMicWithRetries = useCallback(
     async (maxAttempts = 3, delayMs = 500) => {
@@ -213,23 +247,26 @@ export const useMicrophone = (props: MicrophoneProps) => {
         recorder.current?.stop();
         recorder.current?.removeEventListener('dataavailable', dataHandler);
 
-        if (currentAnalyzer.current) {
-          analyzerSource.current?.disconnect();
-          if (fftAnimationId.current) {
-            cancelAnimationFrame(fftAnimationId.current);
-          }
-          fftAnimationId.current = null;
-          currentAnalyzer.current = null;
-        }
+        stopFftAnalyzer();
 
         currentStream.current?.getTracks().forEach((track) => track.stop());
         currentStream.current = null;
+
+        const contextToClose = audioContext.current;
+        const shouldCloseContext = ownsAudioContext.current;
+        audioContext.current = null;
+        ownsAudioContext.current = false;
+        if (contextToClose && shouldCloseContext) {
+          void contextToClose.close().catch(() => {
+            // .close() rejects if already closed; safe to ignore.
+          });
+        }
       } catch (e) {
         console.log(e);
         void true;
       }
     };
-  }, [dataHandler, currentStream]);
+  }, [dataHandler, currentStream, stopFftAnalyzer]);
 
   useEffect(() => {
     let mimeTypeResult: ReturnType<typeof getBrowserSupportedMimeType>;
@@ -242,8 +279,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
       // React tree rather than surface a mic error.
       mimeTypeResult = getBrowserSupportedMimeType();
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
-      onErrorRef.current(message, 'mime_types_not_supported');
+      console.error('Failed to detect supported microphone MIME types.', e);
+      onErrorRef.current(
+        MICROPHONE_RECORDING_UNSUPPORTED_MESSAGE,
+        'mime_types_not_supported',
+      );
       return;
     }
 

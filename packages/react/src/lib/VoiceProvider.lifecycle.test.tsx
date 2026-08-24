@@ -166,9 +166,27 @@ describe('VoiceProvider close lifecycle', () => {
     );
     expect(mocks.clientConnect).not.toHaveBeenCalled();
     expect(mocks.micStart).not.toHaveBeenCalled();
-    expect(mocks.stopStream).toHaveBeenCalledOnce();
+    expect(mocks.stopStream).toHaveBeenCalledTimes(2);
     expect(mocks.playerStop).toHaveBeenCalledOnce();
     expect(mocks.contextClose).toHaveBeenCalledOnce();
+  });
+
+  it('releases the provider-owned context when player initialization returns false silently', async () => {
+    mocks.playerInit.mockResolvedValueOnce(false);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    expect(mocks.stopStream).toHaveBeenCalledOnce();
+    expect(mocks.contextClose).toHaveBeenCalledOnce();
+    expect(mocks.clientConnect).not.toHaveBeenCalled();
+    expect(mocks.micStart).not.toHaveBeenCalled();
   });
 
   it('publishes socket closure immediately and ignores stale drain teardown', async () => {

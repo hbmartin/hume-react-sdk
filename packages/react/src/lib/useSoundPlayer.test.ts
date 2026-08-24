@@ -140,7 +140,6 @@ describe('useSoundPlayer', () => {
     vi.useRealTimers();
     globalThis.AudioContext = originalAudioContext;
     globalThis.AudioWorkletNode = originalAudioWorkletNode;
-    vi.restoreAllMocks();
   });
 
   it('returns false when a suspended AudioContext rejects resume', async () => {
@@ -168,6 +167,42 @@ describe('useSoundPlayer', () => {
     );
     expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
     expect(closeAudioContext).toHaveBeenCalledOnce();
+  });
+
+  it('reports initialization failure before an owned context close times out', async () => {
+    vi.useFakeTimers();
+    audioContextState = 'suspended';
+    resumeAudioContext.mockRejectedValueOnce(new Error('autoplay blocked'));
+    closeAudioContext.mockReturnValueOnce(new Promise<void>(() => {}));
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    let initialization = Promise.resolve(true);
+    let settled = false;
+    act(() => {
+      initialization = result.current.initPlayer();
+      void initialization.then(() => {
+        settled = true;
+      });
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('autoplay policy'),
+      'audio_player_initialization_failure',
+    );
+    expect(closeAudioContext).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    await expect(initialization).resolves.toBe(false);
   });
 
   it('returns false when resume resolves but the context stays suspended', async () => {
@@ -288,15 +323,205 @@ describe('useSoundPlayer', () => {
     expect(sharedContextClose).not.toHaveBeenCalled();
   });
 
-  it('releases a superseded initialization without disturbing the newer player', async () => {
+  it('replaces a successful player without disturbing the newer player', async () => {
     const firstWorkletLoad = createDeferred<boolean>();
     vi.mocked(loadAudioWorklet)
       .mockImplementationOnce(() => firstWorkletLoad.promise)
       .mockResolvedValueOnce(true);
+    const rafCallbacks: FrameRequestCallback[] = [];
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (callback) => {
+        rafCallbacks.push(callback);
+        return rafCallbacks.length;
+      },
+    );
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
     const firstAnalyserDisconnect = vi.fn();
+    const firstAnalyserRead = vi.fn();
     const firstGainDisconnect = vi.fn();
     const firstContextClose = vi.fn().mockResolvedValue(undefined);
+    const secondAnalyserDisconnect = vi.fn();
+    const secondGainDisconnect = vi.fn();
     const secondContextClose = vi.fn().mockResolvedValue(undefined);
+    const createPort = (): MessagePort & { close: Mock; postMessage: Mock } =>
+      ({
+        postMessage: vi.fn(),
+        close: vi.fn(),
+        onmessage: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }) as unknown as MessagePort & { close: Mock; postMessage: Mock };
+    const firstPort = createPort();
+    const secondPort = createPort();
+    const firstWorkletDisconnect = vi.fn();
+    const secondWorkletDisconnect = vi.fn();
+    globalThis.AudioWorkletNode = vi
+      .fn()
+      .mockImplementationOnce(() => ({
+        port: firstPort,
+        connect: vi.fn(),
+        disconnect: firstWorkletDisconnect,
+      }))
+      .mockImplementationOnce(() => ({
+        port: secondPort,
+        connect: vi.fn(),
+        disconnect: secondWorkletDisconnect,
+      }));
+    const createContext = (
+      analyserDisconnect: Mock,
+      gainDisconnect: Mock,
+      close: Mock,
+      getByteFrequencyData = vi.fn(),
+    ): AudioContext =>
+      ({
+        state: 'running',
+        createAnalyser: () => ({
+          fftSize: 2048,
+          frequencyBinCount: 1024,
+          connect: vi.fn(),
+          disconnect: analyserDisconnect,
+          getByteFrequencyData,
+        }),
+        createGain: () => ({
+          connect: vi.fn(),
+          disconnect: gainDisconnect,
+          gain: { setValueAtTime: vi.fn() },
+        }),
+        createBufferSource,
+        decodeAudioData,
+        destination: {},
+        sampleRate: 48000,
+        close,
+      }) as unknown as AudioContext;
+    const firstContext = createContext(
+      firstAnalyserDisconnect,
+      firstGainDisconnect,
+      firstContextClose,
+      firstAnalyserRead,
+    );
+    const secondContext = createContext(
+      secondAnalyserDisconnect,
+      secondGainDisconnect,
+      secondContextClose,
+    );
+    globalThis.AudioContext = vi
+      .fn()
+      .mockReturnValueOnce(firstContext)
+      .mockReturnValueOnce(secondContext);
+    const onPlayAudio = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio,
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    let supersededInitialization = Promise.resolve(true);
+    act(() => {
+      supersededInitialization = result.current.initPlayer();
+    });
+    await act(async () => {
+      firstWorkletLoad.resolve(true);
+      await expect(supersededInitialization).resolves.toBe(true);
+    });
+    expect(globalThis.AudioWorkletNode).toHaveBeenCalledOnce();
+    const stalePortHandler = firstPort.onmessage;
+    const fftWrite = vi.spyOn(result.current.fftStore, 'write');
+
+    await act(async () => {
+      await expect(result.current.initPlayer()).resolves.toBe(true);
+    });
+    expect(globalThis.AudioWorkletNode).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      rafCallbacks[0]?.(0);
+      stalePortHandler?.call(firstPort, {
+        data: { type: 'start_clip', id: 'stale-player', index: 0 },
+      } as MessageEvent);
+      await Promise.resolve();
+    });
+
+    expect(firstAnalyserRead).not.toHaveBeenCalled();
+    expect(fftWrite).not.toHaveBeenCalled();
+    expect(onPlayAudio).not.toHaveBeenCalled();
+    expect(result.current.isPlaying).toBe(false);
+    expect(firstAnalyserDisconnect).toHaveBeenCalledOnce();
+    expect(firstGainDisconnect).toHaveBeenCalledOnce();
+    expect(firstContextClose).toHaveBeenCalledOnce();
+    expect(secondAnalyserDisconnect).not.toHaveBeenCalled();
+    expect(secondGainDisconnect).not.toHaveBeenCalled();
+    expect(secondContextClose).not.toHaveBeenCalled();
+    expect(firstPort.close).toHaveBeenCalledOnce();
+    expect(firstWorkletDisconnect).toHaveBeenCalledOnce();
+    expect(secondPort.close).not.toHaveBeenCalled();
+    expect(secondWorkletDisconnect).not.toHaveBeenCalled();
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+
+    await act(() =>
+      result.current.addToQueue({
+        id: 'new-player',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+    expect(firstPort.postMessage).not.toHaveBeenCalled();
+    expect(secondPort.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'new-player', type: 'audio' }),
+    );
+
+    let stop = Promise.resolve();
+    act(() => {
+      stop = result.current.stopAll();
+      secondPort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(async () => {
+      await stop;
+    });
+    expect(cancelAnimationFrame).toHaveBeenLastCalledWith(2);
+  });
+
+  it('does not close a shared context when replacing its player', async () => {
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (_callback) => 1,
+    );
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    const createPort = (): MessagePort & { close: Mock; postMessage: Mock } =>
+      ({
+        postMessage: vi.fn(),
+        close: vi.fn(),
+        onmessage: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }) as unknown as MessagePort & { close: Mock; postMessage: Mock };
+    const sharedPort = createPort();
+    const ownedPort = createPort();
+    const sharedWorkletDisconnect = vi.fn();
+    const ownedWorkletDisconnect = vi.fn();
+    globalThis.AudioWorkletNode = vi
+      .fn()
+      .mockImplementationOnce(() => ({
+        port: sharedPort,
+        connect: vi.fn(),
+        disconnect: sharedWorkletDisconnect,
+      }))
+      .mockImplementationOnce(() => ({
+        port: ownedPort,
+        connect: vi.fn(),
+        disconnect: ownedWorkletDisconnect,
+      }));
+
+    const sharedAnalyserDisconnect = vi.fn();
+    const sharedGainDisconnect = vi.fn();
+    const sharedContextClose = vi.fn().mockResolvedValue(undefined);
+    const ownedContextClose = vi.fn().mockResolvedValue(undefined);
     const createContext = (
       analyserDisconnect: Mock,
       gainDisconnect: Mock,
@@ -322,16 +547,14 @@ describe('useSoundPlayer', () => {
         sampleRate: 48000,
         close,
       }) as unknown as AudioContext;
-    const firstContext = createContext(
-      firstAnalyserDisconnect,
-      firstGainDisconnect,
-      firstContextClose,
+    const sharedContext = createContext(
+      sharedAnalyserDisconnect,
+      sharedGainDisconnect,
+      sharedContextClose,
     );
-    const secondContext = createContext(vi.fn(), vi.fn(), secondContextClose);
-    globalThis.AudioContext = vi
-      .fn()
-      .mockReturnValueOnce(firstContext)
-      .mockReturnValueOnce(secondContext);
+    const ownedContext = createContext(vi.fn(), vi.fn(), ownedContextClose);
+    globalThis.AudioContext = vi.fn().mockReturnValueOnce(ownedContext);
+
     const { result } = renderHook(() =>
       useSoundPlayer({
         enableAudioWorklet: true,
@@ -341,32 +564,34 @@ describe('useSoundPlayer', () => {
       }),
     );
 
-    let supersededInitialization = Promise.resolve(true);
-    act(() => {
-      supersededInitialization = result.current.initPlayer();
-    });
-    await expect(result.current.initPlayer()).resolves.toBe(true);
     await act(async () => {
-      firstWorkletLoad.resolve(true);
-      await expect(supersededInitialization).resolves.toBe(false);
+      await expect(
+        result.current.initPlayer(undefined, sharedContext),
+      ).resolves.toBe(true);
+      await expect(result.current.initPlayer()).resolves.toBe(true);
     });
 
-    expect(firstAnalyserDisconnect).toHaveBeenCalledOnce();
-    expect(firstGainDisconnect).toHaveBeenCalledOnce();
-    expect(firstContextClose).toHaveBeenCalledOnce();
-    expect(secondContextClose).not.toHaveBeenCalled();
+    expect(sharedPort.close).toHaveBeenCalledOnce();
+    expect(sharedWorkletDisconnect).toHaveBeenCalledOnce();
+    expect(sharedAnalyserDisconnect).toHaveBeenCalledOnce();
+    expect(sharedGainDisconnect).toHaveBeenCalledOnce();
+    expect(sharedContextClose).not.toHaveBeenCalled();
+    expect(ownedPort.close).not.toHaveBeenCalled();
+    expect(ownedWorkletDisconnect).not.toHaveBeenCalled();
+    expect(ownedContextClose).not.toHaveBeenCalled();
 
     await act(() =>
       result.current.addToQueue({
-        id: 'new-player',
+        id: 'owned-player',
         index: 0,
         data: '\x01',
         type: 'audio_output',
         receivedAt: new Date(0),
       }),
     );
-    expect(fakePort.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'new-player', type: 'audio' }),
+    expect(sharedPort.postMessage).not.toHaveBeenCalled();
+    expect(ownedPort.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owned-player', type: 'audio' }),
     );
   });
 

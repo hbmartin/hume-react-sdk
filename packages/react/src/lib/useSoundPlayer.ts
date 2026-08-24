@@ -30,6 +30,16 @@ type WorkletMessage =
   | WorkletQueueLengthMessage
   | WorkletClosedMessage;
 
+interface PlayerResources {
+  context: AudioContext | null;
+  ownsContext: boolean;
+  analyser: AnalyserNode | null;
+  gain: GainNode | null;
+  worklet: AudioWorkletNode | null;
+  source: AudioBufferSourceNode | null;
+  fftRafId: number | null;
+}
+
 const BARK_BAND_COUNT = 24;
 
 /** How often `waitForQueueToDrain` re-checks whether playback has finished. */
@@ -43,6 +53,27 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  * settles, so the attempt must be bounded rather than awaited directly.
  */
 const RESUME_TIMEOUT_MS = 1_000;
+/** Keep teardown from indefinitely blocking errors, replacement, or stop. */
+const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
+
+const closeAudioContextWithTimeout = async (
+  context: AudioContext,
+): Promise<void> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const closePromise = Promise.resolve()
+    .then(() => context.close())
+    .catch(() => undefined);
+
+  await Promise.race([
+    closePromise,
+    new Promise<void>((resolve) => {
+      timeoutId = setTimeout(resolve, AUDIO_CONTEXT_CLOSE_TIMEOUT_MS);
+    }),
+  ]);
+  if (timeoutId !== undefined) {
+    clearTimeout(timeoutId);
+  }
+};
 
 export const useSoundPlayer = (props: {
   enableAudioWorklet: boolean;
@@ -57,10 +88,10 @@ export const useSoundPlayer = (props: {
   const fftStore = useRef(new FftStore()).current;
 
   const audioContext = useRef<AudioContext | null>(null);
-  const ownsAudioContext = useRef(false);
   const analyserNode = useRef<AnalyserNode | null>(null);
   const gainNode = useRef<GainNode | null>(null);
   const workletNode = useRef<AudioWorkletNode | null>(null);
+  const playerResources = useRef<PlayerResources | null>(null);
   const isInitialized = useRef(false);
 
   const isProcessing = useRef(false);
@@ -69,8 +100,6 @@ export const useSoundPlayer = (props: {
   const onPlayAudio = useLatestRef(props.onPlayAudio);
   const onStopAudio = useLatestRef(props.onStopAudio);
   const onError = useLatestRef(props.onError);
-
-  const isWorkletActive = useRef(false);
 
   // chunkBufferQueues and lastQueuedChunk are used to make sure that
   // we don't play chunks out of order. chunkBufferQueues is NOT the
@@ -108,6 +137,100 @@ export const useSoundPlayer = (props: {
   const pendingAudioTasks = useRef(new Map<number, number>());
   const playbackActivitySequence = useRef(0);
 
+  const cancelPlayerFft = useCallback((resources: PlayerResources) => {
+    const rafId = resources.fftRafId;
+    resources.fftRafId = null;
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      if (fftRafId.current === rafId) {
+        fftRafId.current = null;
+      }
+    }
+  }, []);
+
+  const disposePlayerResources = useCallback(
+    async (resources: PlayerResources) => {
+      if (playerResources.current === resources) {
+        playerResources.current = null;
+      }
+
+      cancelPlayerFft(resources);
+
+      const source = resources.source;
+      resources.source = null;
+      if (source) {
+        source.onended = null;
+        try {
+          source.stop();
+        } catch {
+          // The source may already have ended; disconnecting it is sufficient.
+        }
+        source.disconnect();
+        if (currentlyPlayingAudioBuffer.current === source) {
+          currentlyPlayingAudioBuffer.current = null;
+          isProcessing.current = false;
+        }
+      }
+
+      const worklet = resources.worklet;
+      resources.worklet = null;
+      if (worklet) {
+        worklet.port.onmessage = null;
+        try {
+          worklet.port.close();
+        } catch {
+          // Continue releasing the rest of this player's resources.
+        }
+        try {
+          worklet.disconnect();
+        } catch {
+          // The worklet may already have been disconnected.
+        }
+        if (workletNode.current === worklet) {
+          workletNode.current = null;
+        }
+      }
+
+      const analyser = resources.analyser;
+      resources.analyser = null;
+      if (analyser) {
+        try {
+          analyser.disconnect();
+        } catch {
+          // The analyser may already have been disconnected.
+        }
+        if (analyserNode.current === analyser) {
+          analyserNode.current = null;
+        }
+      }
+
+      const gain = resources.gain;
+      resources.gain = null;
+      if (gain) {
+        try {
+          gain.disconnect();
+        } catch {
+          // The gain node may already have been disconnected.
+        }
+        if (gainNode.current === gain) {
+          gainNode.current = null;
+        }
+      }
+
+      const context = resources.context;
+      const shouldCloseContext = resources.ownsContext;
+      resources.context = null;
+      resources.ownsContext = false;
+      if (audioContext.current === context) {
+        audioContext.current = null;
+      }
+      if (context && shouldCloseContext) {
+        await closeAudioContextWithTimeout(context);
+      }
+    },
+    [cancelPlayerFft],
+  );
+
   /**
    * Only for non-AudioWorklet mode.
    * This function is called when the current audio clip ends.
@@ -128,6 +251,10 @@ export const useSoundPlayer = (props: {
       );
       return;
     }
+    const resources = playerResources.current;
+    if (!resources) {
+      return;
+    }
 
     const nextClip = clipQueue.current.shift();
     setQueueLength(clipQueue.current.length);
@@ -145,6 +272,7 @@ export const useSoundPlayer = (props: {
     bufferSource.connect(analyserNode.current);
 
     currentlyPlayingAudioBuffer.current = bufferSource;
+    resources.source = bufferSource;
 
     const frequencyDataBuffer = new Uint8Array(
       analyserNode.current.frequencyBinCount,
@@ -171,10 +299,18 @@ export const useSoundPlayer = (props: {
     };
 
     const pollFft = () => {
+      if (
+        generation !== playerGeneration.current ||
+        playerResources.current !== resources
+      ) {
+        return;
+      }
       updateFrequencyData();
-      fftRafId.current = requestAnimationFrame(pollFft);
+      resources.fftRafId = requestAnimationFrame(pollFft);
+      fftRafId.current = resources.fftRafId;
     };
-    fftRafId.current = requestAnimationFrame(pollFft);
+    resources.fftRafId = requestAnimationFrame(pollFft);
+    fftRafId.current = resources.fftRafId;
 
     bufferSource.start(0);
     if (nextClip.index === 0) {
@@ -189,19 +325,17 @@ export const useSoundPlayer = (props: {
         bufferSource.disconnect();
         return;
       }
-      if (fftRafId.current) {
-        cancelAnimationFrame(fftRafId.current);
-        fftRafId.current = null;
-      }
+      cancelPlayerFft(resources);
       fftStore.clear();
       bufferSource.disconnect();
       isProcessing.current = false;
       setIsPlaying(false);
       onStopAudio.current(nextClip.id);
       currentlyPlayingAudioBuffer.current = null;
+      resources.source = null;
       playNextClip();
     };
-  }, [fftStore]);
+  }, [cancelPlayerFft, fftStore]);
 
   const initPlayer = useCallback(
     async (
@@ -210,81 +344,30 @@ export const useSoundPlayer = (props: {
     ): Promise<boolean> => {
       const generation = ++playerGeneration.current;
       playbackActivitySequence.current = 0;
-      isWorkletActive.current = true;
+      isInitialized.current = false;
+      isProcessing.current = false;
+      setIsPlaying(false);
+      setQueueLength(0);
+      chunkBufferQueues.current = {};
+      lastQueuedChunk.current = null;
+      clipQueue.current = [];
 
-      let contextForInitialization: AudioContext | null = null;
-      let ownsContextForInitialization = false;
-      let analyserForInitialization: AnalyserNode | null = null;
-      let gainForInitialization: GainNode | null = null;
-      let workletForInitialization: AudioWorkletNode | null = null;
-      let fftRafIdForInitialization: number | null = null;
+      const resourcesToReplace = playerResources.current;
+      if (resourcesToReplace) {
+        await disposePlayerResources(resourcesToReplace);
+        if (generation !== playerGeneration.current) {
+          return false;
+        }
+      }
+
+      let resourcesForInitialization: PlayerResources | null = null;
 
       const cleanupInitialization = async () => {
-        if (fftRafIdForInitialization !== null) {
-          cancelAnimationFrame(fftRafIdForInitialization);
-          if (fftRafId.current === fftRafIdForInitialization) {
-            fftRafId.current = null;
-          }
-          fftRafIdForInitialization = null;
+        const resources = resourcesForInitialization;
+        resourcesForInitialization = null;
+        if (resources) {
+          await disposePlayerResources(resources);
         }
-
-        if (workletForInitialization) {
-          workletForInitialization.port.onmessage = null;
-          try {
-            workletForInitialization.port.close();
-          } catch {
-            // Continue releasing the rest of this initialization attempt.
-          }
-          try {
-            workletForInitialization.disconnect();
-          } catch {
-            // The worklet may already have been disconnected.
-          }
-          if (workletNode.current === workletForInitialization) {
-            workletNode.current = null;
-          }
-          workletForInitialization = null;
-        }
-
-        if (analyserForInitialization) {
-          try {
-            analyserForInitialization.disconnect();
-          } catch {
-            // The analyser may already have been disconnected.
-          }
-          if (analyserNode.current === analyserForInitialization) {
-            analyserNode.current = null;
-          }
-          analyserForInitialization = null;
-        }
-
-        if (gainForInitialization) {
-          try {
-            gainForInitialization.disconnect();
-          } catch {
-            // The gain node may already have been disconnected.
-          }
-          if (gainNode.current === gainForInitialization) {
-            gainNode.current = null;
-          }
-          gainForInitialization = null;
-        }
-
-        if (contextForInitialization && ownsContextForInitialization) {
-          try {
-            await contextForInitialization.close();
-          } catch {
-            // The context may already have been closed by a concurrent stop.
-          }
-        }
-        if (
-          generation === playerGeneration.current &&
-          audioContext.current === contextForInitialization
-        ) {
-          audioContext.current = null;
-          ownsAudioContext.current = false;
-        }
-        contextForInitialization = null;
       };
 
       const abandonInitialization = async () => {
@@ -296,20 +379,27 @@ export const useSoundPlayer = (props: {
         message: string,
         reason: AudioPlayerErrorReason,
       ) => {
-        await cleanupInitialization();
         if (generation === playerGeneration.current) {
           isInitialized.current = false;
-          isWorkletActive.current = false;
           onError.current(message, reason);
         }
+        await cleanupInitialization();
         return false;
       };
 
       try {
         const initAudioContext = sharedAudioContext ?? new AudioContext();
-        contextForInitialization = initAudioContext;
-        ownsContextForInitialization = !sharedAudioContext;
-        ownsAudioContext.current = ownsContextForInitialization;
+        const resources: PlayerResources = {
+          context: initAudioContext,
+          ownsContext: !sharedAudioContext,
+          analyser: null,
+          gain: null,
+          worklet: null,
+          source: null,
+          fftRafId: null,
+        };
+        resourcesForInitialization = resources;
+        playerResources.current = resources;
         audioContext.current = initAudioContext;
 
         // An AudioContext created outside a user gesture starts 'suspended'
@@ -355,7 +445,7 @@ export const useSoundPlayer = (props: {
             ).setSinkId(speakerDeviceId);
           } catch (e) {
             if (generation !== playerGeneration.current) {
-              return abandonInitialization();
+              return await abandonInitialization();
             }
             onError.current(
               `Failed to set speaker device: ${e instanceof Error ? e.message : 'Unknown error'}`,
@@ -370,10 +460,10 @@ export const useSoundPlayer = (props: {
 
         // Use AnalyserNode to get fft frequency data for visualizations
         const analyser = initAudioContext.createAnalyser();
-        analyserForInitialization = analyser;
+        resources.analyser = analyser;
         // Use GainNode to adjust volume
         const gain = initAudioContext.createGain();
-        gainForInitialization = gain;
+        resources.gain = gain;
 
         analyser.fftSize = 2048; // Must be a power of 2
         analyser.connect(gain);
@@ -398,11 +488,17 @@ export const useSoundPlayer = (props: {
             initAudioContext,
             'audio-processor',
           );
-          workletForInitialization = worklet;
+          resources.worklet = worklet;
           worklet.connect(analyser);
           workletNode.current = worklet;
 
           worklet.port.onmessage = (e: MessageEvent) => {
+            if (
+              generation !== playerGeneration.current ||
+              playerResources.current !== resources
+            ) {
+              return;
+            }
             const data = e.data as WorkletMessage;
 
             switch (data.type) {
@@ -426,7 +522,6 @@ export const useSoundPlayer = (props: {
                 break;
 
               case 'worklet_closed':
-                isWorkletActive.current = false;
                 break;
             }
           };
@@ -439,6 +534,13 @@ export const useSoundPlayer = (props: {
 
           // Use requestAnimationFrame instead of setInterval(5ms) for display-rate updates
           const pollFft = () => {
+            if (
+              generation !== playerGeneration.current ||
+              playerResources.current !== resources
+            ) {
+              void cleanupInitialization();
+              return;
+            }
             analyser.getByteFrequencyData(frequencyDataBuffer);
             convertLinearFrequenciesToBarkInto(
               frequencyDataBuffer,
@@ -446,11 +548,18 @@ export const useSoundPlayer = (props: {
               barkBuffer,
             );
             fftStore.write(barkBuffer);
-            fftRafIdForInitialization = requestAnimationFrame(pollFft);
-            fftRafId.current = fftRafIdForInitialization;
+            if (
+              generation !== playerGeneration.current ||
+              playerResources.current !== resources
+            ) {
+              void cleanupInitialization();
+              return;
+            }
+            resources.fftRafId = requestAnimationFrame(pollFft);
+            fftRafId.current = resources.fftRafId;
           };
-          fftRafIdForInitialization = requestAnimationFrame(pollFft);
-          fftRafId.current = fftRafIdForInitialization;
+          resources.fftRafId = requestAnimationFrame(pollFft);
+          fftRafId.current = resources.fftRafId;
 
           isInitialized.current = true;
         } else {
@@ -464,7 +573,7 @@ export const useSoundPlayer = (props: {
         );
       }
     },
-    [props.enableAudioWorklet, fftStore],
+    [disposePlayerResources, props.enableAudioWorklet, fftStore],
   );
 
   const convertToAudioBuffer = useCallback(
@@ -691,12 +800,11 @@ export const useSoundPlayer = (props: {
 
   const stopAll = useCallback(async () => {
     const generation = ++playerGeneration.current;
-    const workletToStop = workletNode.current;
-    const sourceToStop = currentlyPlayingAudioBuffer.current;
-    const analyserToStop = analyserNode.current;
-    const gainToStop = gainNode.current;
-    const contextToClose = audioContext.current;
-    const shouldCloseContext = ownsAudioContext.current;
+    const resourcesToStop = playerResources.current;
+    if (playerResources.current === resourcesToStop) {
+      playerResources.current = null;
+    }
+    const workletToStop = resourcesToStop?.worklet ?? null;
     isInitialized.current = false;
     isProcessing.current = false;
     setIsPlaying(false);
@@ -707,98 +815,48 @@ export const useSoundPlayer = (props: {
     chunkBufferQueues.current = {};
     lastQueuedChunk.current = null;
 
-    if (fftRafId.current) {
-      cancelAnimationFrame(fftRafId.current);
-      fftRafId.current = null;
+    if (resourcesToStop) {
+      cancelPlayerFft(resourcesToStop);
     }
 
-    if (props.enableAudioWorklet) {
-      // AudioWorklet mode
-      workletToStop?.port.postMessage({ type: 'fadeAndClear' });
-      workletToStop?.port.postMessage({ type: 'end' });
-
-      // We use this loop to make sure the worklet has been closed before we consider
-      // the player to be successfully stopped. The audio worklet asynchronously emits
-      // the 'worklet_closed' message in order to confirm that it has been closed successfully.
-      // If you close the worklet before the fade-out, the user may hear a small audio
-      // artifact when the call ends.
-      // (Reference the `_fadeOutDurationMs` constant in `audio-worklet.js`
-      // to see how long it takes for the worklet to close - the current default is 300ms.)
-      let closed = 0;
-      while (closed < 5) {
-        if (
-          generation !== playerGeneration.current ||
-          isWorkletActive.current === false
-        ) {
-          break;
-        }
-        closed += 1;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      // In the unlikely event that the worklet is still active after 500ms,
-      // something went wrong in the worklet code, and the worklet failed to close.
-      // So we should reset isWorkletActive to false anyway.
-      if (generation === playerGeneration.current) {
-        isWorkletActive.current = false;
-      }
-
+    try {
       if (workletToStop) {
-        workletToStop.port.close();
-        workletToStop.disconnect();
-      }
-      if (workletNode.current === workletToStop) {
-        workletNode.current = null;
-      }
-    } else if (!props.enableAudioWorklet) {
-      // Non-AudioWorklet mode
-      if (sourceToStop) {
-        sourceToStop.onended = null;
-        try {
-          sourceToStop.stop();
-        } catch {
-          // The source may already have ended; disconnecting it is sufficient.
-        }
-        sourceToStop.disconnect();
-      }
-      if (currentlyPlayingAudioBuffer.current === sourceToStop) {
-        currentlyPlayingAudioBuffer.current = null;
-      }
-
-      clipQueue.current = [];
-      setQueueLength(0);
-    }
-
-    if (analyserToStop) {
-      analyserToStop.disconnect();
-    }
-    if (analyserNode.current === analyserToStop) {
-      analyserNode.current = null;
-    }
-    if (gainToStop) {
-      gainToStop.disconnect();
-    }
-    if (gainNode.current === gainToStop) {
-      gainNode.current = null;
-    }
-
-    if (contextToClose && shouldCloseContext) {
-      await contextToClose
-        .close()
-        .then(() => {
-          if (audioContext.current === contextToClose) {
-            audioContext.current = null;
+        // AudioWorklet mode
+        let isWorkletClosed = false;
+        workletToStop.port.onmessage = (e: MessageEvent) => {
+          if ((e.data as WorkletMessage).type === 'worklet_closed') {
+            isWorkletClosed = true;
           }
-        })
-        .catch(() => {
-          // .close() rejects if the audio context is already closed.
-          // Therefore, we just need to catch the error, but we don't need to
-          // do anything with it.
-          return null;
-        });
-    } else if (audioContext.current === contextToClose) {
-      audioContext.current = null;
+        };
+        workletToStop.port.postMessage({ type: 'fadeAndClear' });
+        workletToStop.port.postMessage({ type: 'end' });
+
+        // We use this loop to make sure the worklet has been closed before we consider
+        // the player to be successfully stopped. The audio worklet asynchronously emits
+        // the 'worklet_closed' message in order to confirm that it has been closed successfully.
+        // If you close the worklet before the fade-out, the user may hear a small audio
+        // artifact when the call ends.
+        // (Reference the `_fadeOutDurationMs` constant in `audio-worklet.js`
+        // to see how long it takes for the worklet to close - the current default is 300ms.)
+        let closed = 0;
+        while (closed < 5) {
+          if (generation !== playerGeneration.current || isWorkletClosed) {
+            break;
+          }
+          closed += 1;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } else {
+        // Non-AudioWorklet mode
+        clipQueue.current = [];
+        setQueueLength(0);
+      }
+    } finally {
+      if (resourcesToStop) {
+        await disposePlayerResources(resourcesToStop);
+      }
     }
-  }, [props.enableAudioWorklet, fftStore]);
+  }, [cancelPlayerFft, disposePlayerResources, fftStore]);
 
   const stopAllWithRetries = useCallback(
     async (maxAttempts = 3, delayMs = 500) => {

@@ -98,6 +98,8 @@ type ResourceStatus =
   | 'disconnecting'
   | 'disconnected';
 
+const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
+
 export type VoiceContextType = {
   connect: (options: ConnectOptions) => Promise<void>;
   disconnect: () => Promise<void>;
@@ -227,6 +229,31 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const lifecycleGenerationRef = useRef(0);
   const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
+
+  const closeSharedAudioContext = useCallback(
+    async (context = sharedAudioContextRef.current) => {
+      if (!context || sharedAudioContextRef.current !== context) {
+        return;
+      }
+      // Relinquish ownership before awaiting so concurrent cleanup cannot close
+      // this context twice or clear a newer connection's context.
+      sharedAudioContextRef.current = null;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const closePromise = Promise.resolve()
+        .then(() => context.close())
+        .catch(() => undefined);
+      await Promise.race([
+        closePromise,
+        new Promise<void>((resolve) => {
+          timeoutId = setTimeout(resolve, AUDIO_CONTEXT_CLOSE_TIMEOUT_MS);
+        }),
+      ]);
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    },
+    [],
+  );
 
   // stores information about whether certain resources are being disconnected
   const resourceStatusRef = useRef<{
@@ -466,15 +493,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           playerCleanup,
         ]).then(async () => {
           if (closeGeneration !== lifecycleGenerationRef.current) return;
-          if (
-            !consumerInitiated &&
-            sharedContextToClose &&
-            sharedAudioContextRef.current === sharedContextToClose
-          ) {
-            await sharedContextToClose.close().catch(() => {
-              // .close() rejects if already closed; safe to ignore.
-            });
-            sharedAudioContextRef.current = null;
+          if (!consumerInitiated && sharedContextToClose) {
+            await closeSharedAudioContext(sharedContextToClose);
           }
           resourceStatusRef.current.audioPlayer = 'disconnected';
           resourceStatusRef.current.mic = 'disconnected';
@@ -489,6 +509,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       },
       [
         clearMessagesOnDisconnect,
+        closeSharedAudioContext,
         createDisconnectMessage,
         clearMessageStore,
         playerStopAll,
@@ -675,6 +696,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // because it needs to exist by the time the socket is ready to send audio data
       if (!checkShouldContinueConnecting(generation)) {
         console.warn('Connection attempt was canceled. Stopping connection.');
+        stopStream();
+        await closeSharedAudioContext(sharedCtx);
         return;
       }
       try {
@@ -684,11 +707,15 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         );
         if (!playerInitialized) {
           resourceStatusRef.current.audioPlayer = 'disconnected';
+          resourceStatusRef.current.mic = 'disconnected';
           isConnectingRef.current = false;
+          stopStream();
+          await closeSharedAudioContext(sharedCtx);
           return;
         }
       } catch (e) {
         resourceStatusRef.current.audioPlayer = 'disconnected';
+        resourceStatusRef.current.mic = 'disconnected';
         isConnectingRef.current = false;
         updateError({
           type: 'audio_error',
@@ -698,6 +725,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               ? e.message
               : 'We could not connect to the audio player. Please try again.',
         });
+        stopStream();
+        await closeSharedAudioContext(sharedCtx);
         return;
       }
       resourceStatusRef.current.audioPlayer = 'connected';
@@ -755,9 +784,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     [
       checkShouldContinueConnecting,
       clientConnect,
+      closeSharedAudioContext,
       getStream,
       micStart,
       player.initPlayer,
+      stopStream,
       updateError,
     ],
   );
@@ -800,12 +831,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     await playerStopAll();
     resourceStatusRef.current.audioPlayer = 'disconnected';
 
-    if (sharedAudioContextRef.current) {
-      await sharedAudioContextRef.current.close().catch(() => {
-        // .close() rejects if already closed; safe to ignore.
-      });
-      sharedAudioContextRef.current = null;
-    }
+    await closeSharedAudioContext();
 
     // Clean up other state variables that are synchronous
     if (clearMessagesOnDisconnect) {
@@ -818,6 +844,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     stopStream,
     micStop,
     clientDisconnect,
+    closeSharedAudioContext,
     playerStopAll,
     clearMessagesOnDisconnect,
     clearMessageStore,
