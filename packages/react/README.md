@@ -70,7 +70,10 @@ See a complete list of props accepted by `VoiceProvider` below:
 
 #### `onMessage?`: (message: [JsonMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/JsonMessage.ts) & { receivedAt: Date;}) => void
 
-(_Optional_) Callback function to invoke upon receiving a message through the web socket.
+(_Optional_) Callback function to invoke upon receiving a message through the
+web socket. Locally sent ToolResponse and ToolError messages are also emitted
+after they are successfully passed to the socket so they stay in sync with
+`messages` and `toolStatusStore`.
 
 #### `onToolCall?`: [ToolCallHandler](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L28)
 
@@ -265,7 +268,9 @@ Send a text string for the assistant to read out loud.
 
 #### `sendToolMessage`: (toolMessage: [ToolResponse](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ToolResponseMessage.ts) \| [ToolError](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ToolErrorMessage.ts)) => void
 
-Send a tool response or tool error message to the EVI backend.
+Send a tool response or tool error message to the EVI backend. Successfully
+sent tool messages are emitted through `onMessage`, appended to `messages`, and
+recorded in `toolStatusStore`.
 
 #### `pauseAssistant`: () => void
 
