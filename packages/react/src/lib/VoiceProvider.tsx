@@ -41,7 +41,10 @@ import type {
   UserInterruptionMessage,
   UserTranscriptMessage,
 } from '../models/messages';
-import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
+import {
+  type AudioContextCloseResult,
+  closeAudioContextWithTimeout,
+} from '../utils/closeAudioContextWithTimeout';
 
 export type SocketErrorReason =
   | 'socket_connection_failure'
@@ -150,6 +153,8 @@ export type VoiceProviderProps = PropsWithChildren<{
   onAudioReceived?: (audioOutputMessage: AudioOutputMessage) => void;
   onAudioStart?: (clipId: string) => void;
   onAudioEnd?: (clipId: string) => void;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
   onInterruption?: (message: UserInterruptionMessage) => void;
   /**
    * @default true
@@ -228,16 +233,25 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const lifecycleGenerationRef = useRef(0);
   const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
+  const sharedAudioContextClosePromisesRef = useRef(
+    new WeakMap<AudioContext, Promise<AudioContextCloseResult>>(),
+  );
 
   const closeSharedAudioContext = useCallback(
     async (context = sharedAudioContextRef.current) => {
-      if (!context || sharedAudioContextRef.current !== context) {
-        return;
+      if (!context) {
+        return null;
       }
-      // Relinquish ownership before awaiting so concurrent cleanup cannot close
-      // this context twice or clear a newer connection's context.
-      sharedAudioContextRef.current = null;
-      await closeAudioContextWithTimeout(context);
+      if (sharedAudioContextRef.current === context) {
+        sharedAudioContextRef.current = null;
+      }
+      let closePromise =
+        sharedAudioContextClosePromisesRef.current.get(context);
+      if (!closePromise) {
+        closePromise = closeAudioContextWithTimeout(context);
+        sharedAudioContextClosePromisesRef.current.set(context, closePromise);
+      }
+      return closePromise;
     },
     [],
   );
@@ -346,7 +360,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const {
     addToQueue: playerAddToQueue,
     clearQueue: playerClearQueue,
+    initPlayer: playerInitPlayer,
     stopAll: playerStopAll,
+    stopAllForContext: playerStopAllForContext,
     waitForQueueToDrain: playerWaitForQueueToDrain,
   } = player;
   const { addToStore: toolStatusAddToStore, clearStore: toolStatusClearStore } =
@@ -522,6 +538,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const clientReadyStateRef = useLatestRef(client.readyState);
 
   const mic = useMicrophone({
+    onStartRecording: props.onStartRecording,
+    onStopRecording: props.onStopRecording,
     onAudioCaptured: useCallback(
       (arrayBuffer) => {
         if (
@@ -679,30 +697,40 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const sharedCtx = new AudioContext();
       sharedAudioContextRef.current = sharedCtx;
 
+      const cleanupAttemptResources = async (stopPlayer: boolean) => {
+        try {
+          stopStream(stream);
+        } catch (cleanupError) {
+          console.error(
+            'Failed to stop a canceled connection microphone stream.',
+            cleanupError,
+          );
+        }
+        if (stopPlayer) {
+          await playerStopAllForContext(sharedCtx);
+        }
+        await closeSharedAudioContext(sharedCtx);
+      };
+
       // Audio Player - must initialize before connecting to the socket
       // because it needs to exist by the time the socket is ready to send audio data
       if (!checkShouldContinueConnecting(generation)) {
         console.warn('Connection attempt was canceled. Stopping connection.');
-        stopStream();
-        await closeSharedAudioContext(sharedCtx);
+        await cleanupAttemptResources(false);
         return;
       }
+      let playerInitialized: boolean;
       try {
-        const playerInitialized = await player.initPlayer(
+        playerInitialized = await playerInitPlayer(
           devices?.speakerDeviceId,
           sharedCtx,
         );
-        if (!playerInitialized) {
-          resourceStatusRef.current.socket = 'disconnected';
-          resourceStatusRef.current.audioPlayer = 'disconnected';
-          resourceStatusRef.current.mic = 'disconnected';
-          isConnectingRef.current = false;
-          stopStream();
-          await closeSharedAudioContext(sharedCtx);
-          setStatus({ value: 'disconnected' });
+      } catch (e) {
+        if (!checkShouldContinueConnecting(generation)) {
+          console.warn('Connection attempt was canceled. Stopping connection.');
+          await cleanupAttemptResources(true);
           return;
         }
-      } catch (e) {
         resourceStatusRef.current.audioPlayer = 'disconnected';
         resourceStatusRef.current.mic = 'disconnected';
         isConnectingRef.current = false;
@@ -714,8 +742,21 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               ? e.message
               : 'We could not connect to the audio player. Please try again.',
         });
-        stopStream();
-        await closeSharedAudioContext(sharedCtx);
+        await cleanupAttemptResources(true);
+        return;
+      }
+      if (!checkShouldContinueConnecting(generation)) {
+        console.warn('Connection attempt was canceled. Stopping connection.');
+        await cleanupAttemptResources(true);
+        return;
+      }
+      if (!playerInitialized) {
+        resourceStatusRef.current.socket = 'disconnected';
+        resourceStatusRef.current.audioPlayer = 'disconnected';
+        resourceStatusRef.current.mic = 'disconnected';
+        isConnectingRef.current = false;
+        await cleanupAttemptResources(true);
+        setStatus({ value: 'disconnected' });
         return;
       }
       resourceStatusRef.current.audioPlayer = 'connected';
@@ -723,10 +764,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // WEBSOCKET - needs to be connected before the microphone is initialized
       // because a connection needs to be established before the microphone can start sending
       // the audio stream
-      if (!checkShouldContinueConnecting(generation)) {
-        console.warn('Connection attempt was canceled. Stopping connection.');
-        return;
-      }
       try {
         await clientConnect(
           {
@@ -740,6 +777,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // Any errors themselves are handled in the `onClientError` callback on the client,
         // except for the AbortController case, which we don't need to call onClientError for
         // because cancellations are intentional, and not network errors.
+        const connectionIsCurrent = checkShouldContinueConnecting(generation);
+        await cleanupAttemptResources(true);
+        if (connectionIsCurrent) {
+          resourceStatusRef.current.audioPlayer = 'disconnected';
+          resourceStatusRef.current.mic = 'disconnected';
+          isConnectingRef.current = false;
+        }
+        return;
+      }
+      if (!checkShouldContinueConnecting(generation)) {
+        console.warn('Connection attempt was canceled. Stopping connection.');
+        await cleanupAttemptResources(true);
         return;
       }
       // we can set resourceStatusRef.current.socket here because `client.connect` resolves
@@ -747,10 +796,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       resourceStatusRef.current.socket = 'connected';
 
       // MICROPHONE - initialized last
-      if (!checkShouldContinueConnecting(generation)) {
-        console.warn('Connection attempt was canceled. Stopping connection.');
-        return;
-      }
       try {
         micStart(stream, sharedCtx);
       } catch (e) {
@@ -776,7 +821,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       closeSharedAudioContext,
       getStream,
       micStart,
-      player.initPlayer,
+      playerInitPlayer,
+      playerStopAllForContext,
       stopStream,
       updateError,
     ],

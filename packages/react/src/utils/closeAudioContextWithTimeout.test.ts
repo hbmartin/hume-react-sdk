@@ -15,12 +15,12 @@ describe('closeAudioContextWithTimeout', () => {
 
     await expect(
       closeAudioContextWithTimeout(createContext(close)),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ success: true });
 
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it('swallows synchronous throws and rejected close promises', async () => {
+  it('reports synchronous throws and rejected close promises', async () => {
     const synchronousClose = vi.fn(() => {
       throw new DOMException('Already closed', 'InvalidStateError');
     });
@@ -30,12 +30,20 @@ describe('closeAudioContextWithTimeout', () => {
         new DOMException('Already closed', 'InvalidStateError'),
       );
 
-    await expect(
-      closeAudioContextWithTimeout(createContext(synchronousClose)),
-    ).resolves.toBeUndefined();
-    await expect(
-      closeAudioContextWithTimeout(createContext(rejectedClose)),
-    ).resolves.toBeUndefined();
+    const synchronousResult = await closeAudioContextWithTimeout(
+      createContext(synchronousClose),
+    );
+    const rejectedResult = await closeAudioContextWithTimeout(
+      createContext(rejectedClose),
+    );
+
+    expect(synchronousResult.success).toBe(false);
+    expect(rejectedResult.success).toBe(false);
+    if (synchronousResult.success || rejectedResult.success) {
+      throw new Error('Expected both audio context closes to fail.');
+    }
+    expect(synchronousResult.error.message).toBe('Already closed');
+    expect(rejectedResult.error.message).toBe('Already closed');
   });
 
   it('resolves after one second when close never settles', async () => {
@@ -44,8 +52,9 @@ describe('closeAudioContextWithTimeout', () => {
     let settled = false;
 
     const closing = closeAudioContextWithTimeout(createContext(close)).then(
-      () => {
+      (result) => {
         settled = true;
+        return result;
       },
     );
 
@@ -54,7 +63,12 @@ describe('closeAudioContextWithTimeout', () => {
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
-    await closing;
+    const result = await closing;
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error('Expected the audio context close to time out.');
+    }
+    expect(result.error.message).toBe('Audio context close timed out.');
     expect(settled).toBe(true);
   });
 });

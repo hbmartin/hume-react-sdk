@@ -45,6 +45,7 @@ vi.mock('./useSoundPlayer', () => ({
     queueLength: 0,
     setVolume: vi.fn(),
     stopAll: vi.fn(),
+    stopAllForContext: vi.fn(),
     unmuteAudio: vi.fn(),
     volume: 1,
     waitForQueueToDrain: vi.fn(),

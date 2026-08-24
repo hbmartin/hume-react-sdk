@@ -14,12 +14,17 @@ const mocks = vi.hoisted(() => ({
   getStream: vi.fn(),
   micStart: vi.fn(),
   micStop: vi.fn(),
+  microphoneProps: null as null | {
+    onStartRecording?: () => void;
+    onStopRecording?: () => void;
+  },
   onCloseHandler: null as
     | null
     | ((event: CloseEvent, consumerInitiated: boolean) => void | Promise<void>),
   playerInit: vi.fn(),
   playerErrorHandler: null as null | PlayerErrorHandler,
   playerStop: vi.fn(),
+  playerStopForContext: vi.fn(),
   stopStream: vi.fn(),
   waitForDrain: vi.fn(),
 }));
@@ -67,6 +72,7 @@ vi.mock('./useSoundPlayer', () => ({
       queueLength: 0,
       setVolume: vi.fn(),
       stopAll: mocks.playerStop,
+      stopAllForContext: mocks.playerStopForContext,
       unmuteAudio: vi.fn(),
       volume: 1,
       waitForQueueToDrain: mocks.waitForDrain,
@@ -75,14 +81,20 @@ vi.mock('./useSoundPlayer', () => ({
 }));
 
 vi.mock('./useMicrophone', () => ({
-  useMicrophone: () => ({
-    fftStore,
-    isMuted: false,
-    mute: vi.fn(),
-    start: mocks.micStart,
-    stop: mocks.micStop,
-    unmute: vi.fn(),
-  }),
+  useMicrophone: (props: {
+    onStartRecording?: () => void;
+    onStopRecording?: () => void;
+  }) => {
+    mocks.microphoneProps = props;
+    return {
+      fftStore,
+      isMuted: false,
+      mute: vi.fn(),
+      start: mocks.micStart,
+      stop: mocks.micStop,
+      unmute: vi.fn(),
+    };
+  },
 }));
 
 vi.mock('./useMicrophoneStream', () => ({
@@ -120,6 +132,7 @@ describe('VoiceProvider close lifecycle', () => {
     mocks.micStop.mockResolvedValue(undefined);
     mocks.playerInit.mockResolvedValue(true);
     mocks.playerStop.mockResolvedValue(undefined);
+    mocks.playerStopForContext.mockResolvedValue(undefined);
     mocks.waitForDrain.mockResolvedValue(true);
   });
 
@@ -134,6 +147,28 @@ describe('VoiceProvider close lifecycle', () => {
     vi.clearAllMocks();
     mocks.onCloseHandler = null;
     mocks.playerErrorHandler = null;
+    mocks.microphoneProps = null;
+  });
+
+  it('forwards microphone recording lifecycle callbacks', () => {
+    const onStartRecording = vi.fn();
+    const onStopRecording = vi.fn();
+    renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider
+          onStartRecording={onStartRecording}
+          onStopRecording={onStopRecording}
+        >
+          {children}
+        </VoiceProvider>
+      ),
+    });
+
+    mocks.microphoneProps?.onStartRecording?.();
+    mocks.microphoneProps?.onStopRecording?.();
+
+    expect(onStartRecording).toHaveBeenCalledOnce();
+    expect(onStopRecording).toHaveBeenCalledOnce();
   });
 
   it('aborts before opening the socket when player initialization fails', async () => {
@@ -189,6 +224,53 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.micStart).not.toHaveBeenCalled();
     expect(result.current.error).toBeNull();
     expect(result.current.status.value).toBe('disconnected');
+  });
+
+  it('does not let a stale player initialization cancel a newer connection', async () => {
+    const firstInitialization = createDeferred<boolean>();
+    const secondInitialization = createDeferred<boolean>();
+    const firstStream = { id: 'first-stream' } as unknown as MediaStream;
+    const secondStream = { id: 'second-stream' } as unknown as MediaStream;
+    mocks.getStream
+      .mockResolvedValueOnce(firstStream)
+      .mockResolvedValueOnce(secondStream);
+    mocks.playerInit
+      .mockReturnValueOnce(firstInitialization.promise)
+      .mockReturnValueOnce(secondInitialization.promise);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+
+    let firstConnect = Promise.resolve();
+    act(() => {
+      firstConnect = result.current.connect({
+        auth: { type: 'accessToken', value: 'first-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.playerInit).toHaveBeenCalledOnce());
+
+    await act(() => result.current.disconnect());
+
+    let secondConnect = Promise.resolve();
+    act(() => {
+      secondConnect = result.current.connect({
+        auth: { type: 'accessToken', value: 'second-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.playerInit).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      firstInitialization.resolve(false);
+      await firstConnect;
+    });
+    expect(result.current.status.value).toBe('connecting');
+    expect(mocks.stopStream).not.toHaveBeenCalledWith(secondStream);
+
+    await act(async () => {
+      secondInitialization.resolve(true);
+      await secondConnect;
+    });
+    expect(result.current.status.value).toBe('connected');
   });
 
   it('publishes socket closure immediately and ignores stale drain teardown', async () => {

@@ -88,6 +88,14 @@ See a complete list of props accepted by `VoiceProvider` below:
 
 (_Optional_) Callback function to invoke when an audio clip from the assistant stops playing.
 
+#### `onStartRecording?`: () => void
+
+(_Optional_) Callback function to invoke when microphone recording starts.
+
+#### `onStopRecording?`: () => void
+
+(_Optional_) Callback function to invoke when microphone recording stops.
+
 #### `onInterruption?`: (clipId: string) => void
 
 (_Optional_) Callback function to invoke when the assistant is interrupted.
