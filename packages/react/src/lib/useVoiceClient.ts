@@ -188,7 +188,7 @@ export const useVoiceClient = (props: {
         signal.addEventListener('abort', abortHandler);
 
         socket.on('message', (message) => {
-          if (signal.aborted) {
+          if (!isConnectionActive()) {
             return;
           }
 
@@ -223,6 +223,9 @@ export const useVoiceClient = (props: {
               ...message,
               receivedAt: new Date(),
             };
+            if (!isConnectionActive()) {
+              return;
+            }
             onMessage.current?.(messageWithReceivedAt);
             return;
           }
@@ -232,6 +235,9 @@ export const useVoiceClient = (props: {
               ...message,
               receivedAt: new Date(),
             };
+            if (!isConnectionActive()) {
+              return;
+            }
             onMessage.current?.(messageWithReceivedAt);
 
             // only pass tool call messages for user defined tools
@@ -239,8 +245,11 @@ export const useVoiceClient = (props: {
               const handler = onToolCall.current;
               if (handler) {
                 void Promise.resolve()
-                  .then(() =>
-                    handler(
+                  .then(() => {
+                    if (!isConnectionActive()) {
+                      return undefined;
+                    }
+                    return handler(
                       {
                         ...messageWithReceivedAt,
                         // we have to do this because even though we are using the correct
@@ -274,10 +283,10 @@ export const useVoiceClient = (props: {
                           content,
                         }),
                       },
-                    ),
-                  )
+                    );
+                  })
                   .then((response) => {
-                    if (!isConnectionActive()) {
+                    if (!isConnectionActive() || response === undefined) {
                       return;
                     }
                     try {
@@ -303,6 +312,9 @@ export const useVoiceClient = (props: {
                         'Failed to send tool response',
                         normalizedError,
                       );
+                      return;
+                    }
+                    if (!isConnectionActive()) {
                       return;
                     }
                     onMessage.current?.({

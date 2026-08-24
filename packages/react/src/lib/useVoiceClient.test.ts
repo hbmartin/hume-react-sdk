@@ -157,6 +157,42 @@ describe('useVoiceClient', () => {
     );
   });
 
+  it('ignores a late tool call after the socket closes', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const onToolCall = vi.fn<ToolCallHandler>();
+    const { result } = renderHook(() =>
+      useVoiceClient({ onMessage, onToolCall }),
+    );
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      socket.handlers.get('close')?.({ code: 1000 } as never);
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'late-call',
+        name: 'late',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+    await act(() => Promise.resolve());
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onToolCall).not.toHaveBeenCalled();
+  });
+
   it('accepts session settings without the wire-level type field', async () => {
     const socket = createSocket();
     humeMocks.connect.mockReturnValue(socket);

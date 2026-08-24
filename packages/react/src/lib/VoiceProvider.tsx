@@ -737,7 +737,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         isAlreadyActive: () =>
           deviceId === null
             ? requestedInputDeviceIdRef.current === null
-            : activeInputDeviceIdRef.current === deviceId,
+            : activeInputDeviceIdRef.current === deviceId &&
+              requestedInputDeviceIdRef.current === deviceId,
         perform: async (isCurrent) => {
           const audioConstraints = activeAudioConstraintsRef.current;
           const sharedContext = sharedAudioContextRef.current;

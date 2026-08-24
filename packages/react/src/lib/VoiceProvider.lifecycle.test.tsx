@@ -564,6 +564,38 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.micReplace).toHaveBeenCalledOnce();
   });
 
+  it('requires the requested and active input devices to match for a no-op', async () => {
+    const createStream = () =>
+      ({
+        getAudioTracks: () => [
+          { getSettings: () => ({ deviceId: 'physical-mic' }) },
+        ],
+      }) as unknown as MediaStream;
+    mocks.getStream
+      .mockResolvedValueOnce(createStream())
+      .mockResolvedValueOnce(createStream())
+      .mockResolvedValueOnce(createStream());
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+        devices: { microphoneDeviceId: 'physical-mic' },
+      }),
+    );
+
+    await act(() => result.current.setInputDevice(null));
+    await act(() => result.current.setInputDevice(null));
+    await act(() => result.current.setInputDevice('physical-mic'));
+
+    expect(mocks.getStream).toHaveBeenCalledTimes(3);
+    expect(mocks.getStream).toHaveBeenLastCalledWith({
+      deviceId: { exact: 'physical-mic' },
+    });
+    expect(mocks.micReplace).toHaveBeenCalledTimes(2);
+  });
+
   it('switches output on the live player and treats the active sink as a no-op', async () => {
     const { result } = renderHook(() => useVoice(), {
       wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
