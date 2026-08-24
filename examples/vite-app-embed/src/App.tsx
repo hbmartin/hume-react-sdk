@@ -5,6 +5,9 @@ import { useEffect, useState } from 'react';
 
 function App() {
   const apiKey = String(import.meta.env['VITE_PUBLIC_HUME_API_KEY'] ?? '');
+  const rendererUrl =
+    String(import.meta.env['VITE_PUBLIC_RENDERER_URL'] ?? '').trim() ||
+    'https://voice-widget.hume.ai/';
   const [isEmbedOpen, setIsEmbedOpen] = useState(false);
   const [openOnMount, setIsOpenOnMount] = useState(false);
 
@@ -23,11 +26,7 @@ function App() {
       <EmbeddedVoice
         auth={{ type: 'apiKey', value: apiKey }}
         debug={true}
-        rendererUrl={
-          import.meta.env.PROD
-            ? 'https://voice-widget.hume.ai/'
-            : 'http://localhost:3000'
-        }
+        rendererUrl={rendererUrl}
         onMessage={(msg) => {
           console.log('we got a message', msg);
         }}
