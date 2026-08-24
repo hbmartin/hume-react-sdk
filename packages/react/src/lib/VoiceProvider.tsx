@@ -693,11 +693,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           sharedCtx,
         );
         if (!playerInitialized) {
+          resourceStatusRef.current.socket = 'disconnected';
           resourceStatusRef.current.audioPlayer = 'disconnected';
           resourceStatusRef.current.mic = 'disconnected';
           isConnectingRef.current = false;
           stopStream();
           await closeSharedAudioContext(sharedCtx);
+          setStatus({ value: 'disconnected' });
           return;
         }
       } catch (e) {

@@ -4,11 +4,15 @@ const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
 export const closeAudioContextWithTimeout = async (
   context: AudioContext,
 ): Promise<void> => {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const closePromise = Promise.resolve()
-    .then(() => context.close())
-    .catch(() => undefined);
+  let closePromise: Promise<void>;
+  try {
+    closePromise = Promise.resolve(context.close()).catch(() => undefined);
+  } catch {
+    // Some browser implementations can throw before returning a promise.
+    return;
+  }
 
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     closePromise,
     new Promise<void>((resolve) => {
