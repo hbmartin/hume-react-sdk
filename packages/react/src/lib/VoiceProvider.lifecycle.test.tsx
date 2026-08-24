@@ -10,11 +10,13 @@ type PlayerErrorHandler = (
 const mocks = vi.hoisted(() => ({
   clientConnect: vi.fn(),
   clientDisconnect: vi.fn(),
+  clientSendAudio: vi.fn(),
   contextClose: vi.fn(),
   getStream: vi.fn(),
   micStart: vi.fn(),
   micStop: vi.fn(),
   microphoneProps: null as null | {
+    onAudioCaptured: (buffer: ArrayBuffer) => void;
     onStartRecording?: () => void;
     onStopRecording?: () => void;
   },
@@ -46,7 +48,7 @@ vi.mock('./useVoiceClient', async () => {
         disconnect: mocks.clientDisconnect,
         readyState: actual.VoiceReadyState.OPEN,
         sendAssistantInput: vi.fn(),
-        sendAudio: vi.fn(),
+        sendAudio: mocks.clientSendAudio,
         sendPauseAssistantMessage: vi.fn(),
         sendResumeAssistantMessage: vi.fn(),
         sendSessionSettings: vi.fn(),
@@ -82,6 +84,7 @@ vi.mock('./useSoundPlayer', () => ({
 
 vi.mock('./useMicrophone', () => ({
   useMicrophone: (props: {
+    onAudioCaptured: (buffer: ArrayBuffer) => void;
     onStartRecording?: () => void;
     onStopRecording?: () => void;
   }) => {
@@ -169,6 +172,98 @@ describe('VoiceProvider close lifecycle', () => {
 
     expect(onStartRecording).toHaveBeenCalledOnce();
     expect(onStopRecording).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the socket writable until the microphone flushes during disconnect', async () => {
+    const finalBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.micStop.mockImplementationOnce(() => {
+      mocks.microphoneProps?.onAudioCaptured(finalBuffer);
+      return Promise.resolve();
+    });
+
+    await act(() => result.current.disconnect());
+
+    expect(mocks.clientSendAudio).toHaveBeenCalledWith(finalBuffer);
+    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
+    expect(
+      mocks.micStop.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    ).toBeLessThan(
+      mocks.stopStream.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('blocks reconnect until an explicit disconnect has released old resources', async () => {
+    const microphoneStopped = createDeferred<void>();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'first-token' },
+      }),
+    );
+    mocks.micStop.mockReturnValueOnce(microphoneStopped.promise);
+
+    let disconnect = Promise.resolve();
+    act(() => {
+      disconnect = result.current.disconnect();
+    });
+    await waitFor(() => expect(mocks.micStop).toHaveBeenCalledOnce());
+
+    let reconnect = Promise.resolve();
+    act(() => {
+      reconnect = result.current.connect({
+        auth: { type: 'accessToken', value: 'second-token' },
+      });
+    });
+    expect(mocks.getStream).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      microphoneStopped.resolve();
+      await disconnect;
+      await reconnect;
+    });
+
+    expect(mocks.getStream).toHaveBeenCalledTimes(2);
+    expect(result.current.status.value).toBe('connected');
+  });
+
+  it('releases the microphone stream when AudioContext construction throws', async () => {
+    const onError = vi.fn();
+    globalThis.AudioContext = vi.fn(() => {
+      throw new DOMException('context unavailable', 'NotSupportedError');
+    }) as unknown as typeof AudioContext;
+    const stream = { id: 'captured-stream' } as unknown as MediaStream;
+    mocks.getStream.mockResolvedValueOnce(stream);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider onError={onError}>{children}</VoiceProvider>
+      ),
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    await waitFor(() => expect(result.current.status.value).toBe('error'));
+    expect(mocks.stopStream).toHaveBeenCalledWith(stream);
+    expect(mocks.playerInit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'audio_player_initialization_failure',
+        type: 'audio_error',
+      }),
+    );
   });
 
   it('aborts before opening the socket when player initialization fails', async () => {
@@ -333,7 +428,7 @@ describe('VoiceProvider close lifecycle', () => {
     );
 
     await act(() => result.current.disconnect());
-    expect(mocks.playerStop).toHaveBeenCalledTimes(1);
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(1);
 
     let reconnect = Promise.resolve();
     act(() => {
@@ -349,7 +444,8 @@ describe('VoiceProvider close lifecycle', () => {
     });
 
     await waitFor(() => expect(mocks.playerInit).toHaveBeenCalledTimes(2));
-    expect(mocks.playerStop).toHaveBeenCalledTimes(1);
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(1);
+    expect(mocks.playerStop).not.toHaveBeenCalled();
     expect(result.current.status.value).toBe('connected');
   });
 

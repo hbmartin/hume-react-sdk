@@ -449,6 +449,31 @@ describe('useMicrophone', () => {
     );
   });
 
+  it('preserves mute intent while a failed track remains attached', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const trackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('track still live');
+      })
+      .mockImplementationOnce(() => undefined);
+    const track = {
+      enabled: true,
+      stop: trackStop,
+    } as unknown as MediaStreamTrack;
+    const { result } = renderMicrophone();
+    result.current.start(createStream([track]), createAudioContext());
+    act(() => result.current.mute());
+
+    await act(() => result.current.stop());
+
+    expect(result.current.isMuted).toBe(true);
+    expect(track.enabled).toBe(false);
+
+    await act(() => result.current.stop());
+    expect(result.current.isMuted).toBe(false);
+  });
+
   it('continues unmount cleanup when stopping a track throws', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const firstTrackStop = vi.fn(() => {

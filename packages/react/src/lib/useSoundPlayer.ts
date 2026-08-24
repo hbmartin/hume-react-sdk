@@ -43,10 +43,8 @@ interface PlayerResources {
 
 const BARK_BAND_COUNT = 24;
 
-/** How often `waitForQueueToDrain` re-checks whether playback has finished. */
-const DRAIN_POLL_INTERVAL_MS = 50;
 /** Require an idle period so the final render quantum reaches the output. */
-const DRAIN_SETTLE_MS = DRAIN_POLL_INTERVAL_MS;
+const DRAIN_SETTLE_MS = 50;
 /** Upper bound on how long a server-initiated disconnect waits for audio. */
 const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
 /**
@@ -63,18 +61,16 @@ export const useSoundPlayer = (props: {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [volume, setVolumeState] = useState<number>(1.0);
+  const isAudioMutedRef = useRef(false);
+  const volumeRef = useRef(1.0);
 
   const fftStore = useRef(new FftStore()).current;
 
-  const audioContext = useRef<AudioContext | null>(null);
-  const analyserNode = useRef<AnalyserNode | null>(null);
-  const gainNode = useRef<GainNode | null>(null);
-  const workletNode = useRef<AudioWorkletNode | null>(null);
   const playerResources = useRef<PlayerResources | null>(null);
+  const playerStopPromises = useRef(new WeakMap<AudioContext, Promise<void>>());
   const isInitialized = useRef(false);
 
   const isProcessing = useRef(false);
-  const fftRafId = useRef<number | null>(null);
 
   const onPlayAudio = useLatestRef(props.onPlayAudio);
   const onStopAudio = useLatestRef(props.onStopAudio);
@@ -104,26 +100,44 @@ export const useSoundPlayer = (props: {
     }>
   >([]);
   const [queueLength, setQueueLength] = useState(0);
-  const currentlyPlayingAudioBuffer = useRef<AudioBufferSourceNode | null>(
-    null,
-  );
-
-  // Mirrors of the playback state, readable from inside async loops that would
-  // otherwise close over a stale render's values.
-  const queueLengthRef = useLatestRef(queueLength);
-  const isPlayingRef = useLatestRef(isPlaying);
+  // Authoritative mirrors of public playback state. They are updated before
+  // React renders so drain waiters never observe a stale render.
+  const queueLengthRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const drainWaiters = useRef(new Set<() => void>());
   const playerGeneration = useRef(0);
   const pendingAudioTasks = useRef(new Map<number, number>());
   const playbackActivitySequence = useRef(0);
+
+  const notifyDrainWaiters = useCallback(() => {
+    const waiters = [...drainWaiters.current];
+    drainWaiters.current.clear();
+    waiters.forEach((resolve) => resolve());
+  }, []);
+
+  const publishQueueLength = useCallback(
+    (length: number) => {
+      queueLengthRef.current = length;
+      setQueueLength(length);
+      notifyDrainWaiters();
+    },
+    [notifyDrainWaiters],
+  );
+
+  const publishIsPlaying = useCallback(
+    (playing: boolean) => {
+      isPlayingRef.current = playing;
+      setIsPlaying(playing);
+      notifyDrainWaiters();
+    },
+    [notifyDrainWaiters],
+  );
 
   const cancelPlayerFft = useCallback((resources: PlayerResources) => {
     const rafId = resources.fftRafId;
     resources.fftRafId = null;
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
-      if (fftRafId.current === rafId) {
-        fftRafId.current = null;
-      }
     }
   }, []);
 
@@ -133,78 +147,69 @@ export const useSoundPlayer = (props: {
         playerResources.current = null;
       }
 
-      cancelPlayerFft(resources);
+      const failures: string[] = [];
+      const release = (label: string, action: () => void) => {
+        try {
+          action();
+        } catch (error) {
+          const detail =
+            error instanceof Error ? error.message : 'Unknown error';
+          failures.push(`${label}: ${detail}`);
+        }
+      };
+
+      release('FFT cleanup failed', () => cancelPlayerFft(resources));
 
       const source = resources.source;
       resources.source = null;
       if (source) {
-        source.onended = null;
-        try {
-          source.stop();
-        } catch {
-          // The source may already have ended; disconnecting it is sufficient.
-        }
-        source.disconnect();
-        if (currentlyPlayingAudioBuffer.current === source) {
-          currentlyPlayingAudioBuffer.current = null;
-          isProcessing.current = false;
-        }
+        release('Audio source listener cleanup failed', () => {
+          source.onended = null;
+        });
+        release('Audio source stop failed', () => source.stop());
+        release('Audio source disconnect failed', () => source.disconnect());
+        isProcessing.current = false;
       }
 
       const worklet = resources.worklet;
       resources.worklet = null;
       if (worklet) {
-        worklet.port.onmessage = null;
-        try {
-          worklet.port.close();
-        } catch {
-          // Continue releasing the rest of this player's resources.
-        }
-        try {
-          worklet.disconnect();
-        } catch {
-          // The worklet may already have been disconnected.
-        }
-        if (workletNode.current === worklet) {
-          workletNode.current = null;
-        }
+        release('Audio worklet listener cleanup failed', () => {
+          worklet.port.onmessage = null;
+        });
+        release('Audio worklet port cleanup failed', () =>
+          worklet.port.close(),
+        );
+        release('Audio worklet disconnect failed', () => worklet.disconnect());
       }
 
       const analyser = resources.analyser;
       resources.analyser = null;
       if (analyser) {
-        try {
-          analyser.disconnect();
-        } catch {
-          // The analyser may already have been disconnected.
-        }
-        if (analyserNode.current === analyser) {
-          analyserNode.current = null;
-        }
+        release('Analyser disconnect failed', () => analyser.disconnect());
       }
 
       const gain = resources.gain;
       resources.gain = null;
       if (gain) {
-        try {
-          gain.disconnect();
-        } catch {
-          // The gain node may already have been disconnected.
-        }
-        if (gainNode.current === gain) {
-          gainNode.current = null;
-        }
+        release('Gain disconnect failed', () => gain.disconnect());
       }
 
       const context = resources.context;
       const shouldCloseContext = resources.ownsContext;
       resources.context = null;
       resources.ownsContext = false;
-      if (audioContext.current === context) {
-        audioContext.current = null;
-      }
       if (context && shouldCloseContext) {
-        await closeAudioContextWithTimeout(context);
+        const closeResult = await closeAudioContextWithTimeout(context);
+        if (!closeResult.success) {
+          failures.push(
+            `Audio context cleanup failed: ${closeResult.error.message}`,
+          );
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new Error(failures.join('; '));
       }
     },
     [cancelPlayerFft],
@@ -219,53 +224,47 @@ export const useSoundPlayer = (props: {
     // While a clip is mid-playback the queue may still hold entries, so
     // report its real length instead of zeroing it.
     if (clipQueue.current.length === 0 || isProcessing.current) {
-      setQueueLength(clipQueue.current.length);
+      publishQueueLength(clipQueue.current.length);
       return;
     }
 
-    if (analyserNode.current === null || audioContext.current === null) {
+    const resources = playerResources.current;
+    const context = resources?.context;
+    const analyser = resources?.analyser;
+    if (!resources || !context || !analyser) {
       onError.current(
         'Audio player is not initialized',
         'audio_player_initialization_failure',
       );
       return;
     }
-    const resources = playerResources.current;
-    if (!resources) {
-      return;
-    }
-
     const nextClip = clipQueue.current.shift();
-    setQueueLength(clipQueue.current.length);
+    publishQueueLength(clipQueue.current.length);
 
     if (!nextClip) return;
 
     isProcessing.current = true;
-    setIsPlaying(true);
+    publishIsPlaying(true);
 
     const generation = playerGeneration.current;
-    const bufferSource = audioContext.current.createBufferSource();
+    const bufferSource = context.createBufferSource();
 
     bufferSource.buffer = nextClip.buffer;
 
-    bufferSource.connect(analyserNode.current);
+    bufferSource.connect(analyser);
 
-    currentlyPlayingAudioBuffer.current = bufferSource;
     resources.source = bufferSource;
 
-    const frequencyDataBuffer = new Uint8Array(
-      analyserNode.current.frequencyBinCount,
-    );
+    const frequencyDataBuffer = new Uint8Array(analyser.frequencyBinCount);
     const barkBuffer = new Array<number>(BARK_BAND_COUNT).fill(0);
 
     const updateFrequencyData = () => {
       try {
         const bufferSampleRate = bufferSource.buffer?.sampleRate;
 
-        if (!analyserNode.current || typeof bufferSampleRate === 'undefined')
-          return;
+        if (typeof bufferSampleRate === 'undefined') return;
 
-        analyserNode.current.getByteFrequencyData(frequencyDataBuffer);
+        analyser.getByteFrequencyData(frequencyDataBuffer);
         convertLinearFrequenciesToBarkInto(
           frequencyDataBuffer,
           bufferSampleRate,
@@ -286,10 +285,8 @@ export const useSoundPlayer = (props: {
       }
       updateFrequencyData();
       resources.fftRafId = requestAnimationFrame(pollFft);
-      fftRafId.current = resources.fftRafId;
     };
     resources.fftRafId = requestAnimationFrame(pollFft);
-    fftRafId.current = resources.fftRafId;
 
     bufferSource.start(0);
     if (nextClip.index === 0) {
@@ -299,22 +296,31 @@ export const useSoundPlayer = (props: {
     bufferSource.onended = () => {
       if (
         generation !== playerGeneration.current ||
-        currentlyPlayingAudioBuffer.current !== bufferSource
+        playerResources.current !== resources ||
+        resources.source !== bufferSource
       ) {
         bufferSource.disconnect();
         return;
       }
+      bufferSource.onended = null;
       cancelPlayerFft(resources);
       fftStore.clear();
       bufferSource.disconnect();
       isProcessing.current = false;
-      setIsPlaying(false);
+      publishIsPlaying(false);
       onStopAudio.current(nextClip.id);
-      currentlyPlayingAudioBuffer.current = null;
       resources.source = null;
       playNextClip();
     };
-  }, [cancelPlayerFft, fftStore]);
+  }, [
+    cancelPlayerFft,
+    fftStore,
+    onError,
+    onPlayAudio,
+    onStopAudio,
+    publishIsPlaying,
+    publishQueueLength,
+  ]);
 
   const initPlayer = useCallback(
     async (
@@ -322,11 +328,12 @@ export const useSoundPlayer = (props: {
       sharedAudioContext?: AudioContext,
     ): Promise<boolean> => {
       const generation = ++playerGeneration.current;
+      notifyDrainWaiters();
       playbackActivitySequence.current = 0;
       isInitialized.current = false;
       isProcessing.current = false;
-      setIsPlaying(false);
-      setQueueLength(0);
+      publishIsPlaying(false);
+      publishQueueLength(0);
       chunkBufferQueues.current = {};
       lastQueuedChunk.current = null;
       clipQueue.current = [];
@@ -379,7 +386,6 @@ export const useSoundPlayer = (props: {
         };
         resourcesForInitialization = resources;
         playerResources.current = resources;
-        audioContext.current = initAudioContext;
 
         // An AudioContext created outside a user gesture starts 'suspended'
         // and renders no audio, so every queued clip would pile up silently.
@@ -443,13 +449,14 @@ export const useSoundPlayer = (props: {
         // Use GainNode to adjust volume
         const gain = initAudioContext.createGain();
         resources.gain = gain;
+        gain.gain.setValueAtTime(
+          isAudioMutedRef.current ? 0 : volumeRef.current,
+          initAudioContext.currentTime,
+        );
 
         analyser.fftSize = 2048; // Must be a power of 2
         analyser.connect(gain);
         gain.connect(initAudioContext.destination);
-
-        analyserNode.current = analyser;
-        gainNode.current = gain;
 
         if (props.enableAudioWorklet) {
           const isWorkletLoaded = await loadAudioWorklet(initAudioContext);
@@ -469,7 +476,6 @@ export const useSoundPlayer = (props: {
           );
           resources.worklet = worklet;
           worklet.connect(analyser);
-          workletNode.current = worklet;
 
           worklet.port.onmessage = (e: MessageEvent) => {
             if (
@@ -485,19 +491,19 @@ export const useSoundPlayer = (props: {
                 if (data.index === 0) {
                   onPlayAudio.current(data.id);
                 }
-                setIsPlaying(true);
+                publishIsPlaying(true);
                 break;
 
               case 'ended':
-                setIsPlaying(false);
+                publishIsPlaying(false);
                 onStopAudio.current('stream');
                 break;
 
               case 'queueLength':
                 if (data.length === 0) {
-                  setIsPlaying(false);
+                  publishIsPlaying(false);
                 }
-                setQueueLength(data.length);
+                publishQueueLength(data.length);
                 break;
 
               case 'worklet_closed':
@@ -535,10 +541,8 @@ export const useSoundPlayer = (props: {
               return;
             }
             resources.fftRafId = requestAnimationFrame(pollFft);
-            fftRafId.current = resources.fftRafId;
           };
           resources.fftRafId = requestAnimationFrame(pollFft);
-          fftRafId.current = resources.fftRafId;
 
           isInitialized.current = true;
         } else {
@@ -552,7 +556,19 @@ export const useSoundPlayer = (props: {
         );
       }
     },
-    [disposePlayerResources, props.enableAudioWorklet, fftStore],
+    [
+      disposePlayerResources,
+      props.enableAudioWorklet,
+      fftStore,
+      isAudioMutedRef,
+      notifyDrainWaiters,
+      onError,
+      onPlayAudio,
+      onStopAudio,
+      publishIsPlaying,
+      publishQueueLength,
+      volumeRef,
+    ],
   );
 
   const convertToAudioBuffer = useCallback(
@@ -623,8 +639,9 @@ export const useSoundPlayer = (props: {
   const addToQueue = useCallback(
     async (message: AudioOutputMessage) => {
       const generation = playerGeneration.current;
-      const context = audioContext.current;
-      if (!isInitialized.current || !context) {
+      const resources = playerResources.current;
+      const context = resources?.context;
+      if (!isInitialized.current || !resources || !context) {
         onError.current(
           'Audio player has not been initialized',
           'audio_player_not_initialized',
@@ -637,12 +654,13 @@ export const useSoundPlayer = (props: {
         (pendingAudioTasks.current.get(generation) ?? 0) + 1,
       );
       playbackActivitySequence.current += 1;
+      notifyDrainWaiters();
       try {
         const audioBuffer = await convertToAudioBuffer(message, context);
         if (
           generation !== playerGeneration.current ||
           !isInitialized.current ||
-          audioContext.current !== context
+          playerResources.current !== resources
         ) {
           return;
         }
@@ -669,7 +687,7 @@ export const useSoundPlayer = (props: {
           if (props.enableAudioWorklet) {
             // AudioWorklet mode
             const pcmData = nextAudioBufferToPlay.buffer.getChannelData(0);
-            workletNode.current?.port.postMessage({
+            resources.worklet?.port.postMessage({
               type: 'audio',
               data: pcmData,
               id: nextAudioBufferToPlay.id,
@@ -682,7 +700,7 @@ export const useSoundPlayer = (props: {
               buffer: nextAudioBufferToPlay.buffer,
               index: nextAudioBufferToPlay.index,
             });
-            setQueueLength(clipQueue.current.length);
+            publishQueueLength(clipQueue.current.length);
             // playNextClip will iterate the queue when playback ends, so it
             // only needs to be started when this is the first queued clip.
             if (clipQueue.current.length === 1) {
@@ -703,13 +721,17 @@ export const useSoundPlayer = (props: {
         } else {
           pendingAudioTasks.current.set(generation, remaining);
         }
+        notifyDrainWaiters();
       }
     },
     [
       convertToAudioBuffer,
       getNextAudioBuffers,
+      notifyDrainWaiters,
+      onError,
       playNextClip,
       props.enableAudioWorklet,
+      publishQueueLength,
     ],
   );
 
@@ -741,7 +763,21 @@ export const useSoundPlayer = (props: {
       let stableSince: number | null = null;
       let observedActivitySequence = playbackActivitySequence.current;
 
-      while (Date.now() < deadline) {
+      const waitForPlaybackChange = (waitMs: number) =>
+        new Promise<void>((resolve) => {
+          const timer: { id?: ReturnType<typeof setTimeout> } = {};
+          const finish = () => {
+            drainWaiters.current.delete(finish);
+            if (timer.id !== undefined) {
+              clearTimeout(timer.id);
+            }
+            resolve();
+          };
+          drainWaiters.current.add(finish);
+          timer.id = setTimeout(finish, waitMs);
+        });
+
+      while (Date.now() <= deadline) {
         if (generation !== playerGeneration.current) {
           return false;
         }
@@ -752,7 +788,8 @@ export const useSoundPlayer = (props: {
           stableSince = null;
         }
 
-        if (isDrained()) {
+        const drained = isDrained();
+        if (drained) {
           stableSince ??= now;
           if (now - stableSince >= DRAIN_SETTLE_MS) {
             return true;
@@ -761,12 +798,16 @@ export const useSoundPlayer = (props: {
           stableSince = null;
         }
 
-        const remainingMs = deadline - Date.now();
+        const remainingMs = deadline - now;
         if (remainingMs <= 0) {
           break;
         }
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.min(DRAIN_POLL_INTERVAL_MS, remainingMs)),
+        const settleRemainingMs =
+          drained && stableSince !== null
+            ? DRAIN_SETTLE_MS - (now - stableSince)
+            : remainingMs;
+        await waitForPlaybackChange(
+          Math.max(1, Math.min(remainingMs, settleRemainingMs)),
         );
       }
 
@@ -774,7 +815,7 @@ export const useSoundPlayer = (props: {
       // than leaving the socket teardown hanging on stuck audio.
       return false;
     },
-    [queueLengthRef, isPlayingRef],
+    [],
   );
 
   const stopAll = useCallback(
@@ -786,144 +827,209 @@ export const useSoundPlayer = (props: {
         return;
       }
       const generation = ++playerGeneration.current;
+      notifyDrainWaiters();
       const resourcesToStop = playerResources.current;
       playerResources.current = null;
       const workletToStop = resourcesToStop?.worklet ?? null;
       isInitialized.current = false;
       isProcessing.current = false;
-      setIsPlaying(false);
-      setIsAudioMuted(false);
-      setVolumeState(1.0);
+      publishIsPlaying(false);
+      publishQueueLength(0);
       fftStore.clear();
 
       chunkBufferQueues.current = {};
       lastQueuedChunk.current = null;
+      clipQueue.current = [];
+
+      const failures: string[] = [];
+      const release = (label: string, action: () => void) => {
+        try {
+          action();
+        } catch (error) {
+          const detail =
+            error instanceof Error ? error.message : 'Unknown error';
+          failures.push(`${label}: ${detail}`);
+        }
+      };
 
       if (resourcesToStop) {
-        cancelPlayerFft(resourcesToStop);
+        release('FFT cleanup failed', () => cancelPlayerFft(resourcesToStop));
       }
 
-      try {
-        if (workletToStop) {
-          // AudioWorklet mode
-          let isWorkletClosed = false;
+      if (workletToStop) {
+        // AudioWorklet mode
+        let isWorkletClosed = false;
+        release('Audio worklet close listener setup failed', () => {
           workletToStop.port.onmessage = (e: MessageEvent) => {
             if ((e.data as WorkletMessage).type === 'worklet_closed') {
               isWorkletClosed = true;
             }
           };
+        });
+        release('Audio worklet fade request failed', () => {
           workletToStop.port.postMessage({ type: 'fadeAndClear' });
+        });
+        release('Audio worklet close request failed', () => {
           workletToStop.port.postMessage({ type: 'end' });
+        });
 
-          // We use this loop to make sure the worklet has been closed before we consider
-          // the player to be successfully stopped. The audio worklet asynchronously emits
-          // the 'worklet_closed' message in order to confirm that it has been closed successfully.
-          // If you close the worklet before the fade-out, the user may hear a small audio
-          // artifact when the call ends.
-          // (Reference the `_fadeOutDurationMs` constant in `audio-worklet.js`
-          // to see how long it takes for the worklet to close - the current default is 300ms.)
-          let closed = 0;
-          while (closed < 5) {
-            if (generation !== playerGeneration.current || isWorkletClosed) {
-              break;
-            }
-            closed += 1;
-            await new Promise((resolve) => setTimeout(resolve, 100));
+        // Wait for the worklet's fade-out acknowledgement before disconnecting
+        // its nodes, bounded to 500 ms.
+        let closed = 0;
+        while (closed < 5) {
+          if (generation !== playerGeneration.current || isWorkletClosed) {
+            break;
           }
-        } else {
-          // Non-AudioWorklet mode
-          clipQueue.current = [];
-          setQueueLength(0);
-        }
-      } finally {
-        if (resourcesToStop) {
-          await disposePlayerResources(resourcesToStop);
+          closed += 1;
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
       }
+
+      if (resourcesToStop) {
+        try {
+          await disposePlayerResources(resourcesToStop);
+        } catch (error) {
+          failures.push(
+            error instanceof Error ? error.message : 'Unknown cleanup error',
+          );
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new Error(failures.join('; '));
+      }
     },
-    [cancelPlayerFft, disposePlayerResources, fftStore],
+    [
+      cancelPlayerFft,
+      disposePlayerResources,
+      fftStore,
+      notifyDrainWaiters,
+      publishIsPlaying,
+      publishQueueLength,
+    ],
   );
 
-  const stopAllWithRetries = useCallback(
-    async (maxAttempts = 3, delayMs = 500, expectedContext?: AudioContext) => {
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          await stopAll(expectedContext);
-          return;
-        } catch (e) {
-          if (attempt < maxAttempts) {
-            await new Promise((res) => setTimeout(res, delayMs));
-          } else {
-            const message = e instanceof Error ? e.message : 'Unknown error';
-            onError.current?.(
-              `Failed to stop audio player after ${maxAttempts} attempts: ${message}`,
-              'audio_player_closure_failure',
-            );
-          }
+  const stopAllAndReport = useCallback(
+    (expectedContext?: AudioContext) => {
+      const context = expectedContext ?? playerResources.current?.context;
+      if (context) {
+        const existingStop = playerStopPromises.current.get(context);
+        if (existingStop) {
+          return existingStop;
         }
       }
+
+      const stopping = (async () => {
+        try {
+          await stopAll(expectedContext);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : 'Unknown error';
+          onError.current?.(
+            `Failed to stop audio player: ${message}`,
+            'audio_player_closure_failure',
+          );
+        }
+      })();
+
+      if (context) {
+        playerStopPromises.current.set(context, stopping);
+        const clearStop = () => {
+          if (playerStopPromises.current.get(context) === stopping) {
+            playerStopPromises.current.delete(context);
+          }
+        };
+        void stopping.then(clearStop, clearStop);
+      }
+      return stopping;
     },
-    [stopAll],
+    [onError, stopAll],
   );
 
   const stopAllForContext = useCallback(
     async (context: AudioContext) => {
-      await stopAllWithRetries(3, 500, context);
+      await stopAllAndReport(context);
     },
-    [stopAllWithRetries],
+    [stopAllAndReport],
   );
 
   const clearQueue = useCallback(() => {
+    const resources = playerResources.current;
     if (props.enableAudioWorklet) {
       // AudioWorklet mode
-      workletNode.current?.port.postMessage({
-        type: 'fadeAndClear',
-      });
+      try {
+        resources?.worklet?.port.postMessage({ type: 'fadeAndClear' });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Unknown error';
+        onError.current?.(
+          `Failed to clear audio worklet queue: ${message}`,
+          'audio_player_closure_failure',
+        );
+      }
     } else if (!props.enableAudioWorklet) {
       // Non-AudioWorklet mode
-      if (currentlyPlayingAudioBuffer.current) {
-        currentlyPlayingAudioBuffer.current.stop();
-        currentlyPlayingAudioBuffer.current = null;
-      }
       clipQueue.current = [];
-      setQueueLength(0);
+      if (resources?.source) {
+        const source = resources.source;
+        const handleEnded = source.onended;
+        cancelPlayerFft(resources);
+        try {
+          source.stop();
+        } catch {
+          // The source may already have ended.
+        } finally {
+          if (resources.source === source) {
+            handleEnded?.call(source, new Event('ended'));
+          }
+        }
+      }
     }
 
     isProcessing.current = false;
-    setIsPlaying(false);
+    publishQueueLength(0);
+    publishIsPlaying(false);
     fftStore.clear();
-  }, [props.enableAudioWorklet, fftStore]);
+  }, [
+    cancelPlayerFft,
+    props.enableAudioWorklet,
+    fftStore,
+    onError,
+    publishIsPlaying,
+    publishQueueLength,
+  ]);
 
-  const setVolume = useCallback(
-    (newLevel: number) => {
-      const clampedLevel = Math.max(0, Math.min(newLevel, 1.0));
-      setVolumeState(clampedLevel);
-      if (gainNode.current && audioContext.current && !isAudioMuted) {
-        gainNode.current.gain.setValueAtTime(
-          clampedLevel,
-          audioContext.current.currentTime,
-        );
-      }
-    },
-    [isAudioMuted],
-  );
+  const setVolume = useCallback((newLevel: number) => {
+    const clampedLevel = Math.max(0, Math.min(newLevel, 1.0));
+    volumeRef.current = clampedLevel;
+    setVolumeState(clampedLevel);
+    const resources = playerResources.current;
+    if (resources?.gain && resources.context && !isAudioMutedRef.current) {
+      resources.gain.gain.setValueAtTime(
+        clampedLevel,
+        resources.context.currentTime,
+      );
+    }
+  }, []);
 
   const muteAudio = useCallback(() => {
-    if (gainNode.current && audioContext.current) {
-      gainNode.current.gain.setValueAtTime(0, audioContext.current.currentTime);
-      setIsAudioMuted(true);
+    isAudioMutedRef.current = true;
+    setIsAudioMuted(true);
+    const resources = playerResources.current;
+    if (resources?.gain && resources.context) {
+      resources.gain.gain.setValueAtTime(0, resources.context.currentTime);
     }
   }, []);
 
   const unmuteAudio = useCallback(() => {
-    if (gainNode.current && audioContext.current) {
-      gainNode.current.gain.setValueAtTime(
-        volume,
-        audioContext.current.currentTime,
+    isAudioMutedRef.current = false;
+    setIsAudioMuted(false);
+    const resources = playerResources.current;
+    if (resources?.gain && resources.context) {
+      resources.gain.gain.setValueAtTime(
+        volumeRef.current,
+        resources.context.currentTime,
       );
-      setIsAudioMuted(false);
     }
-  }, [volume]);
+  }, []);
 
   return useMemo(
     () => ({
@@ -934,7 +1040,7 @@ export const useSoundPlayer = (props: {
       isAudioMuted,
       muteAudio,
       unmuteAudio,
-      stopAll: stopAllWithRetries,
+      stopAll: stopAllAndReport,
       stopAllForContext,
       waitForQueueToDrain,
       clearQueue,
@@ -950,7 +1056,7 @@ export const useSoundPlayer = (props: {
       isAudioMuted,
       muteAudio,
       unmuteAudio,
-      stopAllWithRetries,
+      stopAllAndReport,
       stopAllForContext,
       waitForQueueToDrain,
       clearQueue,

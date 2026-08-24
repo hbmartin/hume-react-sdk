@@ -79,6 +79,7 @@ describe('useSoundPlayer', () => {
   let closeAudioContext: Mock;
   let disconnectAnalyserNode: Mock;
   let disconnectGainNode: Mock;
+  let gainSetters: Mock[];
 
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
@@ -88,6 +89,7 @@ describe('useSoundPlayer', () => {
     closeAudioContext = vi.fn().mockResolvedValue(undefined);
     disconnectAnalyserNode = vi.fn();
     disconnectGainNode = vi.fn();
+    gainSetters = [];
     decodeAudioData = vi.fn((buffer: ArrayBuffer) =>
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       Promise.resolve(createFakeAudioBuffer(new Uint8Array(buffer)[0]!)),
@@ -113,11 +115,15 @@ describe('useSoundPlayer', () => {
         disconnect: disconnectAnalyserNode,
         getByteFrequencyData: vi.fn(),
       }),
-      createGain: () => ({
-        connect: vi.fn(),
-        disconnect: disconnectGainNode,
-        gain: { setValueAtTime: vi.fn() },
-      }),
+      createGain: () => {
+        const setValueAtTime = vi.fn();
+        gainSetters.push(setValueAtTime);
+        return {
+          connect: vi.fn(),
+          disconnect: disconnectGainNode,
+          gain: { setValueAtTime },
+        };
+      },
       createBufferSource,
       destination: {},
       decodeAudioData,
@@ -127,6 +133,7 @@ describe('useSoundPlayer', () => {
       },
       resume: resumeAudioContext,
       sampleRate: 48000,
+      currentTime: 0,
     }));
 
     globalThis.AudioWorkletNode = vi.fn().mockImplementation(() => ({
@@ -625,6 +632,40 @@ describe('useSoundPlayer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it('joins concurrent cleanup requests for the same context', async () => {
+    const context = new AudioContext();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+
+    let firstStop = Promise.resolve();
+    let secondStop = Promise.resolve();
+    let secondSettled = false;
+    act(() => {
+      firstStop = result.current.stopAllForContext(context);
+      secondStop = result.current.stopAllForContext(context).then(() => {
+        secondSettled = true;
+      });
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+    expect(fakePort.postMessage).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(() => Promise.all([firstStop, secondStop]));
+    expect(secondSettled).toBe(true);
+  });
+
   it('plays chunks in correct order when received in order', async () => {
     const onError = vi.fn();
     const onPlayAudio = vi.fn();
@@ -989,6 +1030,124 @@ describe('useSoundPlayer', () => {
     expect(onStopAudio).toHaveBeenCalledWith('new-session');
   });
 
+  it('finishes non-worklet cleanup when clearQueue stops the active source', async () => {
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
+    const cancelAnimationFrame = vi
+      .spyOn(globalThis, 'cancelAnimationFrame')
+      .mockImplementation(() => {});
+    const onStopAudio = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio,
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    await act(() =>
+      result.current.addToQueue({
+        id: 'interrupted',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+    const source = bufferSources[0];
+
+    act(() => result.current.clearQueue());
+    act(() => source?.onended?.());
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
+    expect(onStopAudio).toHaveBeenCalledWith('interrupted');
+  });
+
+  it('preserves volume and mute state across stop and reinitialization', async () => {
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    act(() => result.current.setVolume(0.25));
+    await act(() => result.current.initPlayer());
+    expect(gainSetters[0]).toHaveBeenLastCalledWith(0.25, 0);
+
+    act(() => result.current.muteAudio());
+    expect(result.current.isAudioMuted).toBe(true);
+    await act(() => result.current.stopAll());
+    expect(result.current.volume).toBe(0.25);
+    expect(result.current.isAudioMuted).toBe(true);
+
+    await act(() => result.current.initPlayer());
+    expect(gainSetters[1]).toHaveBeenLastCalledWith(0, 0);
+  });
+
+  it('resets the public queue length when stopping a worklet player', async () => {
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'queueLength', length: 3 },
+      } as MessageEvent);
+    });
+    expect(result.current.queueLength).toBe(3);
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAll();
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(() => stopping);
+
+    expect(result.current.queueLength).toBe(0);
+  });
+
+  it('reports the first teardown failure instead of retrying a detached player', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    fakePort.postMessage.mockImplementationOnce(() => {
+      throw new Error('worklet post failed');
+    });
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAll();
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(() => stopping);
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('worklet post failed'),
+      'audio_player_closure_failure',
+    );
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+  });
+
   it('does not publish stale nodes after a pending sink selection', async () => {
     const deferredSink = createDeferred<void>();
     const firstCreateAnalyser = vi.fn();
@@ -1191,6 +1350,22 @@ describe('useSoundPlayer', () => {
         await addToQueue;
       });
       await expect(pendingDrain).resolves.toBe(true);
+    });
+
+    it('waits on playback notifications instead of polling while busy', async () => {
+      vi.useFakeTimers();
+      const requestAnimationFrame = vi
+        .spyOn(globalThis, 'requestAnimationFrame')
+        .mockImplementation(() => 1);
+      const { result } = renderPlayer(true);
+      await act(() => result.current.initPlayer());
+      postWorkletMessage({ type: 'queueLength', length: 2 });
+
+      const pendingDrain = result.current.waitForQueueToDrain(5_000);
+      await act(() => vi.advanceTimersToNextTimerAsync());
+      await expect(pendingDrain).resolves.toBe(false);
+      requestAnimationFrame.mockRestore();
+      vi.useRealTimers();
     });
 
     it.each([true, false])(
