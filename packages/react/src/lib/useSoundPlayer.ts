@@ -1028,6 +1028,7 @@ export const useSoundPlayer = (props: {
   const setOutputDevice = useCallback(async (deviceId: string | null) => {
     const resources = playerResources.current;
     const context = resources?.context;
+    const generation = playerGeneration.current;
     if (!resources || !context || !isInitialized.current) {
       throw new Error('The audio player is not initialized.');
     }
@@ -1047,6 +1048,16 @@ export const useSoundPlayer = (props: {
         setSinkId: (sinkId: string) => Promise<void>;
       }
     ).setSinkId(deviceId ?? '');
+    if (
+      generation !== playerGeneration.current ||
+      playerResources.current !== resources ||
+      !isInitialized.current
+    ) {
+      throw new DOMException(
+        'The audio player changed while selecting an output device.',
+        'AbortError',
+      );
+    }
   }, []);
 
   const muteAudio = useCallback(() => {

@@ -50,6 +50,20 @@ const config = {
   auth: { type: 'accessToken' as const, value: 'test-token' },
 };
 
+const createDeferred = <T>() => {
+  let resolve = (_value: T): void => {
+    throw new Error('Deferred promise was not initialized.');
+  };
+  let reject = (_reason?: unknown): void => {
+    throw new Error('Deferred promise was not initialized.');
+  };
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+};
+
 describe('useVoiceClient', () => {
   beforeEach(() => {
     humeMocks.connect.mockReset();
@@ -429,6 +443,58 @@ describe('useVoiceClient', () => {
     );
     expect(socket.sendToolResponseMessage).not.toHaveBeenCalled();
     expect(socket.sendToolErrorMessage).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledOnce();
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'tool_call' }),
+    );
+  });
+
+  it('ignores a tool handler result that settles after disconnect', async () => {
+    const socket = createSocket();
+    const response = createDeferred<Awaited<ReturnType<ToolCallHandler>>>();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const onToolCallError = vi.fn();
+    const onToolCall = vi.fn<ToolCallHandler>(() => response.promise);
+    const { result } = renderHook(() =>
+      useVoiceClient({ onMessage, onToolCall, onToolCallError }),
+    );
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+    onMessage.mockClear();
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'late-handler',
+        name: 'late',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+    await waitFor(() => expect(onToolCall).toHaveBeenCalledOnce());
+
+    act(() => result.current.disconnect());
+    await act(async () => {
+      response.resolve({
+        type: 'tool_response',
+        toolCallId: 'late-handler',
+        content: 'late result',
+      });
+      await response.promise;
+    });
+
+    expect(socket.sendToolResponseMessage).not.toHaveBeenCalled();
+    expect(socket.sendToolErrorMessage).not.toHaveBeenCalled();
+    expect(onToolCallError).not.toHaveBeenCalled();
     expect(onMessage).toHaveBeenCalledOnce();
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool_call' }),

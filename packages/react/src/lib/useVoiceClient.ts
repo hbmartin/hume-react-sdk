@@ -174,6 +174,10 @@ export const useVoiceClient = (props: {
           socket,
         };
         activeConnection.current = connection;
+        const isConnectionActive = () =>
+          !signal.aborted &&
+          activeConnection.current === connection &&
+          client.current === socket;
 
         const abortHandler = () => {
           connection.consumerInitiated = true;
@@ -273,6 +277,9 @@ export const useVoiceClient = (props: {
                     ),
                   )
                   .then((response) => {
+                    if (!isConnectionActive()) {
+                      return;
+                    }
                     try {
                       if (response.type === 'tool_response') {
                         socket.sendToolResponseMessage(response);
@@ -285,6 +292,9 @@ export const useVoiceClient = (props: {
                         return;
                       }
                     } catch (error) {
+                      if (!isConnectionActive()) {
+                        return;
+                      }
                       const normalizedError =
                         error instanceof Error
                           ? error
@@ -301,6 +311,9 @@ export const useVoiceClient = (props: {
                     });
                   })
                   .catch((error: unknown) => {
+                    if (!isConnectionActive()) {
+                      return;
+                    }
                     const normalizedError =
                       error instanceof Error ? error : new Error(String(error));
                     onToolCallError.current?.(

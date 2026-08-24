@@ -18,6 +18,17 @@ import {
   SelectValue,
 } from '@/components/Select';
 
+const BROWSER_DEFAULT_DEVICE_VALUE = 'browser-default';
+const DEVICE_VALUE_PREFIX = 'device:';
+const toDeviceValue = (deviceId: string | null) =>
+  deviceId === null
+    ? BROWSER_DEFAULT_DEVICE_VALUE
+    : `${DEVICE_VALUE_PREFIX}${deviceId}`;
+const fromDeviceValue = (value: string) =>
+  value === BROWSER_DEFAULT_DEVICE_VALUE
+    ? null
+    : value.slice(DEVICE_VALUE_PREFIX.length);
+
 export const ExampleComponent = ({
   accessToken,
   configId,
@@ -33,6 +44,10 @@ export const ExampleComponent = ({
   const [deviceSwitchError, setDeviceSwitchError] = useState<Error | null>(
     null,
   );
+  const [appliedMicrophoneId, setAppliedMicrophoneId] = useState<string | null>(
+    null,
+  );
+  const [appliedSpeakerId, setAppliedSpeakerId] = useState<string | null>(null);
 
   const {
     inputDevices: audioInputDevices,
@@ -54,9 +69,13 @@ export const ExampleComponent = ({
     (device) => device.deviceId !== '',
   );
   const displayedDeviceError = permissionError ?? deviceError;
+  const displayedMicrophoneId =
+    status.value === 'connected' ? appliedMicrophoneId : selectedMicrophoneId;
+  const displayedSpeakerId =
+    status.value === 'connected' ? appliedSpeakerId : selectedSpeakerId;
 
   const selectInputDevice = async (value: string) => {
-    const deviceId = value === 'default' ? null : value;
+    const deviceId = fromDeviceValue(value);
     if (status.value !== 'connected') {
       setSelectedMicrophoneId(deviceId);
       return;
@@ -67,6 +86,7 @@ export const ExampleComponent = ({
     try {
       await setInputDevice(deviceId);
       setSelectedMicrophoneId(deviceId);
+      setAppliedMicrophoneId(deviceId);
     } catch (error) {
       setDeviceSwitchError(
         isAudioDeviceSwitchError(error)
@@ -79,7 +99,7 @@ export const ExampleComponent = ({
   };
 
   const selectOutputDevice = async (value: string) => {
-    const deviceId = value === 'default' ? null : value;
+    const deviceId = fromDeviceValue(value);
     if (status.value !== 'connected') {
       setSelectedSpeakerId(deviceId);
       return;
@@ -90,6 +110,7 @@ export const ExampleComponent = ({
     try {
       await setOutputDevice(deviceId);
       setSelectedSpeakerId(deviceId);
+      setAppliedSpeakerId(deviceId);
     } catch (error) {
       setDeviceSwitchError(
         isAudioDeviceSwitchError(error)
@@ -128,7 +149,7 @@ export const ExampleComponent = ({
         <div className="text-sm font-medium">Microphone</div>
         <Select
           disabled={isSwitchingInput}
-          value={selectedMicrophoneId ?? 'default'}
+          value={toDeviceValue(displayedMicrophoneId)}
           onValueChange={(value) => void selectInputDevice(value)}
         >
           <SelectTrigger className="w-full">
@@ -136,7 +157,7 @@ export const ExampleComponent = ({
           </SelectTrigger>
           <SelectContent className="max-h-60 overflow-y-auto rounded-md border bg-white shadow-lg">
             <SelectItem
-              value="default"
+              value={BROWSER_DEFAULT_DEVICE_VALUE}
               className="cursor-pointer px-8 py-2 hover:bg-gray-100"
             >
               Browser default
@@ -149,7 +170,7 @@ export const ExampleComponent = ({
               selectableInputDevices.map((device) => (
                 <SelectItem
                   key={device.deviceId}
-                  value={device.deviceId}
+                  value={toDeviceValue(device.deviceId)}
                   className="cursor-pointer px-8 py-2 hover:bg-gray-100"
                 >
                   {device.label}
@@ -164,7 +185,7 @@ export const ExampleComponent = ({
         <div className="text-sm font-medium">Speaker</div>
         <Select
           disabled={isSwitchingOutput}
-          value={selectedSpeakerId ?? 'default'}
+          value={toDeviceValue(displayedSpeakerId)}
           onValueChange={(value) => void selectOutputDevice(value)}
         >
           <SelectTrigger className="w-full">
@@ -172,7 +193,7 @@ export const ExampleComponent = ({
           </SelectTrigger>
           <SelectContent className="max-h-60 overflow-y-auto rounded-md border bg-white shadow-lg">
             <SelectItem
-              value="default"
+              value={BROWSER_DEFAULT_DEVICE_VALUE}
               className="cursor-pointer px-8 py-2 hover:bg-gray-100"
             >
               Browser default
@@ -185,7 +206,7 @@ export const ExampleComponent = ({
               selectableOutputDevices.map((device) => (
                 <SelectItem
                   key={device.deviceId}
-                  value={device.deviceId}
+                  value={toDeviceValue(device.deviceId)}
                   className="cursor-pointer px-8 py-2 hover:bg-gray-100"
                 >
                   {device.label}
@@ -230,6 +251,8 @@ export const ExampleComponent = ({
     <button
       className="max-w-sm rounded border border-neutral-500 p-2"
       onClick={() => {
+        setAppliedMicrophoneId(selectedMicrophoneId);
+        setAppliedSpeakerId(selectedSpeakerId);
         void connect(connectArgs);
       }}
     >

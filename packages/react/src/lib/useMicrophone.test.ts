@@ -392,6 +392,61 @@ describe('useMicrophone', () => {
     expect(candidateTrack.enabled).toBe(false);
   });
 
+  it('queues stop behind an in-progress replacement', async () => {
+    const oldTrackStop = vi.fn();
+    const candidateTrackStop = vi.fn();
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(
+      createStream([
+        { enabled: true, stop: oldTrackStop } as unknown as MediaStreamTrack,
+      ]),
+      context,
+    );
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) {
+      throw new Error('Expected the original MediaRecorder.');
+    }
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    let stopping = Promise.resolve();
+    let stopSettled = false;
+    act(() => {
+      replacement = result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: candidateTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      );
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+
+    act(() => {
+      stopping = result.current.stop().then(() => {
+        stopSettled = true;
+      });
+    });
+    await act(() => Promise.resolve());
+
+    expect(stopSettled).toBe(false);
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await Promise.all([replacement, stopping]);
+    });
+
+    expect(oldTrackStop).toHaveBeenCalledOnce();
+    expect(recorders[1]?.stop).toHaveBeenCalledOnce();
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(stopSettled).toBe(true);
+  });
+
   it('keeps the original capture when candidate recorder startup fails', async () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM), (index) => {
       if (index === 1) {
@@ -529,14 +584,14 @@ describe('useMicrophone', () => {
     expect(contextClose).toHaveBeenCalledOnce();
   });
 
-  it('releases the stream and owned audio context when recorder cleanup throws', () => {
+  it('releases the stream and owned audio context when recorder cleanup throws', async () => {
     const { contextClose, recorderStop, stream, trackStop } =
       installInactiveRecorderScenario();
     const { result, unmount } = renderMicrophone();
     result.current.start(stream);
 
     expect(() => unmount()).not.toThrow();
-    expect(recorderStop).toHaveBeenCalledOnce();
+    await waitFor(() => expect(recorderStop).toHaveBeenCalledOnce());
     expect(trackStop).toHaveBeenCalledOnce();
     expect(contextClose).toHaveBeenCalledOnce();
   });
