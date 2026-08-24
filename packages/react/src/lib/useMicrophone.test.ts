@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { MimeType } from 'hume';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +11,7 @@ type RecorderInstance = {
   stop: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
+  emit: (type: string, event: Event) => void;
 };
 
 /**
@@ -23,13 +24,40 @@ const stubMediaRecorder = (isTypeSupported?: (type: string) => boolean) => {
   const instances: RecorderInstance[] = [];
 
   class MediaRecorderStub {
+    private listeners = new Map<
+      string,
+      Set<EventListenerOrEventListenerObject>
+    >();
+
     start = vi.fn();
 
-    stop = vi.fn();
+    stop = vi.fn(() => {
+      this.emit('stop', new Event('stop'));
+    });
 
-    addEventListener = vi.fn();
+    emit = (type: string, event: Event) => {
+      this.listeners.get(type)?.forEach((listener) => {
+        if (typeof listener === 'function') {
+          listener.call(this as unknown as EventTarget, event);
+        } else {
+          listener.handleEvent(event);
+        }
+      });
+    };
 
-    removeEventListener = vi.fn();
+    addEventListener = vi.fn(
+      (type: string, listener: EventListenerOrEventListenerObject) => {
+        const listeners = this.listeners.get(type) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(type, listeners);
+      },
+    );
+
+    removeEventListener = vi.fn(
+      (type: string, listener: EventListenerOrEventListenerObject) => {
+        this.listeners.get(type)?.delete(listener);
+      },
+    );
 
     constructor(
       public stream: MediaStream,
@@ -71,6 +99,20 @@ const createAudioContext = () =>
     close: vi.fn(() => Promise.resolve()),
   }) as unknown as AudioContext;
 
+const stubOwnedAudioContext = (
+  contextClose: () => Promise<void> = vi.fn().mockResolvedValue(undefined),
+) => {
+  const context = {
+    ...createAudioContext(),
+    close: contextClose,
+  } as AudioContext;
+  vi.stubGlobal(
+    'AudioContext',
+    vi.fn(() => context),
+  );
+  return { context, contextClose };
+};
+
 const createStream = (tracks: MediaStreamTrack[] = []) =>
   ({ getTracks: () => tracks }) as unknown as MediaStream;
 
@@ -107,14 +149,7 @@ const installInactiveRecorderScenario = () => {
   vi.stubGlobal('MediaRecorder', InactiveMediaRecorder);
 
   const contextClose = vi.fn().mockResolvedValue(undefined);
-  const context = {
-    ...createAudioContext(),
-    close: contextClose,
-  } as AudioContext;
-  vi.stubGlobal(
-    'AudioContext',
-    vi.fn(() => context),
-  );
+  stubOwnedAudioContext(contextClose);
 
   const trackStop = vi.fn();
   const stream = createStream([
@@ -186,13 +221,47 @@ describe('useMicrophone', () => {
 
     await act(() => result.current.stop());
 
-    expect(recorders[0]?.removeEventListener).toHaveBeenCalledOnce();
+    expect(recorders[0]?.removeEventListener).toHaveBeenCalledWith(
+      'dataavailable',
+      expect.any(Function),
+    );
     expect(recorders[0]?.stop).toHaveBeenCalledOnce();
     expect(firstTrackStop).toHaveBeenCalledOnce();
     expect(secondTrackStop).not.toHaveBeenCalled();
   });
 
-  it('starts unmuted after mute was requested before a stream existed', () => {
+  it('captures the final dataavailable blob before removing its listener', async () => {
+    const finalBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const finalBlob = {
+      arrayBuffer: vi.fn().mockResolvedValue(finalBuffer),
+    } as unknown as Blob;
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const { result, onAudioCaptured } = renderMicrophone();
+    result.current.start(createStream(), createAudioContext());
+    const recorder = recorders[0];
+    if (!recorder) {
+      throw new Error('Expected a MediaRecorder instance.');
+    }
+    recorder.stop.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        recorder.emit('dataavailable', {
+          data: finalBlob,
+        } as unknown as BlobEvent);
+        recorder.emit('stop', new Event('stop'));
+      });
+    });
+
+    await act(() => result.current.stop());
+    await waitFor(() =>
+      expect(onAudioCaptured).toHaveBeenCalledWith(finalBuffer),
+    );
+    expect(recorder.removeEventListener).toHaveBeenCalledWith(
+      'dataavailable',
+      expect.any(Function),
+    );
+  });
+
+  it('preserves a mute requested before a stream existed', () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const track = {
       enabled: true,
@@ -207,8 +276,8 @@ describe('useMicrophone', () => {
       result.current.start(createStream([track]), createAudioContext()),
     );
 
-    expect(result.current.isMuted).toBe(false);
-    expect(track.enabled).toBe(true);
+    expect(result.current.isMuted).toBe(true);
+    expect(track.enabled).toBe(false);
   });
 
   it('invokes the public recording lifecycle callbacks', async () => {
@@ -355,18 +424,12 @@ describe('useMicrophone', () => {
 
   it('attempts every track and reports an explicit-stop cleanup failure', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
-    const firstTrackStop = vi.fn(() => {
+    const firstTrackStop = vi.fn().mockImplementationOnce(() => {
       throw new Error('first track failed');
     });
     const secondTrackStop = vi.fn();
     const contextClose = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal(
-      'AudioContext',
-      vi.fn(() => ({
-        ...createAudioContext(),
-        close: contextClose,
-      })),
-    );
+    stubOwnedAudioContext(contextClose);
     const stream = createStream([
       { enabled: true, stop: firstTrackStop } as unknown as MediaStreamTrack,
       { enabled: true, stop: secondTrackStop } as unknown as MediaStreamTrack,
@@ -393,13 +456,7 @@ describe('useMicrophone', () => {
     });
     const secondTrackStop = vi.fn();
     const contextClose = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal(
-      'AudioContext',
-      vi.fn(() => ({
-        ...createAudioContext(),
-        close: contextClose,
-      })),
-    );
+    stubOwnedAudioContext(contextClose);
     const consoleError = vi
       .spyOn(console, 'error')
       .mockImplementation(() => {});
@@ -423,18 +480,138 @@ describe('useMicrophone', () => {
     consoleError.mockRestore();
   });
 
+  it('retains a stream for a later cleanup attempt when track enumeration fails', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const trackStop = vi.fn();
+    const getTracks = vi
+      .fn<() => MediaStreamTrack[]>()
+      .mockImplementationOnce(() => {
+        throw new Error('enumeration failed');
+      })
+      .mockReturnValue([
+        { enabled: true, stop: trackStop } as unknown as MediaStreamTrack,
+      ]);
+    const stream = { getTracks } as unknown as MediaStream;
+    const { result, onError } = renderMicrophone();
+    result.current.start(stream, createAudioContext());
+
+    await act(() => result.current.stop());
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Media track enumeration failed'),
+      'mic_closure_failure',
+    );
+    expect(trackStop).not.toHaveBeenCalled();
+    expect(() =>
+      result.current.start(createStream(), createAudioContext()),
+    ).toThrow(
+      'The microphone is already recording. Stop it before starting again.',
+    );
+
+    await act(() => result.current.stop());
+    expect(trackStop).toHaveBeenCalledOnce();
+  });
+
+  it('reports recorder stop failures and retains the recorder for retry', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const { result, onError } = renderMicrophone();
+    result.current.start(createStream(), createAudioContext());
+    recorders[0]?.stop.mockImplementationOnce(() => {
+      throw new Error('recorder stop failed');
+    });
+
+    await act(() => result.current.stop());
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Recorder cleanup failed'),
+      'mic_closure_failure',
+    );
+    expect(() =>
+      result.current.start(createStream(), createAudioContext()),
+    ).toThrow(
+      'The microphone is already recording. Stop it before starting again.',
+    );
+
+    await act(() => result.current.stop());
+    expect(recorders[0]?.stop).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the published microphone FFT snapshot when stopped', async () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    let nextRafId = 1;
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        const id = nextRafId++;
+        rafCallbacks.set(id, callback);
+        return id;
+      }),
+    );
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn((id: number) => rafCallbacks.delete(id)),
+    );
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const context = {
+      ...createAudioContext(),
+      createAnalyser: vi.fn(() => ({
+        fftSize: 0,
+        frequencyBinCount: 1024,
+        getByteFrequencyData: vi.fn((data: Uint8Array) => data.fill(255)),
+      })),
+    } as unknown as AudioContext;
+    const { result } = renderMicrophone();
+
+    result.current.start(createStream(), context);
+    act(() => rafCallbacks.get(1)?.(0));
+    expect(
+      result.current.fftStore.getSnapshot().some((value) => value > 0),
+    ).toBe(true);
+
+    await act(() => result.current.stop());
+    expect(
+      result.current.fftStore.getSnapshot().every((value) => value === 0),
+    ).toBe(true);
+  });
+
+  it('reports cleanup failures while rolling back a failed start', async () => {
+    class FailingMediaRecorder {
+      static isTypeSupported = vi.fn(() => true);
+
+      constructor() {
+        throw new Error('recorder construction failed');
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FailingMediaRecorder);
+    const trackStop = vi.fn().mockImplementationOnce(() => {
+      throw new Error('rollback track failed');
+    });
+    const stream = createStream([
+      { enabled: true, stop: trackStop } as unknown as MediaStreamTrack,
+    ]);
+    const { result, onError } = renderMicrophone();
+
+    expect(() => result.current.start(stream, createAudioContext())).toThrow(
+      'recorder construction failed',
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('rollback track failed'),
+      'mic_closure_failure',
+    );
+    await act(() => result.current.stop());
+    expect(trackStop).toHaveBeenCalledTimes(2);
+  });
+
   it('bounds an owned audio context that never closes', async () => {
     vi.useFakeTimers();
     stubMediaRecorder(supports(MimeType.WEBM));
     const contextClose = vi.fn(() => new Promise<void>(() => {}));
-    vi.stubGlobal(
-      'AudioContext',
-      vi.fn(() => ({
-        ...createAudioContext(),
-        close: contextClose,
-      })),
-    );
-    const { result } = renderMicrophone();
+    stubOwnedAudioContext(contextClose);
+    const { result, onError } = renderMicrophone();
     result.current.start(createStream());
 
     let stopped = false;
@@ -449,5 +626,9 @@ describe('useMicrophone', () => {
     await act(() => vi.advanceTimersByTimeAsync(1));
     await stopping;
     expect(stopped).toBe(true);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Audio context close timed out.'),
+      'mic_closure_failure',
+    );
   });
 });

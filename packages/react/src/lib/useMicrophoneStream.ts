@@ -51,9 +51,12 @@ export const useMicrophoneStream = () => {
     [],
   );
 
-  const stopStream = useCallback(() => {
-    if (currentStream.current) {
-      currentStream.current.getTracks().forEach((track) => track.stop());
+  const stopStream = useCallback((stream = currentStream.current) => {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      if (currentStream.current !== stream) {
+        return;
+      }
       currentStream.current = null;
     }
   }, []);

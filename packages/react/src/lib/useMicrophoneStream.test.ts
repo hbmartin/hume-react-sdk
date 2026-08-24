@@ -42,4 +42,24 @@ describe('useGetMicrophoneStream', () => {
       }),
     );
   });
+
+  it('can stop an exact stream without clearing a newer current stream', async () => {
+    const currentTrackStop = vi.fn();
+    const staleTrackStop = vi.fn();
+    const currentStream = {
+      getTracks: () => [{ stop: currentTrackStop }],
+    } as unknown as MediaStream;
+    const staleStream = {
+      getTracks: () => [{ stop: staleTrackStop }],
+    } as unknown as MediaStream;
+    getUserMediaMock.mockResolvedValueOnce(currentStream);
+    const { result } = renderHook(() => useMicrophoneStream());
+    await result.current.getStream({});
+
+    result.current.stopStream(staleStream);
+    result.current.stopStream();
+
+    expect(staleTrackStop).toHaveBeenCalledOnce();
+    expect(currentTrackStop).toHaveBeenCalledOnce();
+  });
 });

@@ -28,6 +28,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const onStartRecordingRef = useLatestRef(props.onStartRecording);
   const onStopRecordingRef = useLatestRef(props.onStopRecording);
   const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false);
   const currentStream = useRef<MediaStream | null>(null);
 
   const fftStore = useRef(new FftStore()).current;
@@ -50,11 +51,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
     const animationId = fftAnimationId.current;
     fftAnimationId.current = null;
     if (animationId !== null) {
-      try {
-        cancelAnimationFrame(animationId);
-      } catch {
-        // The animation frame may already have been canceled by the browser.
-      }
+      cancelAnimationFrame(animationId);
     }
 
     const source = analyzerSource.current;
@@ -122,83 +119,141 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [fftStore],
   );
 
-  const disposeMicrophoneResources = useCallback(
-    async (resetMutedState: boolean) => {
-      const recorderToStop = recorder.current;
-      const wasRecording = recordingStarted.current;
-      const streamToStop = currentStream.current;
-      const contextToClose = audioContext.current;
-      const shouldCloseContext = ownsAudioContext.current;
+  const disposeMicrophoneResources = useCallback(async () => {
+    const recorderToStop = recorder.current;
+    const wasRecording = recordingStarted.current;
+    const streamToStop = currentStream.current;
+    const contextToClose = audioContext.current;
+    const shouldCloseContext = ownsAudioContext.current;
+    const failures: string[] = [];
 
-      // Relinquish every resource before running user or browser code so a
-      // concurrent start cannot be cleared or closed by this teardown.
-      recorder.current = null;
-      recordingStarted.current = false;
-      currentStream.current = null;
-      audioContext.current = null;
-      ownsAudioContext.current = false;
+    // Enumerate tracks before relinquishing the stream. getTracks() is
+    // synchronous, so this cannot race a new start, and retaining the stream
+    // leaves a handle available if a nonstandard implementation throws.
+    let tracksToStop: MediaStreamTrack[] = [];
+    let tracksEnumerated = true;
+    if (streamToStop) {
+      try {
+        tracksToStop = streamToStop.getTracks();
+      } catch (error) {
+        tracksEnumerated = false;
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
+        failures.push(`Media track enumeration failed: ${message}`);
+      }
+    }
 
-      const failures: string[] = [];
-      const release = (label: string, action: () => void) => {
+    // Detach resources that have durable local handles before awaiting. The
+    // stream remains attached until all of its tracks stop successfully.
+    recorder.current = null;
+    recordingStarted.current = false;
+    audioContext.current = null;
+    ownsAudioContext.current = false;
+
+    stopFftAnalyzer();
+    fftStore.clear();
+
+    let recorderStopped = true;
+    if (recorderToStop) {
+      const removeDataHandler = () => {
         try {
-          action();
-        } catch (e) {
-          const message = e instanceof Error ? e.message : 'Unknown error';
-          failures.push(`${label}: ${message}`);
+          recorderToStop.removeEventListener('dataavailable', dataHandler);
+        } catch (error) {
+          console.error('Recorder listener cleanup failed.', error);
         }
       };
-
-      release('FFT analyzer cleanup failed', stopFftAnalyzer);
-
-      if (recorderToStop) {
-        release('Recorder listener cleanup failed', () => {
-          recorderToStop.removeEventListener('dataavailable', dataHandler);
-        });
+      const handleRecorderStop = () => {
+        removeDataHandler();
         try {
-          recorderToStop.stop();
-        } catch {
-          // The recorder may already be inactive; continue releasing resources.
+          recorderToStop.removeEventListener('stop', handleRecorderStop);
+        } catch (error) {
+          console.error('Recorder listener cleanup failed.', error);
+        }
+      };
+      let stopListenerAttached = false;
+      try {
+        recorderToStop.addEventListener('stop', handleRecorderStop);
+        stopListenerAttached = true;
+      } catch (error) {
+        console.error('Recorder stop listener setup failed.', error);
+      }
+      try {
+        recorderToStop.stop();
+      } catch (error) {
+        const errorName =
+          typeof error === 'object' && error !== null && 'name' in error
+            ? error.name
+            : null;
+        if (stopListenerAttached) {
+          try {
+            recorderToStop.removeEventListener('stop', handleRecorderStop);
+          } catch (listenerError) {
+            console.error('Recorder listener cleanup failed.', listenerError);
+          }
+        }
+        if (errorName !== 'InvalidStateError') {
+          recorderStopped = false;
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+          failures.push(`Recorder cleanup failed: ${message}`);
+        } else {
+          removeDataHandler();
         }
       }
+    }
+    if (!recorderStopped) {
+      recorder.current = recorderToStop;
+      recordingStarted.current = wasRecording;
+    }
 
-      if (streamToStop) {
-        let tracks: MediaStreamTrack[] = [];
-        release('Media track enumeration failed', () => {
-          tracks = streamToStop.getTracks();
-        });
-        tracks.forEach((track, index) => {
-          release(`Media track ${index + 1} cleanup failed`, () => {
-            track.stop();
-          });
-        });
-      }
-
-      if (resetMutedState) {
-        setIsMuted(false);
-      }
-
-      if (wasRecording) {
+    let tracksStopped = tracksEnumerated;
+    if (streamToStop && tracksEnumerated) {
+      tracksToStop.forEach((track, index) => {
         try {
-          onStopRecordingRef.current?.();
-        } catch (callbackError) {
-          console.error('onStopRecording callback failed.', callbackError);
+          track.stop();
+        } catch (error) {
+          tracksStopped = false;
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+          failures.push(`Media track ${index + 1} cleanup failed: ${message}`);
         }
-      }
+      });
+    }
+    if (currentStream.current === streamToStop && tracksStopped) {
+      currentStream.current = null;
+    }
 
-      if (contextToClose && shouldCloseContext) {
-        try {
-          await closeAudioContextWithTimeout(contextToClose);
-        } catch (e) {
-          const message = e instanceof Error ? e.message : 'Unknown error';
-          failures.push(`Audio context cleanup failed: ${message}`);
-        }
-      }
+    isMutedRef.current = false;
+    setIsMuted(false);
 
-      if (failures.length > 0) {
-        throw new Error(failures.join('; '));
+    if (wasRecording && recorderStopped) {
+      try {
+        onStopRecordingRef.current?.();
+      } catch (callbackError) {
+        console.error('onStopRecording callback failed.', callbackError);
       }
+    }
+
+    if (contextToClose && shouldCloseContext) {
+      const closeResult = await closeAudioContextWithTimeout(contextToClose);
+      if (!closeResult.success) {
+        failures.push(
+          `Audio context cleanup failed: ${closeResult.error.message}`,
+        );
+      }
+    }
+
+    if (failures.length > 0) {
+      throw new Error(failures.join('; '));
+    }
+  }, [dataHandler, fftStore, onStopRecordingRef, stopFftAnalyzer]);
+
+  const reportClosureFailure = useCallback(
+    (message: string, error: unknown) => {
+      const detail = error instanceof Error ? error.message : 'Unknown error';
+      onErrorRef.current?.(`${message}: ${detail}`, 'mic_closure_failure');
     },
-    [dataHandler, onStopRecordingRef, stopFftAnalyzer],
+    [onErrorRef],
   );
 
   const start = useCallback(
@@ -230,21 +285,26 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       try {
+        if (isMutedRef.current) {
+          stream.getTracks().forEach((track) => {
+            track.enabled = false;
+          });
+          fftStore.clear();
+        }
         const nextRecorder = new MediaRecorder(stream, { mimeType });
         recorder.current = nextRecorder;
         nextRecorder.addEventListener('dataavailable', dataHandler);
         nextRecorder.start(100);
         recordingStarted.current = true;
-        setIsMuted(false);
         try {
           onStartRecordingRef.current?.();
         } catch (callbackError) {
           console.error('onStartRecording callback failed.', callbackError);
         }
       } catch (e) {
-        void disposeMicrophoneResources(true).catch((cleanupError) => {
-          console.error(
-            'Failed to fully roll back microphone initialization.',
+        void disposeMicrophoneResources().catch((cleanupError) => {
+          reportClosureFailure(
+            'Failed to fully roll back microphone initialization',
             cleanupError,
           );
         });
@@ -254,7 +314,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [
       dataHandler,
       disposeMicrophoneResources,
+      fftStore,
       onStartRecordingRef,
+      reportClosureFailure,
       startFftAnalyzer,
       stopFftAnalyzer,
     ],
@@ -262,17 +324,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const stop = useCallback(async () => {
     try {
-      await disposeMicrophoneResources(true);
+      await disposeMicrophoneResources();
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
-      onErrorRef.current?.(
-        `Failed to fully stop microphone resources: ${message}`,
-        'mic_closure_failure',
-      );
+      reportClosureFailure('Failed to fully stop microphone resources', e);
     }
-  }, [disposeMicrophoneResources, onErrorRef]);
+  }, [disposeMicrophoneResources, reportClosureFailure]);
 
   const mute = useCallback(() => {
+    isMutedRef.current = true;
     if (currentAnalyzer.current) {
       fftStore.clear();
     }
@@ -285,6 +344,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   }, [fftStore]);
 
   const unmute = useCallback(() => {
+    isMutedRef.current = false;
     currentStream.current?.getTracks().forEach((track) => {
       track.enabled = true;
     });
@@ -294,7 +354,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   useEffect(() => {
     return () => {
-      void disposeMicrophoneResources(false).catch((e) => {
+      void disposeMicrophoneResources().catch((e) => {
         console.error(
           'Failed to fully dispose microphone resources during unmount.',
           e,

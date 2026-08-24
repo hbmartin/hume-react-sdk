@@ -595,6 +595,36 @@ describe('useSoundPlayer', () => {
     );
   });
 
+  it('does not stop a newer player when cleaning up an older context', async () => {
+    const firstContext = new AudioContext();
+    const secondContext = new AudioContext();
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await act(() => result.current.initPlayer(undefined, firstContext));
+    await act(() => result.current.initPlayer(undefined, secondContext));
+    await act(() => result.current.stopAllForContext(firstContext));
+    await act(() =>
+      result.current.addToQueue({
+        id: 'newer-player',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+
+    expect(createBufferSource).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('plays chunks in correct order when received in order', async () => {
     const onError = vi.fn();
     const onPlayAudio = vi.fn();

@@ -777,69 +777,78 @@ export const useSoundPlayer = (props: {
     [queueLengthRef, isPlayingRef],
   );
 
-  const stopAll = useCallback(async () => {
-    const generation = ++playerGeneration.current;
-    const resourcesToStop = playerResources.current;
-    playerResources.current = null;
-    const workletToStop = resourcesToStop?.worklet ?? null;
-    isInitialized.current = false;
-    isProcessing.current = false;
-    setIsPlaying(false);
-    setIsAudioMuted(false);
-    setVolumeState(1.0);
-    fftStore.clear();
-
-    chunkBufferQueues.current = {};
-    lastQueuedChunk.current = null;
-
-    if (resourcesToStop) {
-      cancelPlayerFft(resourcesToStop);
-    }
-
-    try {
-      if (workletToStop) {
-        // AudioWorklet mode
-        let isWorkletClosed = false;
-        workletToStop.port.onmessage = (e: MessageEvent) => {
-          if ((e.data as WorkletMessage).type === 'worklet_closed') {
-            isWorkletClosed = true;
-          }
-        };
-        workletToStop.port.postMessage({ type: 'fadeAndClear' });
-        workletToStop.port.postMessage({ type: 'end' });
-
-        // We use this loop to make sure the worklet has been closed before we consider
-        // the player to be successfully stopped. The audio worklet asynchronously emits
-        // the 'worklet_closed' message in order to confirm that it has been closed successfully.
-        // If you close the worklet before the fade-out, the user may hear a small audio
-        // artifact when the call ends.
-        // (Reference the `_fadeOutDurationMs` constant in `audio-worklet.js`
-        // to see how long it takes for the worklet to close - the current default is 300ms.)
-        let closed = 0;
-        while (closed < 5) {
-          if (generation !== playerGeneration.current || isWorkletClosed) {
-            break;
-          }
-          closed += 1;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-      } else {
-        // Non-AudioWorklet mode
-        clipQueue.current = [];
-        setQueueLength(0);
+  const stopAll = useCallback(
+    async (expectedContext?: AudioContext) => {
+      if (
+        expectedContext &&
+        playerResources.current?.context !== expectedContext
+      ) {
+        return;
       }
-    } finally {
+      const generation = ++playerGeneration.current;
+      const resourcesToStop = playerResources.current;
+      playerResources.current = null;
+      const workletToStop = resourcesToStop?.worklet ?? null;
+      isInitialized.current = false;
+      isProcessing.current = false;
+      setIsPlaying(false);
+      setIsAudioMuted(false);
+      setVolumeState(1.0);
+      fftStore.clear();
+
+      chunkBufferQueues.current = {};
+      lastQueuedChunk.current = null;
+
       if (resourcesToStop) {
-        await disposePlayerResources(resourcesToStop);
+        cancelPlayerFft(resourcesToStop);
       }
-    }
-  }, [cancelPlayerFft, disposePlayerResources, fftStore]);
+
+      try {
+        if (workletToStop) {
+          // AudioWorklet mode
+          let isWorkletClosed = false;
+          workletToStop.port.onmessage = (e: MessageEvent) => {
+            if ((e.data as WorkletMessage).type === 'worklet_closed') {
+              isWorkletClosed = true;
+            }
+          };
+          workletToStop.port.postMessage({ type: 'fadeAndClear' });
+          workletToStop.port.postMessage({ type: 'end' });
+
+          // We use this loop to make sure the worklet has been closed before we consider
+          // the player to be successfully stopped. The audio worklet asynchronously emits
+          // the 'worklet_closed' message in order to confirm that it has been closed successfully.
+          // If you close the worklet before the fade-out, the user may hear a small audio
+          // artifact when the call ends.
+          // (Reference the `_fadeOutDurationMs` constant in `audio-worklet.js`
+          // to see how long it takes for the worklet to close - the current default is 300ms.)
+          let closed = 0;
+          while (closed < 5) {
+            if (generation !== playerGeneration.current || isWorkletClosed) {
+              break;
+            }
+            closed += 1;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        } else {
+          // Non-AudioWorklet mode
+          clipQueue.current = [];
+          setQueueLength(0);
+        }
+      } finally {
+        if (resourcesToStop) {
+          await disposePlayerResources(resourcesToStop);
+        }
+      }
+    },
+    [cancelPlayerFft, disposePlayerResources, fftStore],
+  );
 
   const stopAllWithRetries = useCallback(
-    async (maxAttempts = 3, delayMs = 500) => {
+    async (maxAttempts = 3, delayMs = 500, expectedContext?: AudioContext) => {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          await stopAll();
+          await stopAll(expectedContext);
           return;
         } catch (e) {
           if (attempt < maxAttempts) {
@@ -855,6 +864,13 @@ export const useSoundPlayer = (props: {
       }
     },
     [stopAll],
+  );
+
+  const stopAllForContext = useCallback(
+    async (context: AudioContext) => {
+      await stopAllWithRetries(3, 500, context);
+    },
+    [stopAllWithRetries],
   );
 
   const clearQueue = useCallback(() => {
@@ -919,6 +935,7 @@ export const useSoundPlayer = (props: {
       muteAudio,
       unmuteAudio,
       stopAll: stopAllWithRetries,
+      stopAllForContext,
       waitForQueueToDrain,
       clearQueue,
       volume,
@@ -934,6 +951,7 @@ export const useSoundPlayer = (props: {
       muteAudio,
       unmuteAudio,
       stopAllWithRetries,
+      stopAllForContext,
       waitForQueueToDrain,
       clearQueue,
       volume,
