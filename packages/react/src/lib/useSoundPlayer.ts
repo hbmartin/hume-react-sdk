@@ -6,6 +6,7 @@ import { FftStore } from './fftStore';
 import { useLatestRef } from './useLatestRef';
 import type { AudioPlayerErrorReason } from './VoiceProvider';
 import type { AudioOutputMessage } from '../models/messages';
+import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 
 // Worklet message types (replaces Zod schemas)
@@ -53,28 +54,6 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  * settles, so the attempt must be bounded rather than awaited directly.
  */
 const RESUME_TIMEOUT_MS = 1_000;
-/** Keep teardown from indefinitely blocking errors, replacement, or stop. */
-const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
-
-const closeAudioContextWithTimeout = async (
-  context: AudioContext,
-): Promise<void> => {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const closePromise = Promise.resolve()
-    .then(() => context.close())
-    .catch(() => undefined);
-
-  await Promise.race([
-    closePromise,
-    new Promise<void>((resolve) => {
-      timeoutId = setTimeout(resolve, AUDIO_CONTEXT_CLOSE_TIMEOUT_MS);
-    }),
-  ]);
-  if (timeoutId !== undefined) {
-    clearTimeout(timeoutId);
-  }
-};
-
 export const useSoundPlayer = (props: {
   enableAudioWorklet: boolean;
   onError: (message: string, reason: AudioPlayerErrorReason) => void;
@@ -801,9 +780,7 @@ export const useSoundPlayer = (props: {
   const stopAll = useCallback(async () => {
     const generation = ++playerGeneration.current;
     const resourcesToStop = playerResources.current;
-    if (playerResources.current === resourcesToStop) {
-      playerResources.current = null;
-    }
+    playerResources.current = null;
     const workletToStop = resourcesToStop?.worklet ?? null;
     isInitialized.current = false;
     isProcessing.current = false;
