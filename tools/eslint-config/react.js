@@ -6,10 +6,10 @@ require('@rushstack/eslint-patch/modern-module-resolution');
 
 /** @type {import('eslint').Linter.Config} */
 module.exports = {
-  plugins: ['react', 'react-hooks'],
   extends: [
     require.resolve('./base.js'),
     'plugin:react/recommended',
+    'plugin:react/jsx-runtime',
     'plugin:react-hooks/recommended',
   ],
   settings: {

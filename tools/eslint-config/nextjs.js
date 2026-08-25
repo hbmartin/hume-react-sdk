@@ -15,9 +15,6 @@ module.exports = {
     'plugin:tailwindcss/recommended',
   ],
   settings: {
-    react: {
-      version: 'detect',
-    },
     'import/resolver': {
       node: {
         extensions: ['.mjs', '.js', '.jsx', '.json', '.ts', '.tsx', '.d.ts'],

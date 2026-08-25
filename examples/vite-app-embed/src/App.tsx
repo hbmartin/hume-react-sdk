@@ -1,7 +1,7 @@
 import { EmbeddedVoice } from '@humeai/voice-embed-react';
+import { useEffect, useState } from 'react';
 
 import './App.css';
-import { useEffect, useState } from 'react';
 
 function App() {
   const apiKey = String(import.meta.env['VITE_PUBLIC_HUME_API_KEY'] ?? '');
