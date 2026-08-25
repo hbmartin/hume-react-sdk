@@ -1,6 +1,6 @@
 import { type Hume } from 'hume';
 import type { FC, PropsWithChildren } from 'react';
-import React, {
+import {
   createContext,
   useCallback,
   useContext,
@@ -1337,6 +1337,14 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     [disconnectAndCleanUpResources, status.value],
   );
 
+  const disconnectAndCleanUpResourcesRef = useLatestRef(
+    disconnectAndCleanUpResources,
+  );
+  const disconnectOnUnmount = useCallback(
+    () => disconnectAndCleanUpResourcesRef.current(),
+    [disconnectAndCleanUpResourcesRef],
+  );
+
   useEffect(() => {
     if (error !== null && status.value !== 'error') {
       // If the status is ever set to `error`, disconnect the call
@@ -1349,7 +1357,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   useEffect(() => {
     // disconnect from socket when the voice provider component unmounts
     return () => {
-      void disconnectAndCleanUpResources().then(() => {
+      void disconnectOnUnmount().then(() => {
         setStatus({ value: 'disconnected' });
         isConnectingRef.current = false;
         resourceStatusRef.current = {
@@ -1359,8 +1367,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         };
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [disconnectOnUnmount]);
 
   const sendUserInput = useCallback(
     (text: string) => {

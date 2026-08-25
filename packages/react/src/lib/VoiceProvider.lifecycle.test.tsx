@@ -1,5 +1,10 @@
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import React from 'react';
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type PlayerErrorHandler = (
@@ -8,6 +13,7 @@ type PlayerErrorHandler = (
 ) => void;
 
 const mocks = vi.hoisted(() => ({
+  clearMessageStore: vi.fn(),
   clientConnect: vi.fn(),
   clientDisconnect: vi.fn(),
   clientSendAudio: vi.fn(),
@@ -111,7 +117,26 @@ vi.mock('./useMicrophoneStream', () => ({
   }),
 }));
 
+vi.mock('./useMessages', async () => {
+  const actual =
+    await vi.importActual<typeof UseMessagesModule>('./useMessages');
+  return {
+    ...actual,
+    useMessages: (...args: Parameters<typeof actual.useMessages>) => {
+      const messageStore = actual.useMessages(...args);
+      return {
+        ...messageStore,
+        clearMessages: () => {
+          mocks.clearMessageStore();
+          messageStore.clearMessages();
+        },
+      };
+    },
+  };
+});
+
 import { isAudioDeviceSwitchError } from './errors';
+import type * as UseMessagesModule from './useMessages';
 import type * as UseVoiceClientModule from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
 
@@ -179,6 +204,17 @@ describe('VoiceProvider close lifecycle', () => {
 
     expect(onStartRecording).toHaveBeenCalledOnce();
     expect(onStopRecording).toHaveBeenCalledOnce();
+  });
+
+  it('uses the latest message-clearing preference during unmount', async () => {
+    const rendered = render(<VoiceProvider clearMessagesOnDisconnect />);
+
+    rendered.rerender(<VoiceProvider clearMessagesOnDisconnect={false} />);
+    expect(mocks.playerStop).not.toHaveBeenCalled();
+    rendered.unmount();
+
+    await waitFor(() => expect(mocks.playerStop).toHaveBeenCalledOnce());
+    expect(mocks.clearMessageStore).not.toHaveBeenCalled();
   });
 
   it('keeps the socket writable until the microphone flushes during disconnect', async () => {
