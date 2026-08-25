@@ -6,12 +6,10 @@ require('@rushstack/eslint-patch/modern-module-resolution');
 
 /** @type {import('eslint').Linter.Config} */
 module.exports = {
-  plugins: ['react', 'react-hooks', 'jsx-a11y'],
+  plugins: ['jsx-a11y'],
   extends: [
-    require.resolve('./base.js'),
-    'plugin:react/recommended',
+    require.resolve('./react.js'),
     'plugin:react/jsx-runtime',
-    'plugin:react-hooks/recommended',
     'plugin:jsx-a11y/strict',
     'plugin:@next/next/core-web-vitals',
     'plugin:tailwindcss/recommended',

@@ -396,7 +396,16 @@ export const useVoiceClient = (props: {
         setReadyState(VoiceReadyState.CONNECTING);
       });
     },
-    [],
+    [
+      onAudioMessage,
+      onClientError,
+      onClose,
+      onMessage,
+      onOpen,
+      onSessionSettings,
+      onToolCall,
+      onToolCallError,
+    ],
   );
 
   const disconnect = useCallback(() => {
@@ -421,7 +430,7 @@ export const useVoiceClient = (props: {
         type: 'session_settings',
       });
     },
-    [readyState],
+    [onSessionSettings, readyState],
   );
 
   const sendAudio = useCallback(
@@ -481,7 +490,7 @@ export const useVoiceClient = (props: {
         receivedAt: new Date(),
       });
     },
-    [readyState],
+    [onMessage, readyState],
   );
 
   const sendPauseAssistantMessage = useCallback(() => {
