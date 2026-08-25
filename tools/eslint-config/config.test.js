@@ -18,10 +18,12 @@ Module._load = (request, parent, isMain) => {
 
 let baseConfig;
 let nextConfig;
+let reactConfig;
 
 try {
   baseConfig = require('./base');
   nextConfig = require('./nextjs');
+  reactConfig = require('./react');
 } finally {
   Module._load = originalLoad;
 }
@@ -67,6 +69,18 @@ test('focused-test guard applies to test and spec TypeScript files', () => {
     '*.spec.ts',
     '*.spec.tsx',
   ]);
+});
+
+test('React config enforces exhaustive hook dependencies', () => {
+  assert.equal(reactConfig.rules['react-hooks/exhaustive-deps'], 'error');
+  assert.ok(reactConfig.extends.includes('plugin:react/recommended'));
+  assert.ok(reactConfig.extends.includes('plugin:react-hooks/recommended'));
+});
+
+test('Next.js config inherits the shared React config', () => {
+  assert.ok(reactConfig.plugins.includes('react'));
+  assert.ok(reactConfig.plugins.includes('react-hooks'));
+  assert.ok(nextConfig.extends.includes(require.resolve('./react.js')));
 });
 
 test('Next.js default-export exceptions cover root and src route trees', () => {

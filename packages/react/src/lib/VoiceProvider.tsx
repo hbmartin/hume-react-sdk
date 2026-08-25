@@ -496,12 +496,15 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     );
   }, []);
 
-  const updateError = useCallback((err: VoiceError | null) => {
-    setError(err);
-    if (err !== null) {
-      onError.current?.(err);
-    }
-  }, []);
+  const updateError = useCallback(
+    (err: VoiceError | null) => {
+      setError(err);
+      if (err !== null) {
+        onError.current?.(err);
+      }
+    },
+    [onError],
+  );
 
   const onClientError: NonNullable<
     Parameters<typeof useVoiceClient>[0]['onClientError']
@@ -569,7 +572,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         void playerAddToQueue(message);
         onAudioReceived.current(message);
       },
-      [checkIsDisconnected, checkIsDisconnecting, playerAddToQueue],
+      [
+        checkIsDisconnected,
+        checkIsDisconnecting,
+        onAudioReceived,
+        playerAddToQueue,
+      ],
     ),
     onMessage: useCallback(
       (message: JSONMessage) => {
@@ -607,7 +615,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         checkIsDisconnected,
         checkIsDisconnecting,
         messageStoreOnMessage,
+        onError,
+        onInterruption,
         playerClearQueue,
+        playerIsPlayingRef,
         toolStatusAddToStore,
       ],
     ),
@@ -652,7 +663,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       startTimer();
       createConnectMessage();
       onOpen.current?.();
-    }, [startTimer, createConnectMessage]),
+    }, [startTimer, createConnectMessage, onOpen]),
     onClose: useCallback(
       (event: SocketCloseEvent, consumerInitiated: boolean) => {
         const closeGeneration = ++lifecycleGenerationRef.current;
@@ -722,6 +733,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         closeSharedAudioContext,
         createDisconnectMessage,
         clearMessageStore,
+        onClose,
         playerStopAll,
         playerWaitForQueueToDrain,
         resetAudioDeviceState,
