@@ -23,8 +23,9 @@
   "browserslist": [
     "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
   ],
-  "packageManager": "pnpm@9.1.4",
+  "packageManager": "pnpm@11.24.0",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13",
+    "pnpm": "11.24.0"
   }
 }
