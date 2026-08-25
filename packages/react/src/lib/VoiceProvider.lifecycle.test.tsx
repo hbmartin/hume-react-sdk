@@ -5,6 +5,7 @@ import {
   renderHook,
   waitFor,
 } from '@testing-library/react';
+import { useCallback, useMemo } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type PlayerErrorHandler = (
@@ -124,13 +125,16 @@ vi.mock('./useMessages', async () => {
     ...actual,
     useMessages: (...args: Parameters<typeof actual.useMessages>) => {
       const messageStore = actual.useMessages(...args);
-      return {
-        ...messageStore,
-        clearMessages: () => {
-          mocks.clearMessageStore();
-          messageStore.clearMessages();
-        },
-      };
+      const { clearMessages } = messageStore;
+      const trackedClearMessages = useCallback(() => {
+        mocks.clearMessageStore();
+        clearMessages();
+      }, [clearMessages]);
+
+      return useMemo(
+        () => ({ ...messageStore, clearMessages: trackedClearMessages }),
+        [messageStore, trackedClearMessages],
+      );
     },
   };
 });
@@ -215,6 +219,19 @@ describe('VoiceProvider close lifecycle', () => {
 
     await waitFor(() => expect(mocks.playerStop).toHaveBeenCalledOnce());
     expect(mocks.clearMessageStore).not.toHaveBeenCalled();
+  });
+
+  it('uses the latest enabled message-clearing preference during unmount', async () => {
+    const rendered = render(
+      <VoiceProvider clearMessagesOnDisconnect={false} />,
+    );
+
+    rendered.rerender(<VoiceProvider clearMessagesOnDisconnect />);
+    expect(mocks.playerStop).not.toHaveBeenCalled();
+    rendered.unmount();
+
+    await waitFor(() => expect(mocks.playerStop).toHaveBeenCalledOnce());
+    expect(mocks.clearMessageStore).toHaveBeenCalledOnce();
   });
 
   it('keeps the socket writable until the microphone flushes during disconnect', async () => {

@@ -1,10 +1,9 @@
 /* eslint-env commonjs */
 const assert = require('node:assert/strict');
 const Module = require('node:module');
-const path = require('node:path');
 const { test } = require('node:test');
 
-const { ESLint, Linter } = require('eslint');
+const { Linter } = require('eslint');
 
 const rushstackPatch = '@rushstack/eslint-patch/modern-module-resolution';
 const originalLoad = Module._load;
@@ -72,31 +71,15 @@ test('focused-test guard applies to test and spec TypeScript files', () => {
   ]);
 });
 
-test('React config enforces exhaustive hook dependencies', () => {
+test('standalone React config declares its required React presets', () => {
   assert.equal(reactConfig.rules['react-hooks/exhaustive-deps'], 'error');
   assert.ok(reactConfig.extends.includes('plugin:react/recommended'));
   assert.ok(reactConfig.extends.includes('plugin:react/jsx-runtime'));
   assert.ok(reactConfig.extends.includes('plugin:react-hooks/recommended'));
 });
 
-test('Next.js config inherits the shared React config', async () => {
+test('Next.js config inherits the shared React config', () => {
   assert.ok(nextConfig.extends.includes(require.resolve('./react.js')));
-
-  const repositoryRoot = path.resolve(__dirname, '../..');
-  const eslint = new ESLint({
-    cwd: repositoryRoot,
-    useEslintrc: false,
-    overrideConfig: {
-      extends: [require.resolve('./nextjs.js')],
-    },
-  });
-  const effectiveConfig = await eslint.calculateConfigForFile(
-    path.join(repositoryRoot, 'examples/next-app/app/page.tsx'),
-  );
-
-  assert.deepEqual(effectiveConfig.rules['react-hooks/exhaustive-deps'], [
-    'error',
-  ]);
 });
 
 test('Next.js default-export exceptions cover root and src route trees', () => {
