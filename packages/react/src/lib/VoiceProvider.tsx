@@ -1340,10 +1340,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const disconnectAndCleanUpResourcesRef = useLatestRef(
     disconnectAndCleanUpResources,
   );
-  const disconnectOnUnmount = useCallback(
-    () => disconnectAndCleanUpResourcesRef.current(),
-    [disconnectAndCleanUpResourcesRef],
-  );
 
   useEffect(() => {
     if (error !== null && status.value !== 'error') {
@@ -1352,12 +1348,14 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       setStatus({ value: 'error', reason: error.message });
       void disconnectAndCleanUpResources();
     }
-  }, [status.value, disconnect, disconnectAndCleanUpResources, error]);
+  }, [status.value, disconnectAndCleanUpResources, error]);
 
   useEffect(() => {
     // disconnect from socket when the voice provider component unmounts
     return () => {
-      void disconnectOnUnmount().then(() => {
+      // Intentionally read the latest cleanup callback when unmount begins.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      void disconnectAndCleanUpResourcesRef.current().then(() => {
         setStatus({ value: 'disconnected' });
         isConnectingRef.current = false;
         resourceStatusRef.current = {
@@ -1367,7 +1365,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         };
       });
     };
-  }, [disconnectOnUnmount]);
+  }, [disconnectAndCleanUpResourcesRef]);
 
   const sendUserInput = useCallback(
     (text: string) => {

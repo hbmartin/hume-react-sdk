@@ -9,7 +9,6 @@ module.exports = {
   plugins: ['jsx-a11y'],
   extends: [
     require.resolve('./react.js'),
-    'plugin:react/jsx-runtime',
     'plugin:jsx-a11y/strict',
     'plugin:@next/next/core-web-vitals',
     'plugin:tailwindcss/recommended',
