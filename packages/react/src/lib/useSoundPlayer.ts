@@ -2,6 +2,7 @@ import { convertBase64ToBlob } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
+import type { VoiceDiagnosticsReporter } from './diagnostics';
 import { FftStore } from './fftStore';
 import { useLatestRef } from './useLatestRef';
 import type { AudioPlayerErrorReason } from './VoiceProvider';
@@ -53,6 +54,7 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  */
 const RESUME_TIMEOUT_MS = 1_000;
 export const useSoundPlayer = (props: {
+  diagnostics?: VoiceDiagnosticsReporter;
   enableAudioWorklet: boolean;
   onError: (message: string, reason: AudioPlayerErrorReason) => void;
   onPlayAudio: (id: string) => void;
@@ -76,6 +78,7 @@ export const useSoundPlayer = (props: {
   const onPlayAudio = useLatestRef(props.onPlayAudio);
   const onStopAudio = useLatestRef(props.onStopAudio);
   const onError = useLatestRef(props.onError);
+  const diagnostics = useLatestRef(props.diagnostics);
 
   // chunkBufferQueues and lastQueuedChunk are used to make sure that
   // we don't play chunks out of order. chunkBufferQueues is NOT the
@@ -121,8 +124,16 @@ export const useSoundPlayer = (props: {
       queueLengthRef.current = length;
       setQueueLength(length);
       notifyDrainWaiters();
+      if (diagnostics.current?.isEnabled('debug')) {
+        diagnostics.current.emit({
+          level: 'debug',
+          category: 'audio_player',
+          name: 'audio.queue_changed',
+          details: { length },
+        });
+      }
     },
-    [notifyDrainWaiters],
+    [diagnostics, notifyDrainWaiters],
   );
 
   const publishIsPlaying = useCallback(
@@ -747,6 +758,17 @@ export const useSoundPlayer = (props: {
    */
   const waitForQueueToDrain = useCallback(
     async (timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<boolean> => {
+      const startedAt = globalThis.performance?.now() ?? Date.now();
+      const finish = (drained: boolean) => {
+        diagnostics.current?.emit({
+          level: drained ? 'info' : 'warn',
+          category: 'audio_player',
+          name: 'audio.drain_completed',
+          durationMs: (globalThis.performance?.now() ?? Date.now()) - startedAt,
+          details: { drained, timeoutMs },
+        });
+        return drained;
+      };
       const generation = playerGeneration.current;
       const isDrained = () =>
         (pendingAudioTasks.current.get(generation) ?? 0) === 0 &&
@@ -757,7 +779,7 @@ export const useSoundPlayer = (props: {
       // a stable idle period so an in-flight decode or the worklet's final
       // render quantum cannot race teardown.
       if (isDrained() && playbackActivitySequence.current === 0) {
-        return true;
+        return finish(true);
       }
 
       const deadline = Date.now() + timeoutMs;
@@ -767,20 +789,20 @@ export const useSoundPlayer = (props: {
       const waitForPlaybackChange = (waitMs: number) =>
         new Promise<void>((resolve) => {
           const timer: { id?: ReturnType<typeof setTimeout> } = {};
-          const finish = () => {
-            drainWaiters.current.delete(finish);
+          const settle = () => {
+            drainWaiters.current.delete(settle);
             if (timer.id !== undefined) {
               clearTimeout(timer.id);
             }
             resolve();
           };
-          drainWaiters.current.add(finish);
-          timer.id = setTimeout(finish, waitMs);
+          drainWaiters.current.add(settle);
+          timer.id = setTimeout(settle, waitMs);
         });
 
       while (Date.now() <= deadline) {
         if (generation !== playerGeneration.current) {
-          return false;
+          return finish(false);
         }
         const now = Date.now();
         const currentActivitySequence = playbackActivitySequence.current;
@@ -793,7 +815,7 @@ export const useSoundPlayer = (props: {
         if (drained) {
           stableSince ??= now;
           if (now - stableSince >= DRAIN_SETTLE_MS) {
-            return true;
+            return finish(true);
           }
         } else {
           stableSince = null;
@@ -814,9 +836,9 @@ export const useSoundPlayer = (props: {
 
       // The queue never emptied. The caller stops the player anyway rather
       // than leaving the socket teardown hanging on stuck audio.
-      return false;
+      return finish(false);
     },
-    [],
+    [diagnostics],
   );
 
   const stopAll = useCallback(
@@ -828,6 +850,13 @@ export const useSoundPlayer = (props: {
         return;
       }
       const generation = ++playerGeneration.current;
+      const stopStartedAt = globalThis.performance?.now() ?? Date.now();
+      diagnostics.current?.emit({
+        level: 'info',
+        category: 'audio_player',
+        name: 'resource.stop_started',
+        details: { resource: 'audio_player' },
+      });
       notifyDrainWaiters();
       const resourcesToStop = playerResources.current;
       playerResources.current = null;
@@ -899,9 +928,18 @@ export const useSoundPlayer = (props: {
       if (failures.length > 0) {
         throw new Error(failures.join('; '));
       }
+      diagnostics.current?.emit({
+        level: 'info',
+        category: 'audio_player',
+        name: 'resource.stopped',
+        durationMs:
+          (globalThis.performance?.now() ?? Date.now()) - stopStartedAt,
+        details: { resource: 'audio_player' },
+      });
     },
     [
       cancelPlayerFft,
+      diagnostics,
       disposePlayerResources,
       fftStore,
       notifyDrainWaiters,
@@ -1012,18 +1050,27 @@ export const useSoundPlayer = (props: {
     publishQueueLength,
   ]);
 
-  const setVolume = useCallback((newLevel: number) => {
-    const clampedLevel = Math.max(0, Math.min(newLevel, 1.0));
-    volumeRef.current = clampedLevel;
-    setVolumeState(clampedLevel);
-    const resources = playerResources.current;
-    if (resources?.gain && resources.context && !isAudioMutedRef.current) {
-      resources.gain.gain.setValueAtTime(
-        clampedLevel,
-        resources.context.currentTime,
-      );
-    }
-  }, []);
+  const setVolume = useCallback(
+    (newLevel: number) => {
+      const clampedLevel = Math.max(0, Math.min(newLevel, 1.0));
+      volumeRef.current = clampedLevel;
+      setVolumeState(clampedLevel);
+      const resources = playerResources.current;
+      if (resources?.gain && resources.context && !isAudioMutedRef.current) {
+        resources.gain.gain.setValueAtTime(
+          clampedLevel,
+          resources.context.currentTime,
+        );
+      }
+      diagnostics.current?.emit({
+        level: 'info',
+        category: 'audio_player',
+        name: 'control.changed',
+        details: { control: 'volume', value: clampedLevel },
+      });
+    },
+    [diagnostics],
+  );
 
   const setOutputDevice = useCallback(async (deviceId: string | null) => {
     const resources = playerResources.current;
@@ -1067,7 +1114,13 @@ export const useSoundPlayer = (props: {
     if (resources?.gain && resources.context) {
       resources.gain.gain.setValueAtTime(0, resources.context.currentTime);
     }
-  }, []);
+    diagnostics.current?.emit({
+      level: 'info',
+      category: 'audio_player',
+      name: 'control.changed',
+      details: { control: 'audio_mute', value: true },
+    });
+  }, [diagnostics]);
 
   const unmuteAudio = useCallback(() => {
     isAudioMutedRef.current = false;
@@ -1079,7 +1132,13 @@ export const useSoundPlayer = (props: {
         resources.context.currentTime,
       );
     }
-  }, []);
+    diagnostics.current?.emit({
+      level: 'info',
+      category: 'audio_player',
+      name: 'control.changed',
+      details: { control: 'audio_mute', value: false },
+    });
+  }, [diagnostics]);
 
   return useMemo(
     () => ({

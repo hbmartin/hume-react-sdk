@@ -3,6 +3,10 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { type Simplify } from 'type-fest';
 
 import { type AuthStrategy, getAuthStrategyError } from './auth';
+import type {
+  VoiceDiagnosticInput,
+  VoiceDiagnosticsReporter,
+} from './diagnostics';
 import { useLatestRef } from './useLatestRef';
 import type {
   AudioOutputMessage,
@@ -12,6 +16,40 @@ import type {
 
 const isNever = (_n: never) => {
   return;
+};
+
+const getMonotonicTime = () => globalThis.performance?.now() ?? Date.now();
+
+const getMessageDiagnostics = (message: { type: string }) => {
+  const record = message as unknown as Record<string, unknown>;
+  const nestedMessage =
+    typeof record.message === 'object' && record.message !== null
+      ? (record.message as Record<string, unknown>)
+      : undefined;
+  const content = nestedMessage?.content ?? record.content;
+  const parameters = record.parameters;
+  const toolError = record.error;
+  const contentLength =
+    typeof content === 'string' ? content.length : undefined;
+  return {
+    details: {
+      direction: 'inbound',
+      type: message.type,
+      ...(typeof record.id === 'string' ? { messageId: record.id } : undefined),
+      ...(typeof record.toolCallId === 'string'
+        ? { toolCallId: record.toolCallId }
+        : undefined),
+      ...(typeof record.name === 'string'
+        ? { toolName: record.name }
+        : undefined),
+      ...(contentLength === undefined ? undefined : { contentLength }),
+    },
+    sensitiveDetails: {
+      ...(content === undefined ? undefined : { content }),
+      ...(parameters === undefined ? undefined : { parameters }),
+      ...(toolError === undefined ? undefined : { error: toolError }),
+    },
+  };
 };
 
 export type SocketConfig = {
@@ -94,6 +132,7 @@ export type ToolCallHandler = (
 >;
 
 export const useVoiceClient = (props: {
+  diagnostics?: VoiceDiagnosticsReporter;
   onAudioMessage?: (message: AudioOutputMessage) => void;
   onMessage?: (message: JSONMessage) => void;
   onSessionSettings?: (
@@ -128,6 +167,12 @@ export const useVoiceClient = (props: {
   const onToolCallError = useLatestRef(props.onToolCallError);
   const onOpen = useLatestRef(props.onOpen);
   const onClose = useLatestRef(props.onClose);
+  const diagnostics = useLatestRef(props.diagnostics);
+
+  const report = useCallback(
+    (input: VoiceDiagnosticInput) => diagnostics.current?.emit(input),
+    [diagnostics],
+  );
 
   const connect = useCallback(
     (
@@ -160,6 +205,13 @@ export const useVoiceClient = (props: {
         }
 
         const hostname = config.hostname || 'api.hume.ai';
+
+        report({
+          level: 'info',
+          category: 'socket',
+          name: 'resource.initialization_started',
+          details: { resource: 'socket', hostname },
+        });
 
         const hume = new HumeClient(
           config.auth.type === 'apiKey'
@@ -204,6 +256,18 @@ export const useVoiceClient = (props: {
           }
 
           if (message.type === 'audio_output') {
+            if (diagnostics.current?.isEnabled('debug')) {
+              diagnostics.current.emit({
+                level: 'debug',
+                category: 'audio_player',
+                name: 'audio.chunk_received',
+                details: {
+                  messageId: message.id,
+                  index: message.index,
+                  encodedLength: message.data.length,
+                },
+              });
+            }
             const messageWithReceivedAt = {
               ...message,
               receivedAt: new Date(),
@@ -213,6 +277,14 @@ export const useVoiceClient = (props: {
           }
 
           if (message.type === 'chat_metadata') {
+            const chatId = (message as unknown as { chatId?: string }).chatId;
+            diagnostics.current?.setChatId(chatId);
+            report({
+              level: 'info',
+              category: 'socket',
+              name: 'resource.initialized',
+              details: { resource: 'socket' },
+            });
             onOpen.current?.();
             setReadyState(VoiceReadyState.OPEN);
             signal.removeEventListener('abort', abortHandler);
@@ -230,6 +302,14 @@ export const useVoiceClient = (props: {
             message.type === 'assistant_end' ||
             message.type === 'assistant_prosody'
           ) {
+            if (diagnostics.current?.isEnabled('debug')) {
+              diagnostics.current.emit({
+                level: 'debug',
+                category: 'message',
+                name: 'message.received',
+                ...getMessageDiagnostics(message),
+              });
+            }
             const messageWithReceivedAt = {
               ...message,
               receivedAt: new Date(),
@@ -239,6 +319,14 @@ export const useVoiceClient = (props: {
           }
 
           if (message.type === 'tool_call') {
+            if (diagnostics.current?.isEnabled('debug')) {
+              diagnostics.current.emit({
+                level: 'debug',
+                category: 'message',
+                name: 'message.received',
+                ...getMessageDiagnostics(message),
+              });
+            }
             const messageWithReceivedAt = {
               ...message,
               receivedAt: new Date(),
@@ -249,6 +337,17 @@ export const useVoiceClient = (props: {
             if (message.toolType === Hume.empathicVoice.ToolType.Function) {
               const handler = onToolCall.current;
               if (handler) {
+                const handlerStartedAt = getMonotonicTime();
+                report({
+                  level: 'info',
+                  category: 'tool',
+                  name: 'tool.handler_started',
+                  details: {
+                    toolCallId: message.toolCallId,
+                    toolName: message.name,
+                  },
+                  sensitiveDetails: { parameters: message.parameters },
+                });
                 void Promise.resolve()
                   .then<
                     | Awaited<ReturnType<ToolCallHandler>>
@@ -298,9 +397,29 @@ export const useVoiceClient = (props: {
                       !isConnectionActive() ||
                       response === SKIPPED_TOOL_CALL
                     ) {
+                      report({
+                        level: 'warn',
+                        category: 'tool',
+                        name: 'tool.handler_skipped',
+                        durationMs: getMonotonicTime() - handlerStartedAt,
+                        details: {
+                          toolCallId: message.toolCallId,
+                          reason: 'connection_inactive',
+                        },
+                      });
                       return;
                     }
                     if (response === undefined || response === null) {
+                      report({
+                        level: 'error',
+                        category: 'tool',
+                        name: 'tool.handler_failed',
+                        durationMs: getMonotonicTime() - handlerStartedAt,
+                        details: {
+                          toolCallId: message.toolCallId,
+                          reason: 'invalid_response',
+                        },
+                      });
                       onToolCallError.current?.(
                         'Invalid response from tool call',
                         undefined,
@@ -314,6 +433,16 @@ export const useVoiceClient = (props: {
                       } else if (response.type === 'tool_error') {
                         socket.sendToolErrorMessage(response);
                       } else {
+                        report({
+                          level: 'error',
+                          category: 'tool',
+                          name: 'tool.handler_failed',
+                          durationMs: getMonotonicTime() - handlerStartedAt,
+                          details: {
+                            toolCallId: message.toolCallId,
+                            reason: 'invalid_response',
+                          },
+                        });
                         onToolCallError.current?.(
                           'Invalid response from tool call',
                           undefined,
@@ -329,6 +458,18 @@ export const useVoiceClient = (props: {
                         error instanceof Error
                           ? error
                           : new Error(String(error));
+                      report({
+                        level: 'error',
+                        category: 'tool',
+                        name: 'tool.handler_failed',
+                        durationMs: getMonotonicTime() - handlerStartedAt,
+                        details: {
+                          toolCallId: message.toolCallId,
+                          reason: 'send_failure',
+                          errorName: normalizedError.name,
+                        },
+                        sensitiveDetails: { error: normalizedError.message },
+                      });
                       onToolCallError.current?.(
                         'Failed to send tool response',
                         normalizedError,
@@ -339,6 +480,22 @@ export const useVoiceClient = (props: {
                     if (!isConnectionActive()) {
                       return;
                     }
+                    report({
+                      level: 'info',
+                      category: 'tool',
+                      name: 'tool.handler_completed',
+                      durationMs: getMonotonicTime() - handlerStartedAt,
+                      details: {
+                        toolCallId: message.toolCallId,
+                        responseType: response.type,
+                      },
+                      sensitiveDetails: {
+                        content: response.content,
+                        ...(response.type === 'tool_error'
+                          ? { error: response.error }
+                          : undefined),
+                      },
+                    });
                     onMessage.current?.({
                       ...response,
                       receivedAt: new Date(),
@@ -350,12 +507,34 @@ export const useVoiceClient = (props: {
                     }
                     const normalizedError =
                       error instanceof Error ? error : new Error(String(error));
+                    report({
+                      level: 'error',
+                      category: 'tool',
+                      name: 'tool.handler_failed',
+                      durationMs: getMonotonicTime() - handlerStartedAt,
+                      details: {
+                        toolCallId: message.toolCallId,
+                        reason: 'handler_failure',
+                        errorName: normalizedError.name,
+                      },
+                      sensitiveDetails: { error: normalizedError.message },
+                    });
                     onToolCallError.current?.(
                       'Tool call handler failed',
                       normalizedError,
                       'handler_failure',
                     );
                   });
+              } else {
+                report({
+                  level: 'warn',
+                  category: 'tool',
+                  name: 'tool.handler_skipped',
+                  details: {
+                    toolCallId: message.toolCallId,
+                    reason: 'handler_missing',
+                  },
+                });
               }
             }
             return;
@@ -379,6 +558,17 @@ export const useVoiceClient = (props: {
           if (client.current === socket) {
             client.current = null;
           }
+          report({
+            level: connection.consumerInitiated ? 'info' : 'warn',
+            category: 'socket',
+            name: 'socket.closed',
+            details: {
+              code: event.code,
+              reason: event.reason,
+              wasClean: event.wasClean,
+              consumerInitiated: connection.consumerInitiated,
+            },
+          });
           void onClose.current?.(event, connection.consumerInitiated);
           setReadyState(VoiceReadyState.CLOSED);
         });
@@ -389,6 +579,12 @@ export const useVoiceClient = (props: {
             return;
           }
           const message = e instanceof Error ? e.message : 'Unknown error';
+          report({
+            level: 'error',
+            category: 'socket',
+            name: 'resource.cleanup_failed',
+            details: { resource: 'socket', message, error: e },
+          });
           onClientError.current?.(message, e instanceof Error ? e : undefined);
           reject(e);
         });
@@ -405,6 +601,8 @@ export const useVoiceClient = (props: {
       onSessionSettings,
       onToolCall,
       onToolCallError,
+      diagnostics,
+      report,
     ],
   );
 
@@ -422,47 +620,137 @@ export const useVoiceClient = (props: {
   const sendSessionSettings = useCallback(
     (sessionSettings: SessionSettingsUpdate) => {
       if (readyState !== VoiceReadyState.OPEN) {
+        report({
+          level: 'warn',
+          category: 'message',
+          name: 'message.skipped',
+          details: {
+            direction: 'outbound',
+            type: 'session_settings',
+            reason: 'socket_not_open',
+          },
+        });
         return;
       }
       client.current?.sendSessionSettings(sessionSettings);
+      report({
+        level: 'debug',
+        category: 'message',
+        name: 'message.sent',
+        details: {
+          direction: 'outbound',
+          type: 'session_settings',
+          settingKeys: Object.keys(sessionSettings),
+        },
+      });
       onSessionSettings.current?.({
         ...sessionSettings,
         type: 'session_settings',
       });
     },
-    [onSessionSettings, readyState],
+    [onSessionSettings, readyState, report],
   );
 
   const sendAudio = useCallback(
     (arrayBuffer: ArrayBufferLike) => {
       if (readyState !== VoiceReadyState.OPEN) {
+        if (diagnostics.current?.isEnabled('debug')) {
+          report({
+            level: 'debug',
+            category: 'message',
+            name: 'message.skipped',
+            details: {
+              direction: 'outbound',
+              type: 'audio_input',
+              reason: 'socket_not_open',
+            },
+          });
+        }
         return;
       }
       client.current?.socket?.send(arrayBuffer as ArrayBuffer);
+      if (diagnostics.current?.isEnabled('debug')) {
+        report({
+          level: 'debug',
+          category: 'message',
+          name: 'message.sent',
+          details: {
+            direction: 'outbound',
+            type: 'audio_input',
+            byteLength: arrayBuffer.byteLength,
+          },
+        });
+      }
     },
-    [readyState],
+    [diagnostics, readyState, report],
   );
 
   const sendUserInput = useCallback(
     (text: string) => {
       if (readyState !== VoiceReadyState.OPEN) {
+        report({
+          level: 'warn',
+          category: 'message',
+          name: 'message.skipped',
+          details: {
+            direction: 'outbound',
+            type: 'user_input',
+            reason: 'socket_not_open',
+            contentLength: text.length,
+          },
+          sensitiveDetails: { content: text },
+        });
         return;
       }
       client.current?.sendUserInput(text);
+      report({
+        level: 'debug',
+        category: 'message',
+        name: 'message.sent',
+        details: {
+          direction: 'outbound',
+          type: 'user_input',
+          contentLength: text.length,
+        },
+        sensitiveDetails: { content: text },
+      });
     },
-    [readyState],
+    [readyState, report],
   );
 
   const sendAssistantInput = useCallback(
     (text: string) => {
       if (readyState !== VoiceReadyState.OPEN) {
+        report({
+          level: 'warn',
+          category: 'message',
+          name: 'message.skipped',
+          details: {
+            direction: 'outbound',
+            type: 'assistant_input',
+            reason: 'socket_not_open',
+            contentLength: text.length,
+          },
+          sensitiveDetails: { content: text },
+        });
         return;
       }
       client.current?.sendAssistantInput({
         text,
       });
+      report({
+        level: 'debug',
+        category: 'message',
+        name: 'message.sent',
+        details: {
+          direction: 'outbound',
+          type: 'assistant_input',
+          contentLength: text.length,
+        },
+        sensitiveDetails: { content: text },
+      });
     },
-    [readyState],
+    [readyState, report],
   );
 
   const sendToolMessage = useCallback(
@@ -474,10 +762,44 @@ export const useVoiceClient = (props: {
         | Hume.empathicVoice.ToolErrorMessage,
     ) => {
       if (readyState !== VoiceReadyState.OPEN) {
+        report({
+          level: 'warn',
+          category: 'message',
+          name: 'message.skipped',
+          details: {
+            direction: 'outbound',
+            type: toolMessage.type,
+            reason: 'socket_not_open',
+            toolCallId: toolMessage.toolCallId,
+          },
+          sensitiveDetails: {
+            content: toolMessage.content,
+            ...(toolMessage.type === 'tool_error'
+              ? { error: toolMessage.error }
+              : undefined),
+          },
+        });
         return;
       }
       const socket = client.current;
       if (!socket) {
+        report({
+          level: 'warn',
+          category: 'message',
+          name: 'message.skipped',
+          details: {
+            direction: 'outbound',
+            type: toolMessage.type,
+            reason: 'socket_missing',
+            toolCallId: toolMessage.toolCallId,
+          },
+          sensitiveDetails: {
+            content: toolMessage.content,
+            ...(toolMessage.type === 'tool_error'
+              ? { error: toolMessage.error }
+              : undefined),
+          },
+        });
         return;
       }
       if (toolMessage.type === 'tool_error') {
@@ -489,22 +811,70 @@ export const useVoiceClient = (props: {
         ...toolMessage,
         receivedAt: new Date(),
       });
+      report({
+        level: 'debug',
+        category: 'message',
+        name: 'message.sent',
+        details: {
+          direction: 'outbound',
+          type: toolMessage.type,
+          toolCallId: toolMessage.toolCallId,
+        },
+        sensitiveDetails: {
+          content: toolMessage.content,
+          ...(toolMessage.type === 'tool_error'
+            ? { error: toolMessage.error }
+            : undefined),
+        },
+      });
     },
-    [onMessage, readyState],
+    [onMessage, readyState, report],
   );
 
   const sendPauseAssistantMessage = useCallback(() => {
     if (readyState !== VoiceReadyState.OPEN) {
+      report({
+        level: 'warn',
+        category: 'message',
+        name: 'message.skipped',
+        details: {
+          direction: 'outbound',
+          type: 'pause_assistant',
+          reason: 'socket_not_open',
+        },
+      });
       return;
     }
     client.current?.pauseAssistant({});
-  }, [readyState]);
+    report({
+      level: 'info',
+      category: 'message',
+      name: 'message.sent',
+      details: { direction: 'outbound', type: 'pause_assistant' },
+    });
+  }, [readyState, report]);
   const sendResumeAssistantMessage = useCallback(() => {
     if (readyState !== VoiceReadyState.OPEN) {
+      report({
+        level: 'warn',
+        category: 'message',
+        name: 'message.skipped',
+        details: {
+          direction: 'outbound',
+          type: 'resume_assistant',
+          reason: 'socket_not_open',
+        },
+      });
       return;
     }
     client.current?.resumeAssistant({});
-  }, [readyState]);
+    report({
+      level: 'info',
+      category: 'message',
+      name: 'message.sent',
+      details: { direction: 'outbound', type: 'resume_assistant' },
+    });
+  }, [readyState, report]);
 
   return useMemo(
     () => ({

@@ -139,6 +139,7 @@ vi.mock('./useMessages', async () => {
   };
 });
 
+import type { VoiceDiagnosticEvent } from './diagnostics';
 import { isAudioDeviceSwitchError } from './errors';
 import type * as UseMessagesModule from './useMessages';
 import type * as UseVoiceClientModule from './useVoiceClient';
@@ -208,6 +209,59 @@ describe('VoiceProvider close lifecycle', () => {
 
     expect(onStartRecording).toHaveBeenCalledOnce();
     expect(onStopRecording).toHaveBeenCalledOnce();
+  });
+
+  it('emits correlated, ordered, and credential-safe lifecycle diagnostics', async () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider
+          diagnostics={{
+            level: 'debug',
+            logger: false,
+            onEvent: (event) => events.push(event),
+          }}
+        >
+          {children}
+        </VoiceProvider>
+      ),
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+        devices: {
+          microphoneDeviceId: 'private-input-device',
+          speakerDeviceId: 'private-output-device',
+        },
+      }),
+    );
+    await act(() => result.current.disconnect());
+
+    const attempt = events.find(
+      (event) => event.name === 'connection.attempt_started',
+    );
+    const connected = events.find(
+      (event) => event.name === 'connection.connected',
+    );
+    const disconnected = events.find(
+      (event) => event.name === 'connection.disconnected',
+    );
+
+    expect(attempt?.connectionId).toBeTruthy();
+    expect(connected).toMatchObject({ connectionId: attempt?.connectionId });
+    expect(disconnected).toMatchObject({
+      connectionId: attempt?.connectionId,
+    });
+    expect(connected?.durationMs).toEqual(expect.any(Number));
+    expect(disconnected?.durationMs).toEqual(expect.any(Number));
+    expect(events.map((event) => event.sequence)).toEqual(
+      events.map((_event, index) => index + 1),
+    );
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain('test-token');
+    expect(serialized).not.toContain('private-input-device');
+    expect(serialized).not.toContain('private-output-device');
   });
 
   it('uses the latest message-clearing preference during unmount', async () => {
@@ -287,13 +341,19 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.contextClose).toHaveBeenCalledOnce();
     expect(consoleError).toHaveBeenCalledOnce();
     expect(consoleError.mock.calls[0]?.[0]).toBe(
-      'Failed to fully disconnect voice resources.',
+      '[Hume Voice][connection] resource.cleanup_failed',
     );
-    const loggedFailure: unknown = consoleError.mock.calls[0]?.[1];
-    if (!(loggedFailure instanceof Error)) {
-      throw new Error('Expected teardown to log an Error.');
-    }
-    expect(loggedFailure.message).toContain('microphone');
+    const cleanupEvent = consoleError.mock.calls[0]?.[1] as unknown as
+      | VoiceDiagnosticEvent
+      | undefined;
+    const failures = cleanupEvent?.details.failures;
+    expect(
+      Array.isArray(failures) &&
+        failures.some(
+          (failure) =>
+            typeof failure === 'string' && failure.includes('microphone'),
+        ),
+    ).toBe(true);
 
     await act(() =>
       result.current.connect({

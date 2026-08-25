@@ -115,6 +115,13 @@ after they are successfully passed to the socket so they stay in sync with
 
 (_Optional_) Set the number of messages that you wish to keep over the course of the conversation. The default value is 100.
 
+#### `diagnostics?`: false | VoiceDiagnosticsOptions
+
+(_Optional_) Configure structured diagnostic events. When omitted, sanitized
+`warn` and `error` events are written to the browser console. Pass `false` to
+disable all diagnostic output. See [Diagnostics and logging](#diagnostics-and-logging)
+for configuration and privacy details.
+
 ## Connecting to EVI
 
 After you have set up your voice provider, you will be able to access various properties and methods to use the voice in your application. In any component that is a child of `VoiceProvider`, access these methods by importing the `useVoice` custom hook.
@@ -154,6 +161,64 @@ export function StartCall({ accessToken }: { accessToken: string }) {
 > :white_check_mark: CORRECT: call `connect` on a button click.
 >
 > :x: INCORRECT: call `connect` in a `useEffect` to start a call on component mount.
+
+### Diagnostics and logging
+
+`VoiceProvider` emits structured, correlated events for connection, socket,
+microphone, playback, device, message, and tool-call lifecycles. Diagnostics
+are local only: the SDK does not send telemetry to Hume or any other service.
+
+By default, only sanitized warnings and errors are written to `console`. To
+silence diagnostics completely:
+
+```tsx
+<VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+```
+
+To log the complete diagnostic lifecycle, including high-volume message and
+audio queue metadata:
+
+```tsx
+<VoiceProvider diagnostics={{ level: 'debug' }}>{children}</VoiceProvider>
+```
+
+You can forward filtered events to an existing observability vendor without
+also logging them to the console:
+
+```tsx
+import type { VoiceDiagnosticEvent } from '@humeai/voice-react';
+
+function recordVoiceEvent(event: VoiceDiagnosticEvent) {
+  observability.capture('hume_voice_diagnostic', event);
+}
+
+<VoiceProvider
+  diagnostics={{
+    level: 'info',
+    logger: false,
+    onEvent: recordVoiceEvent,
+  }}
+>
+  {children}
+</VoiceProvider>;
+```
+
+A custom `logger` can also implement the exported `VoiceLogger` interface.
+The selected `level` filters both the logger and `onEvent`, and failures in
+either sink are isolated from the voice call and existing callbacks.
+
+Events exclude transcript and tool content by default. Set
+`includeContent: true` only when your data-handling policy permits forwarding
+user and assistant text, tool arguments, tool results, and tool errors. Even
+with content enabled, diagnostics never emit authentication values, raw audio,
+PCM/base64 payloads, session-setting values such as prompts, or audio device
+IDs and labels.
+
+Every event includes `schemaVersion: 1`, `sdkVersion`, an `instanceId`, a
+monotonically increasing `sequence`, and connection/chat correlation when
+available. Schema version 1 keeps existing event meanings and fields stable,
+but future minor releases may add event names. Consumers should ignore names
+they do not recognize.
 
 ### Selecting audio devices
 
