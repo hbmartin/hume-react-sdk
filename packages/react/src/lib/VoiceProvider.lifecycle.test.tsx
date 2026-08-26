@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   onCloseHandler: null as
     | null
     | ((event: CloseEvent, consumerInitiated: boolean) => void | Promise<void>),
+  connectionGeneration: undefined as number | undefined,
   playerInit: vi.fn(),
   playerSetOutputDevice: vi.fn(),
   playerErrorHandler: null as null | PlayerErrorHandler,
@@ -57,9 +58,25 @@ vi.mock('./useVoiceClient', async () => {
   return {
     ...actual,
     useVoiceClient: (props: Parameters<typeof actual.useVoiceClient>[0]) => {
-      mocks.onCloseHandler = props.onClose ?? null;
+      mocks.onCloseHandler = props.onClose
+        ? (event, consumerInitiated) =>
+            props.onClose?.(
+              event,
+              consumerInitiated,
+              mocks.connectionGeneration,
+            )
+        : null;
       return {
-        connect: mocks.clientConnect,
+        connect: (
+          ...args: Parameters<
+            ReturnType<typeof actual.useVoiceClient>['connect']
+          >
+        ): ReturnType<ReturnType<typeof actual.useVoiceClient>['connect']> => {
+          mocks.connectionGeneration = args[2];
+          return mocks.clientConnect(...args) as ReturnType<
+            ReturnType<typeof actual.useVoiceClient>['connect']
+          >;
+        },
         disconnect: mocks.clientDisconnect,
         readyState: actual.VoiceReadyState.OPEN,
         sendAssistantInput: vi.fn(),
@@ -193,6 +210,7 @@ describe('VoiceProvider close lifecycle', () => {
     globalThis.AudioContext = originalAudioContext;
     vi.clearAllMocks();
     mocks.onCloseHandler = null;
+    mocks.connectionGeneration = undefined;
     mocks.playerErrorHandler = null;
     mocks.microphoneProps = null;
   });
@@ -637,7 +655,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.error).toMatchObject({ type: 'audio_error' });
   });
 
-  it('runs error teardown when socket close publishes error status first', async () => {
+  it('serializes error teardown behind an active socket-close cleanup', async () => {
     const closeMicrophone = createDeferred<void>();
     mocks.micStop.mockReturnValueOnce(closeMicrophone.promise);
     const { result } = renderHook(() => useVoice(), {
@@ -659,8 +677,9 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    await waitFor(() => expect(mocks.clientDisconnect).toHaveBeenCalledOnce());
-    expect(mocks.stopStream).toHaveBeenCalledOnce();
+    await waitFor(() => expect(mocks.micStop).toHaveBeenCalledOnce());
+    expect(mocks.clientDisconnect).not.toHaveBeenCalled();
+    expect(mocks.stopStream).not.toHaveBeenCalled();
     expect(result.current.status).toEqual({
       value: 'error',
       reason: 'audio playback failed',
@@ -670,6 +689,9 @@ describe('VoiceProvider close lifecycle', () => {
       closeMicrophone.resolve();
       await closeMicrophone.promise;
     });
+    await waitFor(() => expect(mocks.stopStream).toHaveBeenCalledOnce());
+    expect(mocks.micStop).toHaveBeenCalledOnce();
+    expect(mocks.clientDisconnect).not.toHaveBeenCalled();
   });
 
   it('ignores a delayed consumer close after a reconnect begins', async () => {
@@ -765,6 +787,89 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.stopStream).toHaveBeenCalledTimes(2);
     expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
     expect(result.current.status.value).toBe('disconnected');
+  });
+
+  it('releases a captured stream when the socket closes before opening', async () => {
+    const socketConnection = createDeferred<'open'>();
+    mocks.clientConnect.mockReturnValueOnce(socketConnection.promise);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+
+    let connecting = Promise.resolve();
+    act(() => {
+      connecting = result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.clientConnect).toHaveBeenCalledOnce());
+
+    act(() => {
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+    });
+    await waitFor(() => expect(mocks.stopStream).toHaveBeenCalledOnce());
+
+    expect(mocks.micStop).not.toHaveBeenCalled();
+    expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
+    expect(mocks.playerStop).not.toHaveBeenCalled();
+    expect(result.current.status.value).toBe('disconnected');
+
+    await act(async () => {
+      socketConnection.resolve('open');
+      await connecting;
+    });
+    expect(mocks.stopStream).toHaveBeenCalledOnce();
+  });
+
+  it('ignores the failed socket close after clientConnect rejects', async () => {
+    mocks.clientConnect.mockRejectedValueOnce(new Error('connect failed'));
+    const onClose = vi.fn();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false} onClose={onClose}>
+          {children}
+        </VoiceProvider>
+      ),
+    });
+
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    const cleanupCalls = mocks.stopStream.mock.calls.length;
+
+    act(() => {
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mocks.stopStream).toHaveBeenCalledTimes(cleanupCalls);
+  });
+
+  it('retries cleanup when a finalizer fails', async () => {
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.clearMessageStore.mockImplementationOnce(() => {
+      throw new Error('message cleanup failed');
+    });
+
+    await act(() => result.current.disconnect());
+    expect(mocks.micStop).toHaveBeenCalledOnce();
+
+    await act(() => result.current.disconnect());
+    expect(mocks.micStop).toHaveBeenCalledTimes(2);
+    expect(mocks.stopStream).toHaveBeenCalledTimes(2);
   });
 
   it('does not rerender voice consumers for a no-op disconnect', async () => {
@@ -1339,7 +1444,7 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
-  it('publishes socket closure immediately and ignores stale drain teardown', async () => {
+  it('publishes socket closure immediately and serializes later teardown', async () => {
     const deferredDrain = createDeferred<boolean>();
     mocks.waitForDrain.mockReturnValueOnce(deferredDrain.promise);
     const onClose = vi.fn();
@@ -1364,8 +1469,11 @@ describe('VoiceProvider close lifecycle', () => {
       expect.objectContaining({ code: 1006 }),
     );
 
-    await act(() => result.current.disconnect());
-    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(1);
+    let disconnecting = Promise.resolve();
+    act(() => {
+      disconnecting = result.current.disconnect();
+    });
+    expect(mocks.playerStopForContext).not.toHaveBeenCalled();
 
     let reconnect = Promise.resolve();
     act(() => {
@@ -1377,6 +1485,7 @@ describe('VoiceProvider close lifecycle', () => {
 
     await act(async () => {
       deferredDrain.resolve(true);
+      await disconnecting;
       await reconnect;
     });
 
@@ -1407,7 +1516,7 @@ describe('VoiceProvider close lifecycle', () => {
         auth: { type: 'accessToken', value: 'test-token' },
       }),
     );
-    const stopsBeforeClose = mocks.playerStop.mock.calls.length;
+    const stopsBeforeClose = mocks.playerStopForContext.mock.calls.length;
 
     act(() => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
@@ -1421,7 +1530,10 @@ describe('VoiceProvider close lifecycle', () => {
       await reconnect;
     });
 
-    expect(mocks.playerStop).toHaveBeenCalledTimes(stopsBeforeClose + 1);
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(
+      stopsBeforeClose + 1,
+    );
+    expect(mocks.playerStop).not.toHaveBeenCalled();
     expect(mocks.playerInit).toHaveBeenCalledTimes(2);
     expect(rendered.result.current.status.value).toBe('connected');
   });

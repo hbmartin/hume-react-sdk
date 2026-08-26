@@ -130,7 +130,7 @@ describe('useVoiceClient', () => {
 
     let secondConnect = Promise.resolve(VoiceReadyState.IDLE);
     act(() => {
-      secondConnect = result.current.connect(config);
+      secondConnect = result.current.connect(config, undefined, 22);
     });
     act(() => {
       secondSocket.handlers.get('message')?.({
@@ -158,7 +158,33 @@ describe('useVoiceClient', () => {
     expect(onClose).toHaveBeenCalledWith(
       expect.objectContaining({ code: 1000 }),
       true,
+      22,
     );
+  });
+
+  it('rejects when the active socket closes before opening', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onClose = vi.fn();
+    const { result } = renderHook(() => useVoiceClient({ onClose }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config, undefined, 7);
+    });
+    act(() => {
+      socket.handlers.get('close')?.({ code: 1006 } as never);
+    });
+
+    await expect(connecting).rejects.toThrow(
+      'The websocket closed before the voice connection opened (code 1006).',
+    );
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 1006 }),
+      false,
+      7,
+    );
+    expect(result.current.readyState).toBe(VoiceReadyState.CLOSED);
   });
 
   it('ignores a late tool call after the socket closes', async () => {

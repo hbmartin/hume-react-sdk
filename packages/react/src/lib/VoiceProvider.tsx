@@ -128,6 +128,7 @@ type VoiceErrorSnapshot = Readonly<{
   error: VoiceError | null;
   version: number;
   connectionId?: string;
+  chatId?: string;
 }>;
 
 const INITIAL_VOICE_ERROR_SNAPSHOT: VoiceErrorSnapshot = Object.freeze({
@@ -438,7 +439,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const isFlushingMicrophoneRef = useRef(false);
   const resourceCleanupCompletedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
-  const activeSocketGenerationRef = useRef<number | null>(null);
+  const currentConnectionGenerationRef = useRef<number | null>(null);
   const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
   const pendingDisconnectCleanupRef = useRef<Promise<void> | null>(null);
   const inputSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -451,6 +452,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
   const sharedAudioContextClosePromisesRef = useRef(
     new WeakMap<AudioContext, Promise<AudioContextCloseResult>>(),
+  );
+  const isCurrentLifecycleGeneration = useCallback(
+    (generation: number) => lifecycleGenerationRef.current === generation,
+    [],
   );
 
   const publishInputDeviceState = useCallback(
@@ -644,10 +649,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   const updateError = useCallback(
     (err: VoiceError) => {
+      const correlation = diagnostics.getCorrelation();
       const nextSnapshot: VoiceErrorSnapshot = {
         error: err,
         version: errorSnapshotRef.current.version + 1,
-        connectionId: diagnostics.getConnectionId(),
+        ...correlation,
       };
       errorSnapshotRef.current = nextSnapshot;
       setErrorSnapshot(nextSnapshot);
@@ -695,6 +701,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         category: getVoiceErrorCategory(currentError),
         name: 'sdk.error_cleared',
         connectionId: currentSnapshot.connectionId ?? null,
+        chatId: currentSnapshot.chatId ?? null,
         details: {
           reason,
           type: currentError.type,
@@ -918,15 +925,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       invokeConsumerCallback(diagnostics, 'onOpen', () => onOpen.current?.());
     }, [createConnectMessage, diagnostics, onOpen, startTimer]),
     onClose: useCallback(
-      (event: SocketCloseEvent, consumerInitiated: boolean) => {
-        const socketGeneration = activeSocketGenerationRef.current;
+      (
+        event: SocketCloseEvent,
+        consumerInitiated: boolean,
+        connectionGeneration?: number,
+      ) => {
         if (
-          socketGeneration === null ||
-          socketGeneration !== lifecycleGenerationRef.current
+          connectionGeneration === undefined ||
+          connectionGeneration !== currentConnectionGenerationRef.current
         ) {
           return;
         }
-        activeSocketGenerationRef.current = null;
+        currentConnectionGenerationRef.current = null;
 
         // A pending teardown owns every provider-wide mutation. Its socket close
         // only publishes the close event for the lifecycle that requested it.
@@ -968,10 +978,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
         // The microphone always stops at once: the socket is already gone, so
         // continuing to capture only keeps the recording indicator lit.
-        const shouldStopMic = resourceStatusRef.current.mic === 'connected';
+        const shouldStopMicRecorder =
+          resourceStatusRef.current.mic === 'connected';
+        const shouldReleaseMic =
+          resourceStatusRef.current.mic !== 'disconnected';
         const shouldStopPlayer =
           resourceStatusRef.current.audioPlayer === 'connected';
-        if (shouldStopMic) {
+        if (shouldReleaseMic) {
           resourceStatusRef.current.mic = 'disconnecting';
         }
         if (shouldStopPlayer) {
@@ -979,16 +992,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         }
 
         const micCleanup = (async () => {
-          if (!shouldStopMic) return;
+          if (!shouldReleaseMic) return;
           const failures: string[] = [];
-          try {
-            await micStopFnRef.current?.();
-          } catch (failure) {
-            failures.push(
-              failure instanceof Error ? failure.message : 'Unknown error',
-            );
+          if (shouldStopMicRecorder) {
+            try {
+              await micStopFnRef.current?.();
+            } catch (failure) {
+              failures.push(
+                failure instanceof Error ? failure.message : 'Unknown error',
+              );
+            }
           }
-          if (closeGeneration === lifecycleGenerationRef.current) {
+          if (isCurrentLifecycleGeneration(closeGeneration)) {
             try {
               stopStream();
             } catch (failure) {
@@ -1004,15 +1019,19 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         const playerCleanup = (async () => {
           if (!shouldStopPlayer) return;
           await playerWaitForQueueToDrain();
-          if (closeGeneration !== lifecycleGenerationRef.current) return;
-          await playerStopAll();
+          if (!isCurrentLifecycleGeneration(closeGeneration)) return;
+          if (sharedContextToClose) {
+            await playerStopAllForContext(sharedContextToClose);
+          } else {
+            await playerStopAll();
+          }
         })();
 
         const closeCleanup = Promise.allSettled([
           micCleanup,
           playerCleanup,
         ]).then(async (results) => {
-          if (closeGeneration !== lifecycleGenerationRef.current) return;
+          if (!isCurrentLifecycleGeneration(closeGeneration)) return;
           const cleanupFailures = results.flatMap((result) =>
             result.status === 'rejected'
               ? [
@@ -1025,6 +1044,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           if (sharedContextToClose) {
             const closeResult =
               await closeSharedAudioContext(sharedContextToClose);
+            if (!isCurrentLifecycleGeneration(closeGeneration)) return;
             if (closeResult && !closeResult.success) {
               cleanupFailures.push(closeResult.error.message);
             }
@@ -1055,10 +1075,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         diagnostics,
         onClose,
         playerStopAll,
+        playerStopAllForContext,
         playerWaitForQueueToDrain,
         resetAudioDeviceState,
         setDisconnectedStatus,
         setErrorStatus,
+        isCurrentLifecycleGeneration,
         stopStream,
         stopTimer,
         toolStatusClearStore,
@@ -1337,19 +1359,17 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     }
   }, [diagnostics, sendResumeAssistantMessage, updateError]);
 
-  const checkShouldContinueConnecting = useCallback((generation: number) => {
-    // This check exists because if the user disconnects while the
-    // connection is in progress, we need to stop the connection
-    // attempt and prevent audio resources from being initialized.
-    return (
-      isConnectingRef.current !== false &&
-      lifecycleGenerationRef.current === generation
-    );
-  }, []);
-
-  const isCurrentLifecycleGeneration = useCallback(
-    (generation: number) => lifecycleGenerationRef.current === generation,
-    [],
+  const checkShouldContinueConnecting = useCallback(
+    (generation: number) => {
+      // This check exists because if the user disconnects while the
+      // connection is in progress, we need to stop the connection
+      // attempt and prevent audio resources from being initialized.
+      return (
+        isConnectingRef.current !== false &&
+        isCurrentLifecycleGeneration(generation)
+      );
+    },
+    [isCurrentLifecycleGeneration],
   );
 
   const connect = useCallback(
@@ -1400,6 +1420,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       }
 
       const generation = ++lifecycleGenerationRef.current;
+      currentConnectionGenerationRef.current = generation;
       resourceCleanupCompletedRef.current = false;
       const connectionStartedAt = getMonotonicTime();
       clearError('connect');
@@ -1608,11 +1629,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return;
       }
       if (!playerInitialized) {
-        if (lifecycleGenerationRef.current !== generation) {
+        if (!isCurrentLifecycleGeneration(generation)) {
           return;
         }
         await cleanupAttemptResources(true);
-        if (lifecycleGenerationRef.current !== generation) {
+        if (!isCurrentLifecycleGeneration(generation)) {
           return;
         }
         resourceStatusRef.current.socket = 'disconnected';
@@ -1635,13 +1656,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // because a connection needs to be established before the microphone can start sending
       // the audio stream
       try {
-        activeSocketGenerationRef.current = generation;
         await clientConnect(
           {
             ...socketConfig,
             verboseTranscription: socketConfig.verboseTranscription ?? true,
           },
           sessionSettings,
+          generation,
         );
       } catch (e) {
         // catching the thrown error here so we can return early from the connect function.
@@ -1649,12 +1670,16 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // except for the AbortController case, which we don't need to call onClientError for
         // because cancellations are intentional, and not network errors.
         const connectionIsCurrent = checkShouldContinueConnecting(generation);
-        await cleanupAttemptResources(true);
-        if (connectionIsCurrent) {
-          resourceStatusRef.current.audioPlayer = 'disconnected';
-          resourceStatusRef.current.mic = 'disconnected';
-          isConnectingRef.current = false;
+        if (!connectionIsCurrent) {
+          return;
         }
+        if (currentConnectionGenerationRef.current === generation) {
+          currentConnectionGenerationRef.current = null;
+        }
+        await cleanupAttemptResources(true);
+        resourceStatusRef.current.audioPlayer = 'disconnected';
+        resourceStatusRef.current.mic = 'disconnected';
+        isConnectingRef.current = false;
         return;
       }
       if (!checkShouldContinueConnecting(generation)) {
@@ -1664,7 +1689,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           name: 'connection.attempt_cancelled',
           details: { phase: 'socket' },
         });
-        await cleanupAttemptResources(true);
+        // Every lifecycle invalidation after the socket starts has already
+        // registered a teardown that owns the captured stream and context.
         return;
       }
       // we can set resourceStatusRef.current.socket here because `client.connect` resolves
@@ -1735,6 +1761,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       diagnostics,
       enableAudioWorklet,
       getStream,
+      isCurrentLifecycleGeneration,
       micStart,
       playerInitPlayer,
       playerStopAllForContext,
@@ -1762,19 +1789,23 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return existingCleanup;
       }
 
-      if (
-        resourceCleanupCompletedRef.current &&
-        areAllResourcesDisconnected() &&
-        !isConnectingRef.current &&
-        sharedAudioContextRef.current === null
-      ) {
-        return Promise.resolve();
-      }
-
-      beginDisconnectDiagnostic(diagnosticReason);
-
-      const sharedContextToClose = sharedAudioContextRef.current;
+      const closeCleanupToAwait = pendingCloseCleanupRef.current;
       const cleanup = (async () => {
+        if (closeCleanupToAwait) {
+          await Promise.allSettled([closeCleanupToAwait]);
+        }
+
+        if (
+          resourceCleanupCompletedRef.current &&
+          areAllResourcesDisconnected() &&
+          !isConnectingRef.current &&
+          sharedAudioContextRef.current === null
+        ) {
+          return;
+        }
+
+        beginDisconnectDiagnostic(diagnosticReason);
+        const sharedContextToClose = sharedAudioContextRef.current;
         const failures: string[] = [];
         const recordFailure = (label: string, failure: unknown) => {
           const detail =
@@ -1800,10 +1831,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         };
 
         try {
-          const cleanupGeneration = ++lifecycleGenerationRef.current;
-          if (activeSocketGenerationRef.current !== null) {
-            activeSocketGenerationRef.current = cleanupGeneration;
-          }
+          lifecycleGenerationRef.current += 1;
           resourceStatusRef.current.socket = 'disconnecting';
           resourceStatusRef.current.audioPlayer = 'disconnecting';
           resourceStatusRef.current.mic = 'disconnecting';
@@ -1845,7 +1873,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         } finally {
           isFlushingMicrophoneRef.current = false;
           isConnectingRef.current = false;
-          resourceCleanupCompletedRef.current = failures.length === 0;
           resourceStatusRef.current = {
             mic: 'disconnected',
             audioPlayer: 'disconnected',
@@ -1858,6 +1885,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
           finalize('Tool status cleanup failed', toolStatusClearStore);
           finalize('Pause state cleanup failed', () => setIsPaused(false));
+          resourceCleanupCompletedRef.current = failures.length === 0;
 
           if (failures.length > 0) {
             diagnostics.emit({
@@ -1910,7 +1938,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     const cleanup = disconnectAndCleanUpResources();
     const disconnectGeneration = lifecycleGenerationRef.current;
     await cleanup;
-    if (lifecycleGenerationRef.current !== disconnectGeneration) {
+    if (!isCurrentLifecycleGeneration(disconnectGeneration)) {
       return;
     }
     if (clearError('consumer_disconnect', errorVersionAtStart)) {
@@ -1925,6 +1953,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   }, [
     clearError,
     disconnectAndCleanUpResources,
+    isCurrentLifecycleGeneration,
     setDisconnectedStatus,
     setErrorStatus,
   ]);

@@ -106,6 +106,11 @@ export type VoiceDiagnosticInput = {
    * `null` when the event is intentionally uncorrelated.
    */
   connectionId?: string | null;
+  /**
+   * Override the active chat correlation for a delayed event. Pass `null`
+   * when the event must not inherit the currently active chat.
+   */
+  chatId?: string | null;
   durationMs?: number;
   details?: Record<string, unknown>;
   sensitiveDetails?: Record<string, unknown>;
@@ -117,6 +122,10 @@ export interface VoiceDiagnosticsReporter {
   clearConnection(): void;
   emit(input: VoiceDiagnosticInput): void;
   getConnectionId(): string | undefined;
+  getCorrelation(): Readonly<{
+    connectionId?: string;
+    chatId?: string;
+  }>;
   isEnabled(level: VoiceDiagnosticLevel): boolean;
   setChatId(chatId?: string): void;
 }
@@ -349,6 +358,11 @@ export const createVoiceDiagnosticsReporter = (
         input.connectionId === null
           ? undefined
           : (input.connectionId ?? connectionId);
+      const eventChatId =
+        input.chatId === null
+          ? undefined
+          : (input.chatId ??
+            (input.connectionId === undefined ? chatId : undefined));
       const event = Object.freeze({
         schemaVersion: 1 as const,
         sdkVersion: packageJson.version,
@@ -358,7 +372,7 @@ export const createVoiceDiagnosticsReporter = (
         ...(eventConnectionId
           ? { connectionId: eventConnectionId }
           : undefined),
-        ...(chatId ? { chatId } : undefined),
+        ...(eventChatId ? { chatId: eventChatId } : undefined),
         level: input.level,
         category: input.category,
         name: input.name,
@@ -387,6 +401,12 @@ export const createVoiceDiagnosticsReporter = (
     },
     getConnectionId() {
       return connectionId;
+    },
+    getCorrelation() {
+      return Object.freeze({
+        ...(connectionId ? { connectionId } : undefined),
+        ...(chatId ? { chatId } : undefined),
+      });
     },
     isEnabled,
     setChatId(nextChatId) {
