@@ -52,7 +52,8 @@ export type VoiceDiagnosticEventName =
   | 'tool.handler_skipped'
   | 'control.changed'
   | 'consumer.callback_failed'
-  | 'sdk.error';
+  | 'sdk.error'
+  | 'sdk.error_cleared';
 
 export type VoiceDiagnosticPrimitive = string | number | boolean | null;
 

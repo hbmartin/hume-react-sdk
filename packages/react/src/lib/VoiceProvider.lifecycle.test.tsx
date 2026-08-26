@@ -13,6 +13,11 @@ type PlayerErrorHandler = (
   reason: 'audio_player_initialization_failure',
 ) => void;
 
+type MicrophoneErrorHandler = (
+  message: string,
+  reason: 'mic_closure_failure',
+) => void;
+
 const mocks = vi.hoisted(() => ({
   clearMessageStore: vi.fn(),
   clientConnect: vi.fn(),
@@ -25,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   micStop: vi.fn(),
   microphoneProps: null as null | {
     onAudioCaptured: (buffer: ArrayBuffer) => void;
+    onError: MicrophoneErrorHandler;
     onStartRecording?: () => void;
     onStopRecording?: () => void;
   },
@@ -95,6 +101,7 @@ vi.mock('./useSoundPlayer', () => ({
 vi.mock('./useMicrophone', () => ({
   useMicrophone: (props: {
     onAudioCaptured: (buffer: ArrayBuffer) => void;
+    onError: MicrophoneErrorHandler;
     onStartRecording?: () => void;
     onStopRecording?: () => void;
   }) => {
@@ -365,9 +372,20 @@ describe('VoiceProvider close lifecycle', () => {
     consoleError.mockRestore();
   });
 
-  it('clears a handled error after an explicit disconnect', async () => {
+  it('acknowledges an existing error without repeating completed teardown', async () => {
+    const events: VoiceDiagnosticEvent[] = [];
     const { result } = renderHook(() => useVoice(), {
-      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+      wrapper: ({ children }) => (
+        <VoiceProvider
+          diagnostics={{
+            level: 'debug',
+            logger: false,
+            onEvent: (event) => events.push(event),
+          }}
+        >
+          {children}
+        </VoiceProvider>
+      ),
     });
     await act(() =>
       result.current.connect({
@@ -382,12 +400,203 @@ describe('VoiceProvider close lifecycle', () => {
       );
     });
     await waitFor(() => expect(result.current.status.value).toBe('error'));
+    await waitFor(() =>
+      expect(
+        events.filter((event) => event.name === 'connection.disconnected'),
+      ).toHaveLength(1),
+    );
+
+    const cleanupCallCounts = {
+      client: mocks.clientDisconnect.mock.calls.length,
+      context: mocks.contextClose.mock.calls.length,
+      mic: mocks.micStop.mock.calls.length,
+      player: mocks.playerStopForContext.mock.calls.length,
+    };
 
     await act(() => result.current.disconnect());
 
     expect(result.current.status).toEqual({ value: 'disconnected' });
     expect(result.current.error).toBeNull();
     expect(result.current.isError).toBe(false);
+    expect(mocks.clientDisconnect).toHaveBeenCalledTimes(
+      cleanupCallCounts.client,
+    );
+    expect(mocks.contextClose).toHaveBeenCalledTimes(cleanupCallCounts.context);
+    expect(mocks.micStop).toHaveBeenCalledTimes(cleanupCallCounts.mic);
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(
+      cleanupCallCounts.player,
+    );
+    expect(
+      events.filter((event) => event.name === 'connection.disconnect_started'),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.name === 'connection.disconnected'),
+    ).toHaveLength(1);
+    expect(
+      events.find((event) => event.name === 'sdk.error_cleared'),
+    ).toMatchObject({
+      details: {
+        reason: 'consumer_disconnect',
+        type: 'audio_error',
+      },
+    });
+  });
+
+  it('preserves an error raised while explicit disconnect is tearing down', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false} onError={onError}>
+          {children}
+        </VoiceProvider>
+      ),
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.micStop.mockImplementationOnce(() => {
+      mocks.microphoneProps?.onError(
+        'microphone closure failed',
+        'mic_closure_failure',
+      );
+      return Promise.resolve();
+    });
+
+    await act(() => result.current.disconnect());
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'microphone closure failed',
+        reason: 'mic_closure_failure',
+        type: 'mic_error',
+      }),
+    );
+    expect(result.current.error).toMatchObject({
+      reason: 'mic_closure_failure',
+      type: 'mic_error',
+    });
+    expect(result.current.isError).toBe(true);
+    expect(result.current.status).toEqual({
+      value: 'error',
+      reason: 'microphone closure failed',
+    });
+  });
+
+  it('treats disconnect inside onError as acknowledgement after cleanup', async () => {
+    let disconnectFromHandler: (() => Promise<void>) | null = null;
+    let disconnecting = Promise.resolve();
+    const onError = vi.fn(() => {
+      if (disconnectFromHandler === null) {
+        throw new Error('Expected disconnect to be available.');
+      }
+      disconnecting = disconnectFromHandler();
+    });
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false} onError={onError}>
+          {children}
+        </VoiceProvider>
+      ),
+    });
+    disconnectFromHandler = result.current.disconnect;
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    act(() => {
+      mocks.playerErrorHandler?.(
+        'audio playback failed',
+        'audio_player_initialization_failure',
+      );
+    });
+    await act(() => disconnecting);
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'audio_player_initialization_failure',
+        type: 'audio_error',
+      }),
+    );
+    expect(result.current.status).toEqual({ value: 'disconnected' });
+    expect(result.current.error).toBeNull();
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('keeps error status and diagnostics stable after a late consumer close', async () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider
+          diagnostics={{
+            level: 'debug',
+            logger: false,
+            onEvent: (event) => events.push(event),
+          }}
+        >
+          {children}
+        </VoiceProvider>
+      ),
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    act(() => {
+      mocks.playerErrorHandler?.(
+        'audio playback failed',
+        'audio_player_initialization_failure',
+      );
+    });
+    await waitFor(() =>
+      expect(
+        events.filter((event) => event.name === 'connection.disconnected'),
+      ).toHaveLength(1),
+    );
+    const cleanupCalls = mocks.playerStopForContext.mock.calls.length;
+
+    act(() => {
+      void mocks.onCloseHandler?.({ code: 1000 } as CloseEvent, true);
+    });
+    await waitFor(() => expect(result.current.status.value).toBe('error'));
+
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(cleanupCalls);
+    expect(
+      events.filter((event) => event.name === 'connection.disconnect_started'),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.name === 'connection.disconnected'),
+    ).toHaveLength(1);
+    expect(
+      events.find((event) => event.name === 'connection.disconnected')
+        ?.connectionId,
+    ).toBeTruthy();
+    expect(result.current.error).toMatchObject({ type: 'audio_error' });
+  });
+
+  it('does not rerender voice consumers for a no-op disconnect', async () => {
+    let renderCount = 0;
+    const { result } = renderHook(
+      () => {
+        renderCount += 1;
+        return useVoice();
+      },
+      {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+        ),
+      },
+    );
+    const initialRenderCount = renderCount;
+
+    await act(() => result.current.disconnect());
+
+    expect(renderCount).toBe(initialRenderCount);
+    expect(result.current.status).toEqual({ value: 'disconnected' });
   });
 
   it('blocks reconnect until an explicit disconnect has released old resources', async () => {

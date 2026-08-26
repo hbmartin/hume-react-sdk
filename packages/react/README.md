@@ -326,10 +326,13 @@ Opens a socket connection to the voice API and initializes the microphone.
 | --------- | ---------------- | ------------------------------------- |
 | `options` | `ConnectOptions` | Optional settings for the connection. |
 
-#### `disconnect`: () => void
+#### `disconnect`: () => Promise<void>
 
-Disconnect from the voice API and microphone. Calling this explicitly also
-clears any handled connection error and returns `status` to `disconnected`.
+Disconnect from the voice API and microphone. After cleanup completes, an
+explicit call clears the provider error that was current when the call began
+and returns `status` to `disconnected`. If teardown raises a newer error, that
+error is preserved and `status` remains `error`. Calling `disconnect()` inside
+`onError` acknowledges that reported error after cleanup.
 
 #### `setInputDevice`: (deviceId: string | null) => Promise<void>
 

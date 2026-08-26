@@ -120,6 +120,8 @@ type VoiceStatus =
       reason: string;
     };
 
+const DISCONNECTED_VOICE_STATUS: VoiceStatus = { value: 'disconnected' };
+
 type ResourceStatus =
   | 'connecting'
   | 'connected'
@@ -406,11 +408,22 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     stop: stopTimer,
   } = useCallDuration();
 
-  const [status, setStatus] = useState<VoiceStatus>({
-    value: 'disconnected',
-  });
+  const [status, setStatus] = useState<VoiceStatus>(DISCONNECTED_VOICE_STATUS);
+  const setDisconnectedStatus = useCallback(() => {
+    setStatus((current) =>
+      current.value === 'disconnected' ? current : DISCONNECTED_VOICE_STATUS,
+    );
+  }, []);
+  const setErrorStatus = useCallback((nextError: VoiceError) => {
+    setStatus((current) =>
+      current.value === 'error' && current.reason === nextError.message
+        ? current
+        : { value: 'error', reason: nextError.message },
+    );
+  }, []);
   const isConnectingRef = useRef(false);
   const isFlushingMicrophoneRef = useRef(false);
+  const resourceCleanupCompletedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
   const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
   const pendingDisconnectCleanupRef = useRef<Promise<void> | null>(null);
@@ -500,6 +513,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   // error handling
   const [error, setError] = useState<VoiceError | null>(null);
+  const errorRef = useRef<VoiceError | null>(null);
+  const errorVersionRef = useRef(0);
   const isError = error !== null;
   const isMicrophoneError = error?.type === 'mic_error';
   const isSocketError = error?.type === 'socket_error';
@@ -601,27 +616,66 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     );
   }, []);
 
+  const checkAreAllResourcesDisconnected = useCallback(() => {
+    return (
+      resourceStatusRef.current.mic === 'disconnected' &&
+      resourceStatusRef.current.audioPlayer === 'disconnected' &&
+      resourceStatusRef.current.socket === 'disconnected'
+    );
+  }, []);
+
   const updateError = useCallback(
-    (err: VoiceError | null) => {
+    (err: VoiceError) => {
+      errorVersionRef.current += 1;
+      errorRef.current = err;
       setError(err);
-      if (err !== null) {
-        diagnostics.emit({
-          level: 'error',
-          category: getVoiceErrorCategory(err),
-          name: 'sdk.error',
-          details: {
-            type: err.type,
-            reason: err.reason,
-            message: err.message,
-            ...(err.error ? { error: err.error } : undefined),
-          },
-        });
-        invokeConsumerCallback(diagnostics, 'onError', () =>
-          onError.current?.(err),
-        );
-      }
+      diagnostics.emit({
+        level: 'error',
+        category: getVoiceErrorCategory(err),
+        name: 'sdk.error',
+        details: {
+          type: err.type,
+          reason: err.reason,
+          message: err.message,
+          ...(err.error ? { error: err.error } : undefined),
+        },
+      });
+      invokeConsumerCallback(diagnostics, 'onError', () =>
+        onError.current?.(err),
+      );
     },
     [diagnostics, onError],
+  );
+
+  const clearError = useCallback(
+    (reason: 'connect' | 'consumer_disconnect', expectedVersion?: number) => {
+      if (
+        expectedVersion !== undefined &&
+        errorVersionRef.current !== expectedVersion
+      ) {
+        return false;
+      }
+
+      const currentError = errorRef.current;
+      if (currentError === null) {
+        return true;
+      }
+
+      errorRef.current = null;
+      setError(null);
+      diagnostics.emit({
+        level: 'info',
+        category: getVoiceErrorCategory(currentError),
+        name: 'sdk.error_cleared',
+        details: {
+          reason,
+          type: currentError.type,
+          errorReason: currentError.reason,
+        },
+      });
+      return true;
+    },
+    [diagnostics],
   );
 
   const onClientError: NonNullable<
@@ -833,7 +887,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     }, [createConnectMessage, diagnostics, onOpen, startTimer]),
     onClose: useCallback(
       (event: SocketCloseEvent, consumerInitiated: boolean) => {
-        beginDisconnectDiagnostic(consumerInitiated ? 'consumer' : 'server');
+        // Consumer-initiated closure is already owned by
+        // disconnectAndCleanUpResources. Only server closure starts a new
+        // diagnostic lifecycle here.
+        if (!consumerInitiated) {
+          beginDisconnectDiagnostic('server');
+        }
         const closeGeneration = ++lifecycleGenerationRef.current;
         const sharedContextToClose = sharedAudioContextRef.current;
         // onClose handler needs to handle resource cleanup in the event that the
@@ -850,7 +909,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         }
         toolStatusClearStore();
         setIsPaused(false);
-        setStatus({ value: 'disconnected' });
+        const closeError = errorRef.current;
+        if (closeError === null) {
+          setDisconnectedStatus();
+        } else {
+          setErrorStatus(closeError);
+        }
 
         // The microphone always stops at once: the socket is already gone, so
         // continuing to capture only keeps the recording indicator lit.
@@ -886,17 +950,20 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
           resourceStatusRef.current.audioPlayer = 'disconnected';
           resourceStatusRef.current.mic = 'disconnected';
-          completeDisconnectDiagnostic(
-            results.flatMap((result) =>
-              result.status === 'rejected'
-                ? [
-                    result.reason instanceof Error
-                      ? result.reason.message
-                      : 'Unknown cleanup error',
-                  ]
-                : [],
-            ),
-          );
+          if (!consumerInitiated) {
+            resourceCleanupCompletedRef.current = true;
+            completeDisconnectDiagnostic(
+              results.flatMap((result) =>
+                result.status === 'rejected'
+                  ? [
+                      result.reason instanceof Error
+                        ? result.reason.message
+                        : 'Unknown cleanup error',
+                    ]
+                  : [],
+              ),
+            );
+          }
         });
         pendingCloseCleanupRef.current = closeCleanup;
         const clearCloseCleanup = () => {
@@ -921,6 +988,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         playerStopAll,
         playerWaitForQueueToDrain,
         resetAudioDeviceState,
+        setDisconnectedStatus,
+        setErrorStatus,
         stopTimer,
         toolStatusClearStore,
       ],
@@ -1256,6 +1325,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       }
 
       const generation = ++lifecycleGenerationRef.current;
+      resourceCleanupCompletedRef.current = false;
       const connectionStartedAt = getMonotonicTime();
       diagnostics.beginConnection(socketConfig.auth.value);
       diagnostics.addRedactionValue(devices?.microphoneDeviceId);
@@ -1275,7 +1345,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       activeAudioConstraintsRef.current = null;
       resetAudioDeviceState();
 
-      updateError(null);
+      clearError('connect');
       setStatus({ value: 'connecting' });
       resourceStatusRef.current.socket = 'connecting';
       resourceStatusRef.current.audioPlayer = 'connecting';
@@ -1583,6 +1653,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     },
     [
       checkShouldContinueConnecting,
+      clearError,
       clientConnect,
       closeSharedAudioContext,
       diagnostics,
@@ -1612,6 +1683,16 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const existingCleanup = pendingDisconnectCleanupRef.current;
       if (existingCleanup) {
         return existingCleanup;
+      }
+
+      if (
+        diagnosticReason !== 'unmount' &&
+        resourceCleanupCompletedRef.current &&
+        checkAreAllResourcesDisconnected() &&
+        !isConnectingRef.current &&
+        sharedAudioContextRef.current === null
+      ) {
+        return Promise.resolve();
       }
 
       beginDisconnectDiagnostic(diagnosticReason);
@@ -1685,6 +1766,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         } finally {
           isFlushingMicrophoneRef.current = false;
           isConnectingRef.current = false;
+          resourceCleanupCompletedRef.current = true;
           resourceStatusRef.current = {
             mic: 'disconnected',
             audioPlayer: 'disconnected',
@@ -1725,6 +1807,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     },
     [
       beginDisconnectDiagnostic,
+      checkAreAllResourcesDisconnected,
       completeDisconnectDiagnostic,
       diagnostics,
       stopTimer,
@@ -1744,10 +1827,23 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   // `disconnect` is the function that the end user calls to disconnect a call
   const disconnect = useCallback(async () => {
+    const errorVersionAtStart = errorVersionRef.current;
     await disconnectAndCleanUpResources();
-    updateError(null);
-    setStatus({ value: 'disconnected' });
-  }, [disconnectAndCleanUpResources, updateError]);
+    if (clearError('consumer_disconnect', errorVersionAtStart)) {
+      setDisconnectedStatus();
+      return;
+    }
+
+    const teardownError = errorRef.current;
+    if (teardownError !== null) {
+      setErrorStatus(teardownError);
+    }
+  }, [
+    clearError,
+    disconnectAndCleanUpResources,
+    setDisconnectedStatus,
+    setErrorStatus,
+  ]);
 
   const disconnectAndCleanUpResourcesRef = useLatestRef(
     disconnectAndCleanUpResources,
@@ -1757,10 +1853,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     if (error !== null && status.value !== 'error') {
       // If the status is ever set to `error`, disconnect the call
       // and clean up resources.
-      setStatus({ value: 'error', reason: error.message });
+      setErrorStatus(error);
       void disconnectAndCleanUpResources('error');
     }
-  }, [status.value, disconnectAndCleanUpResources, error]);
+  }, [status.value, disconnectAndCleanUpResources, error, setErrorStatus]);
 
   useEffect(() => {
     // disconnect from socket when the voice provider component unmounts
