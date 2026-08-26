@@ -127,6 +127,25 @@ describe('voice diagnostics reporter', () => {
     expect(Object.isFrozen(events[0]?.details.states)).toBe(true);
   });
 
+  it('supports explicit correlation for events emitted after cleanup', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const originalConnectionId = reporter.beginConnection();
+    expect(reporter.getConnectionId()).toBe(originalConnectionId);
+    reporter.clearConnection();
+
+    reporter.emit({ ...input, connectionId: originalConnectionId });
+    reporter.beginConnection();
+    reporter.emit({ ...input, connectionId: null });
+
+    expect(events[0]?.connectionId).toBe(originalConnectionId);
+    expect(events[1]?.connectionId).toBeUndefined();
+  });
+
   it('redacts secrets and protected fields from default events', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
