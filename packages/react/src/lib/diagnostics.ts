@@ -101,6 +101,11 @@ export type VoiceDiagnosticInput = {
   level: VoiceDiagnosticLevel;
   category: VoiceDiagnosticCategory;
   name: VoiceDiagnosticEventName;
+  /**
+   * Override the active connection correlation for a delayed event. Pass
+   * `null` when the event is intentionally uncorrelated.
+   */
+  connectionId?: string | null;
   durationMs?: number;
   details?: Record<string, unknown>;
   sensitiveDetails?: Record<string, unknown>;
@@ -111,6 +116,7 @@ export interface VoiceDiagnosticsReporter {
   beginConnection(secret?: string): string;
   clearConnection(): void;
   emit(input: VoiceDiagnosticInput): void;
+  getConnectionId(): string | undefined;
   isEnabled(level: VoiceDiagnosticLevel): boolean;
   setChatId(chatId?: string): void;
 }
@@ -339,13 +345,19 @@ export const createVoiceDiagnosticsReporter = (
         details = Object.freeze({ sanitizationFailed: true });
       }
       sequence += 1;
+      const eventConnectionId =
+        input.connectionId === null
+          ? undefined
+          : (input.connectionId ?? connectionId);
       const event = Object.freeze({
         schemaVersion: 1 as const,
         sdkVersion: packageJson.version,
         timestamp: new Date().toISOString(),
         sequence,
         instanceId,
-        ...(connectionId ? { connectionId } : undefined),
+        ...(eventConnectionId
+          ? { connectionId: eventConnectionId }
+          : undefined),
         ...(chatId ? { chatId } : undefined),
         level: input.level,
         category: input.category,
@@ -372,6 +384,9 @@ export const createVoiceDiagnosticsReporter = (
           // A broken logger is isolated from both the SDK and the event callback.
         }
       }
+    },
+    getConnectionId() {
+      return connectionId;
     },
     isEnabled,
     setChatId(nextChatId) {
