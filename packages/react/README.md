@@ -328,7 +328,8 @@ Opens a socket connection to the voice API and initializes the microphone.
 
 #### `disconnect`: () => void
 
-Disconnect from the voice API and microphone.
+Disconnect from the voice API and microphone. Calling this explicitly also
+clears any handled connection error and returns `status` to `disconnected`.
 
 #### `setInputDevice`: (deviceId: string | null) => Promise<void>
 

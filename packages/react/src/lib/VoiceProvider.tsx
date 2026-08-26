@@ -1743,18 +1743,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   // `disconnect` is the function that the end user calls to disconnect a call
-  const disconnect = useCallback(
-    async (disconnectOnError?: boolean) => {
-      await disconnectAndCleanUpResources();
-
-      if (status.value !== 'error' && !disconnectOnError) {
-        // if status was 'error', keep the error status so we can show the error message to the end user.
-        // otherwise, set status to 'disconnected'
-        setStatus({ value: 'disconnected' });
-      }
-    },
-    [disconnectAndCleanUpResources, status.value],
-  );
+  const disconnect = useCallback(async () => {
+    await disconnectAndCleanUpResources();
+    updateError(null);
+    setStatus({ value: 'disconnected' });
+  }, [disconnectAndCleanUpResources, updateError]);
 
   const disconnectAndCleanUpResourcesRef = useLatestRef(
     disconnectAndCleanUpResources,
