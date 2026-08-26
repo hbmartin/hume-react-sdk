@@ -365,6 +365,31 @@ describe('VoiceProvider close lifecycle', () => {
     consoleError.mockRestore();
   });
 
+  it('clears a handled error after an explicit disconnect', async () => {
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    act(() => {
+      mocks.playerErrorHandler?.(
+        'audio playback failed',
+        'audio_player_initialization_failure',
+      );
+    });
+    await waitFor(() => expect(result.current.status.value).toBe('error'));
+
+    await act(() => result.current.disconnect());
+
+    expect(result.current.status).toEqual({ value: 'disconnected' });
+    expect(result.current.error).toBeNull();
+    expect(result.current.isError).toBe(false);
+  });
+
   it('blocks reconnect until an explicit disconnect has released old resources', async () => {
     const microphoneStopped = createDeferred<void>();
     const { result } = renderHook(() => useVoice(), {
