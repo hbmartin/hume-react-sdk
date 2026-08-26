@@ -1,39 +1,46 @@
-import { parseTrackEncodingConstraints } from './getMicrophoneDefaults';
-import { describe, expect, it } from 'vitest';
+import { Channels } from '@humeai/assistant';
+import { describe, expect, it, vi } from 'vitest';
 
-describe('parseTrackEncodingConstraints', () => {
-  it('should return default values when no constraints are provided', () => {
-    const result = parseTrackEncodingConstraints({}, {});
+import { getStreamSettings } from './getMicrophoneDefaults';
+
+const createStream = (settings: MediaTrackSettings) => {
+  const track = {
+    getSettings: vi.fn(() => settings),
+  } as unknown as MediaStreamTrack;
+
+  return {
+    getAudioTracks: vi.fn(() => [track]),
+  } as unknown as MediaStream;
+};
+
+describe('getStreamSettings', () => {
+  it('uses the track settings negotiated by the browser', () => {
+    const result = getStreamSettings(
+      createStream({ sampleRate: 44_100, channelCount: Channels.STEREO }),
+      { sampleRate: 16_000, channelCount: Channels.MONO },
+    );
+
     expect(result).toEqual({
-      sampleRate: 48000,
-      channelCount: 1,
+      sampleRate: 44_100,
+      channelCount: Channels.STEREO,
     });
   });
 
-  it('should return the minimum value when the ideal value is less than the minimum', () => {
-    const result = parseTrackEncodingConstraints(
-      { sampleRate: { min: 44100, max: 96000 } },
-      { sampleRate: 40000 },
-    );
-    expect(result.sampleRate).toEqual(44100);
-    expect(result.channelCount).toEqual(1);
+  it('falls back to requested values when settings are unavailable', () => {
+    const result = getStreamSettings(createStream({}), {
+      sampleRate: 16_000,
+      channelCount: Channels.STEREO,
+    });
+
+    expect(result).toEqual({
+      sampleRate: 16_000,
+      channelCount: Channels.STEREO,
+    });
   });
 
-  it('should return the maximum value when the ideal value is greater than the maximum', () => {
-    const result = parseTrackEncodingConstraints(
-      { sampleRate: { min: 44100, max: 96000 } },
-      { sampleRate: 100000 },
-    );
-    expect(result.sampleRate).toEqual(96000);
-    expect(result.channelCount).toEqual(1);
-  });
-
-  it('should return the ideal value when it is within the min and max range', () => {
-    const result = parseTrackEncodingConstraints(
-      { sampleRate: { min: 44100, max: 96000 } },
-      { sampleRate: 50000 },
-    );
-    expect(result.sampleRate).toEqual(50000);
-    expect(result.channelCount).toEqual(1);
+  it('rejects an unsupported negotiated channel count', () => {
+    expect(() =>
+      getStreamSettings(createStream({ channelCount: 6 }), {}),
+    ).toThrow('Unsupported microphone channel count: 6');
   });
 });

@@ -1,6 +1,6 @@
 import type { Config, Message } from '@humeai/assistant';
 import { AssistantClient } from '@humeai/assistant';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
 export enum ReadyState {
   IDLE = 'idle',
@@ -26,15 +26,19 @@ export const useAssistantClient = (props: {
     ((arrayBuffer: ArrayBufferLike) => void) | undefined
   >(props.onAudioMessage);
   onAudioMessage.current = props.onAudioMessage;
+  const onError = useRef(props.onError);
+  onError.current = props.onError;
 
-  const connect = () => {
-    client.current = AssistantClient.create(config.current);
+  const connect = useCallback((nextConfig: Config = config.current) => {
+    client.current?.disconnect();
+    const nextClient = AssistantClient.create(nextConfig);
+    client.current = nextClient;
 
-    client.current.on('open', () => {
+    nextClient.on('open', () => {
       setReadyState(ReadyState.OPEN);
     });
 
-    client.current.on('message', (message) => {
+    nextClient.on('message', (message) => {
       if (message.type === 'audio') {
         onAudioMessage.current?.(message.data);
       }
@@ -44,34 +48,38 @@ export const useAssistantClient = (props: {
       });
     });
 
-    client.current.on('close', () => {
+    nextClient.on('close', () => {
       setReadyState(ReadyState.CLOSED);
     });
 
-    client.current.on('error', (e) => {
+    nextClient.on('error', (e) => {
       const message = e instanceof Error ? e.message : 'Unknown error';
-      props.onError(`Error with websocket connection: ${message}`);
+      onError.current(`Error with websocket connection: ${message}`);
     });
 
     setReadyState(ReadyState.CONNECTING);
 
-    client.current.connect();
-  };
+    nextClient.connect();
+  }, []);
 
-  const disconnect = () => {
+  const disconnect = useCallback(() => {
     setReadyState(ReadyState.IDLE);
     client.current?.disconnect();
-  };
+    client.current = null;
+  }, []);
 
   const sendAudio = useCallback((arrayBuffer: ArrayBufferLike) => {
     client.current?.sendAudio(arrayBuffer);
   }, []);
 
-  return {
-    readyState,
-    messages,
-    sendAudio,
-    connect,
-    disconnect,
-  };
+  return useMemo(
+    () => ({
+      readyState,
+      messages,
+      sendAudio,
+      connect,
+      disconnect,
+    }),
+    [connect, disconnect, messages, readyState, sendAudio],
+  );
 };
