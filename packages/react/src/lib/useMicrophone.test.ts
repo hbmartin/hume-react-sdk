@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { MimeType } from 'hume';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { VoiceDiagnosticEvent } from './diagnostics';
 import { useMicrophone } from './useMicrophone';
 
 type RecorderInstance = {
@@ -684,10 +685,16 @@ describe('useMicrophone', () => {
       'This browser does not fully support microphone recording.',
       'mime_types_not_supported',
     );
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to detect supported microphone MIME types.',
-      expect.any(TypeError),
+    expect(consoleError.mock.calls[0]?.[0]).toBe(
+      '[Hume Voice][microphone] resource.cleanup_failed',
     );
+    const mimeErrorEvent = consoleError.mock.calls[0]?.[1] as unknown as
+      | VoiceDiagnosticEvent
+      | undefined;
+    expect(mimeErrorEvent?.details.message).toBe(
+      'Failed to detect supported microphone MIME types.',
+    );
+    expect(mimeErrorEvent?.details.error).toMatchObject({ name: 'TypeError' });
     expect(() =>
       result.current.start(createStream(), createAudioContext()),
     ).toThrow('No MimeType specified');
@@ -883,10 +890,16 @@ describe('useMicrophone', () => {
     expect(firstTrackStop).toHaveBeenCalledOnce();
     expect(secondTrackStop).toHaveBeenCalledOnce();
     expect(contextClose).toHaveBeenCalledOnce();
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to fully dispose microphone resources during unmount.',
-      expect.any(Error),
+    expect(consoleError.mock.calls[0]?.[0]).toBe(
+      '[Hume Voice][microphone] resource.cleanup_failed',
     );
+    const cleanupErrorEvent = consoleError.mock.calls[0]?.[1] as unknown as
+      | VoiceDiagnosticEvent
+      | undefined;
+    expect(cleanupErrorEvent?.details.message).toBe(
+      'Failed to fully dispose microphone resources during unmount.',
+    );
+    expect(cleanupErrorEvent?.details.error).toMatchObject({ name: 'Error' });
     consoleError.mockRestore();
   });
 

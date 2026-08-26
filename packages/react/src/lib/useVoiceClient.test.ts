@@ -2,6 +2,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createVoiceDiagnosticsReporter,
+  type VoiceDiagnosticEvent,
+} from './diagnostics';
+import {
   type ToolCallHandler,
   useVoiceClient,
   VoiceReadyState,
@@ -255,6 +259,71 @@ describe('useVoiceClient', () => {
       content: 'result',
     });
     expect(receivedMessage?.receivedAt).toBeInstanceOf(Date);
+  });
+
+  it('reports message metadata without content unless content is enabled', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const events: VoiceDiagnosticEvent[] = [];
+    let includeContent = false;
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      includeContent,
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    diagnostics.beginConnection('test-token');
+    const { result } = renderHook(() => useVoiceClient({ diagnostics }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'chat_metadata',
+        chatId: 'chat-123',
+      } as never);
+    });
+    await connecting;
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'user_message',
+        id: 'message-123',
+        message: { content: 'private transcript' },
+      } as never);
+    });
+
+    const firstMessageEvent = events.find(
+      (event) =>
+        event.name === 'message.received' &&
+        event.details.type === 'user_message',
+    );
+    expect(firstMessageEvent).toMatchObject({
+      chatId: 'chat-123',
+      details: {
+        contentLength: 18,
+        direction: 'inbound',
+        messageId: 'message-123',
+        type: 'user_message',
+      },
+    });
+    expect(JSON.stringify(firstMessageEvent)).not.toContain(
+      'private transcript',
+    );
+
+    includeContent = true;
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'assistant_message',
+        id: 'message-456',
+        message: { content: 'opted-in transcript' },
+      } as never);
+    });
+
+    expect(JSON.stringify(events.at(-1))).toContain('opted-in transcript');
+    expect(JSON.stringify(events)).not.toContain('test-token');
   });
 
   it('emits an automatic tool response after sending it', async () => {

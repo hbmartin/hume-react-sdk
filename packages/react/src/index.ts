@@ -1,4 +1,14 @@
 export * from './lib/connection-message';
+export type {
+  VoiceDiagnosticCategory,
+  VoiceDiagnosticDetails,
+  VoiceDiagnosticEvent,
+  VoiceDiagnosticEventName,
+  VoiceDiagnosticLevel,
+  VoiceDiagnosticsOptions,
+  VoiceDiagnosticValue,
+  VoiceLogger,
+} from './lib/diagnostics';
 export * from './lib/fftStore';
 export * from './lib/useAudioDevices';
 export * from './lib/useCallDuration';

@@ -1,0 +1,220 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  createVoiceDiagnosticsReporter,
+  type VoiceDiagnosticEvent,
+  type VoiceDiagnosticsOptions,
+  type VoiceLogger,
+} from './diagnostics';
+
+const input = {
+  category: 'connection' as const,
+  details: { phase: 'socket' },
+  level: 'warn' as const,
+  name: 'connection.attempt_cancelled' as const,
+};
+
+const createLogger = () =>
+  ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }) satisfies VoiceLogger;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('voice diagnostics reporter', () => {
+  it('logs warnings and errors to console by default', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const reporter = createVoiceDiagnosticsReporter(() => undefined);
+
+    reporter.emit({ ...input, level: 'info' });
+    reporter.emit(input);
+
+    expect(info).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      '[Hume Voice][connection] connection.attempt_cancelled',
+    );
+  });
+
+  it('supports custom loggers, callbacks, and level filtering', () => {
+    const logger = createLogger();
+    const onEvent = vi.fn();
+    const options: VoiceDiagnosticsOptions = {
+      level: 'info',
+      logger,
+      onEvent,
+    };
+    const reporter = createVoiceDiagnosticsReporter(() => options);
+
+    reporter.emit({ ...input, level: 'debug' });
+    reporter.emit({ ...input, level: 'info' });
+
+    expect(onEvent).toHaveBeenCalledOnce();
+    expect(logger.info).toHaveBeenCalledOnce();
+    expect(logger.debug).not.toHaveBeenCalled();
+  });
+
+  it('supports callback-only and fully disabled diagnostics', () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onEvent = vi.fn();
+    let options: false | VoiceDiagnosticsOptions = {
+      logger: false,
+      onEvent,
+    };
+    const reporter = createVoiceDiagnosticsReporter(() => options);
+
+    reporter.emit(input);
+    options = false;
+    reporter.emit(input);
+
+    expect(onEvent).toHaveBeenCalledOnce();
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it('isolates callback and logger failures', () => {
+    const logger = createLogger();
+    vi.mocked(logger.warn).mockImplementation(() => {
+      throw new Error('logger failed');
+    });
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger,
+      onEvent: () => {
+        throw new Error('callback failed');
+      },
+    }));
+
+    expect(() => reporter.emit(input)).not.toThrow();
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  it('adds immutable correlation, ordering, timestamps, and durations', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    const connectionId = reporter.beginConnection();
+    reporter.setChatId('chat-123');
+    reporter.emit({
+      ...input,
+      durationMs: -1,
+      details: { resource: { state: 'connected' }, states: ['connected'] },
+    });
+    reporter.emit(input);
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      schemaVersion: 1,
+      sequence: 1,
+      connectionId,
+      chatId: 'chat-123',
+      durationMs: 0,
+    });
+    expect(events[1]?.sequence).toBe(2);
+    expect(events[1]?.instanceId).toBe(events[0]?.instanceId);
+    expect(Date.parse(events[0]?.timestamp ?? '')).not.toBeNaN();
+    expect(Object.isFrozen(events[0])).toBe(true);
+    expect(Object.isFrozen(events[0]?.details)).toBe(true);
+    expect(Object.isFrozen(events[0]?.details.resource)).toBe(true);
+    expect(Object.isFrozen(events[0]?.details.states)).toBe(true);
+  });
+
+  it('redacts secrets and protected fields from default events', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+    reporter.addRedactionValue('private-device');
+
+    reporter.emit({
+      ...input,
+      details: {
+        message: 'request failed for secret-token',
+        auth: { value: 'secret-token' },
+        apiKey: 'secret-token',
+        data: 'raw-audio',
+        deviceId: 'private-device',
+        sessionSettings: { systemPrompt: 'private-prompt' },
+      },
+      sensitiveDetails: {
+        content: 'private transcript and secret-token',
+        toolResult: 'private tool result',
+      },
+    });
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain('secret-token');
+    expect(serialized).not.toContain('raw-audio');
+    expect(serialized).not.toContain('private-device');
+    expect(serialized).not.toContain('private-prompt');
+    expect(serialized).not.toContain('private transcript');
+    expect(serialized).not.toContain('private tool result');
+    expect(serialized).toContain('[REDACTED]');
+  });
+
+  it('keeps redaction values after correlation is cleared', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+    reporter.clearConnection();
+    reporter.emit({
+      ...input,
+      details: { message: 'late failure containing secret-token' },
+    });
+
+    expect(events[0]?.connectionId).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain('secret-token');
+  });
+
+  it('includes opted-in content while continuing to redact credentials', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+
+    reporter.emit({
+      ...input,
+      sensitiveDetails: {
+        content: 'hello from the user',
+        toolResult: 'result containing secret-token',
+      },
+    });
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).toContain('hello from the user');
+    expect(serialized).toContain('result containing [REDACTED]');
+    expect(serialized).not.toContain('secret-token');
+  });
+
+  it('keeps circular details JSON-safe', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const circular: unknown[] = [];
+    circular.push(circular);
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    expect(() =>
+      reporter.emit({ ...input, details: { circular } }),
+    ).not.toThrow();
+    expect(() => JSON.stringify(events)).not.toThrow();
+    expect(events[0]?.details.circular).toEqual(['[Circular]']);
+  });
+});
