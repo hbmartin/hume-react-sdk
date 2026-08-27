@@ -1183,6 +1183,34 @@ describe('useSoundPlayer', () => {
     expect(disconnectGainNode).toHaveBeenCalledOnce();
   });
 
+  it('rejects context-scoped cleanup failures for provider aggregation', async () => {
+    const context = new AudioContext();
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    fakePort.postMessage.mockImplementationOnce(() => {
+      throw new Error('worklet post failed');
+    });
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAllForContext(context);
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+
+    await expect(stopping).rejects.toThrow('worklet post failed');
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it('does not publish stale nodes after a pending sink selection', async () => {
     const deferredSink = createDeferred<void>();
     const firstCreateAnalyser = vi.fn();

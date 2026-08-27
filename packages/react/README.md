@@ -105,7 +105,9 @@ after they are successfully passed to the socket so they stay in sync with
 
 #### `onClose?`: (event: [CloseEvent](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/core/websocket/events.ts#L20)) => void
 
-(_Optional_) Callback function to invoke upon the web socket connection being closed.
+(_Optional_) Callback function invoked when the provider's current web socket
+connection closes. Delayed close events from superseded connection attempts are
+not published because the callback does not expose a connection identifier.
 
 #### `clearMessagesOnDisconnect?`: boolean
 
@@ -323,13 +325,22 @@ selection may also require HTTPS and browser-granted media permission.
 Opens a socket connection to the voice API and initializes the microphone.
 The promise resolves after that attempt settles; inspect `status` and `error`
 to determine whether it connected successfully. A call made while another
-connection attempt is still running joins that attempt without starting a
-second set of resources; the later call's options are ignored. Calling
-`connect()` while already connected is a no-op that resolves.
+connection attempt with the same authentication credentials is still running
+joins that attempt without starting a second set of resources; later non-auth
+options are ignored. A concurrent call with different credentials rejects with
+`ConcurrentConnectAuthError` so a refreshed token is never silently discarded.
+Calling `connect()` while already connected is a no-op that resolves.
 
 | Parameter | Type             | Description                           |
 | --------- | ---------------- | ------------------------------------- |
 | `options` | `ConnectOptions` | Optional settings for the connection. |
+
+The lower-level `useVoiceClient().connect` method accepts an optional explicit
+connection generation as its third argument. Explicit generations identify
+attempts and must be non-negative and strictly increasing, including after a
+failed attempt; increment the generation before retrying. Reusing an identifier
+rejects with `ConnectionGenerationError`, preventing delayed close events from
+being attributed to a newer socket.
 
 #### `disconnect`: () => Promise<void>
 

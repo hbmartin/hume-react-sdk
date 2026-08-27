@@ -130,10 +130,10 @@ export interface VoiceDiagnosticsReporter {
 }
 
 /** Invoke application code without allowing sync or async failures into SDK control flow. */
-export const invokeIsolatedConsumerCallback = <Result>(
+export const invokeIsolatedConsumerCallback = (
   diagnostics: VoiceDiagnosticsReporter | undefined,
   callback: string,
-  invoke: () => Result,
+  invoke: () => unknown,
 ): void => {
   const reportFailure = (error: unknown) => {
     diagnostics?.emit({
