@@ -76,6 +76,10 @@ jobs:
           tarball=$(find ../.. -maxdepth 1 -name 'humeai-voice-react-*.tgz' -print -quit)
           echo "TARBALL=$(basename "$tarball")" >> "$GITHUB_ENV"
 
+      - name: Configure example dependency build policy
+        working-directory: ./examples/evi/evi-next-js-app-router-quickstart
+        run: cp ../../../sdk/.github/test-examples/pnpm-workspace.yaml pnpm-workspace.yaml
+
       - name: Install example deps and use packed SDK
         working-directory: ./examples/evi/evi-next-js-app-router-quickstart
         run: |

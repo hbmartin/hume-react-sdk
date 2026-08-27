@@ -1,0 +1,5 @@
+# Preserve the validated pnpm 10 behavior while requiring explicit review for
+# future versions that add or change dependency build scripts.
+allowBuilds:
+  'sharp@0.34.5': false
+  'unrs-resolver@1.12.2': false
