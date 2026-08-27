@@ -358,8 +358,7 @@ export const createVoiceDiagnosticsReporter = (
           ? undefined
           : (input.connectionId ?? connectionId);
       const shouldInheritActiveChat =
-        input.connectionId === undefined ||
-        (input.connectionId !== null && input.connectionId === connectionId);
+        input.connectionId === undefined || input.connectionId === connectionId;
       const eventChatId =
         input.chatId === null
           ? undefined

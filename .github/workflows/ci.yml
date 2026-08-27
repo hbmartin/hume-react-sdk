@@ -48,17 +48,15 @@ jobs:
           # Note: NODE_ENV needs to be set to development to
           # install jest and other dev dependencies
           NODE_ENV: development
-        run:
-          pnpm install
+        run: pnpm install
 
-          # Check that packages can build without errors
+      # Check that packages can build without errors
       - name: Builds without errors
         env:
           NODE_ENV: production
-        run:
-          pnpm build
+        run: pnpm build
 
-          # Check for linting errors
+      # Check for linting errors
       - name: Check for linting errors
         run: pnpm lint
 
