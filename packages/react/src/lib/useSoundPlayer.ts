@@ -950,6 +950,8 @@ export const useSoundPlayer = (props: {
 
   const stopAllAndReport = useCallback(
     (expectedContext?: AudioContext) => {
+      // This hook is publicly exported, so callers outside VoiceProvider can
+      // still request and deduplicate cleanup without an explicit context.
       if (expectedContext === undefined && implicitPlayerStopPromise.current) {
         return implicitPlayerStopPromise.current;
       }
