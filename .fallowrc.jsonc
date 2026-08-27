@@ -2,7 +2,7 @@
   "$schema": "./node_modules/fallow/schema.json",
   "entry": [
     ".pnpmfile.cjs",
-    "packages/react/src/worklets/audio-worklet-20250702.js"
+    "packages/react/src/worklets/audio-worklet-20250702.js",
   ],
   "ignorePatterns": [
     "**/dist/**",
@@ -10,11 +10,11 @@
     "**/coverage/**",
     "**/etc/*.api.md",
     "packages/core/**",
-    "tools/lint-contract/fixtures/**"
+    "tools/lint-contract/fixtures/**",
   ],
   "typeAware": {
     "enabled": true,
-    "require": "best-effort"
+    "require": "best-effort",
   },
   "usedClassMembers": [
     "clear",
@@ -24,7 +24,7 @@
     "getSnapshot",
     "mount",
     "subscribe",
-    "write"
+    "write",
   ],
   "rules": {
     "unused-files": "error",
@@ -40,43 +40,43 @@
     "circular-dependencies": "error",
     "re-export-cycle": "error",
     "boundary-violation": "error",
-    "stale-suppressions": "error"
+    "stale-suppressions": "error",
   },
   "boundaries": {
     "zones": [
       {
         "name": "voice-embed",
-        "patterns": ["packages/embed/src/**"]
+        "patterns": ["packages/embed/src/**"],
       },
       {
         "name": "voice-embed-react",
-        "patterns": ["packages/embed-react/src/**"]
+        "patterns": ["packages/embed-react/src/**"],
       },
       {
         "name": "voice-react",
-        "patterns": ["packages/react/src/**"]
+        "patterns": ["packages/react/src/**"],
       },
       {
         "name": "examples",
-        "patterns": ["examples/**"]
+        "patterns": ["examples/**"],
       },
       {
         "name": "tools",
-        "patterns": ["tools/**"]
-      }
+        "patterns": ["tools/**"],
+      },
     ],
     "rules": [
       {
         "from": "voice-embed",
-        "allow": ["voice-embed"]
+        "allow": ["voice-embed"],
       },
       {
         "from": "voice-embed-react",
-        "allow": ["voice-embed-react", "voice-embed"]
+        "allow": ["voice-embed-react", "voice-embed"],
       },
       {
         "from": "voice-react",
-        "allow": ["voice-react"]
+        "allow": ["voice-react"],
       },
       {
         "from": "examples",
@@ -84,20 +84,20 @@
           "examples",
           "voice-embed",
           "voice-embed-react",
-          "voice-react"
-        ]
+          "voice-react",
+        ],
       },
       {
         "from": "tools",
-        "allow": ["tools"]
-      }
+        "allow": ["tools"],
+      },
     ],
     "coverage": {
-      "requireAllFiles": false
-    }
+      "requireAllFiles": false,
+    },
   },
   "audit": {
     "gate": "new-only",
-    "typeAware": true
-  }
+    "typeAware": true,
+  },
 }

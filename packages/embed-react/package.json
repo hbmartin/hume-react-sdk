@@ -2,6 +2,18 @@
   "name": "@humeai/voice-embed-react",
   "version": "0.2.18",
   "description": "",
+  "keywords": [],
+  "license": "ISC",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HumeAI/hume-react-sdk.git",
+    "directory": "packages/embed-react"
+  },
+  "files": [
+    "package.json",
+    "dist"
+  ],
   "type": "commonjs",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -20,15 +32,6 @@
     },
     "./package.json": "./package.json"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/HumeAI/hume-react-sdk.git",
-    "directory": "packages/embed-react"
-  },
-  "files": [
-    "package.json",
-    "dist"
-  ],
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "test-watch": "vitest --watch",
@@ -42,12 +45,6 @@
     "api-report:check": "api-extractor run --config api-extractor.json",
     "api-report:update": "api-extractor run --local --config api-extractor.json",
     "pack": "npm pack"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "engines": {
-    "node": ">=18"
   },
   "dependencies": {
     "@humeai/voice-embed": "workspace:*"
@@ -66,5 +63,8 @@
   "peerDependencies": {
     "react": ">=18.2.0",
     "react-dom": ">=18.2.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

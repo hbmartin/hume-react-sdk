@@ -2,6 +2,18 @@
   "name": "@humeai/voice-embed",
   "version": "0.2.18",
   "description": "",
+  "keywords": [],
+  "license": "ISC",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HumeAI/hume-react-sdk.git",
+    "directory": "packages/embed"
+  },
+  "files": [
+    "package.json",
+    "dist"
+  ],
   "type": "commonjs",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -20,15 +32,6 @@
     },
     "./package.json": "./package.json"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/HumeAI/hume-react-sdk.git",
-    "directory": "packages/embed"
-  },
-  "files": [
-    "package.json",
-    "dist"
-  ],
   "scripts": {
     "test": "vitest run",
     "test-watch": "vitest --watch",
@@ -43,11 +46,9 @@
     "api-report:update": "api-extractor run --local --config api-extractor.json",
     "pack": "npm pack"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "engines": {
-    "node": ">=18"
+  "dependencies": {
+    "hume": "0.16.1",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@humeai/typescript-config": "workspace:*",
@@ -58,8 +59,7 @@
     "typescript": "7.0.2",
     "vitest": "^3.2.6"
   },
-  "dependencies": {
-    "hume": "0.16.1",
-    "zod": "^3.22.4"
+  "engines": {
+    "node": ">=18"
   }
 }

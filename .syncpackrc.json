@@ -3,7 +3,12 @@
   "versionGroups": [
     {
       "label": "React 18 libraries and React 19 example are intentional",
-      "dependencies": ["react", "react-dom", "@types/react", "@types/react-dom"],
+      "dependencies": [
+        "react",
+        "react-dom",
+        "@types/react",
+        "@types/react-dom"
+      ],
       "isIgnored": true
     }
   ],
@@ -16,7 +21,12 @@
     },
     {
       "label": "Installed React and React type dependencies use caret ranges",
-      "dependencies": ["react", "react-dom", "@types/react", "@types/react-dom"],
+      "dependencies": [
+        "react",
+        "react-dom",
+        "@types/react",
+        "@types/react-dom"
+      ],
       "dependencyTypes": ["prod", "dev"],
       "range": "^"
     },

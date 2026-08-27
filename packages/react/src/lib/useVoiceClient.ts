@@ -2,6 +2,11 @@ import { Hume, HumeClient } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type Simplify } from 'type-fest';
 
+import type {
+  AudioOutputMessage,
+  JSONMessage,
+  ToolCall,
+} from '../models/messages';
 import { type AuthStrategy, getAuthStrategyError } from './auth';
 import {
   invokeIsolatedConsumerCallback,
@@ -10,11 +15,6 @@ import {
 } from './diagnostics';
 import { ConnectionGenerationError } from './errors';
 import { useLatestRef } from './useLatestRef';
-import type {
-  AudioOutputMessage,
-  JSONMessage,
-  ToolCall,
-} from '../models/messages';
 
 const isNever = (_n: never) => {
   return;

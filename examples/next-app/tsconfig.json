@@ -3,6 +3,16 @@
   "compilerOptions": {
     "incremental": true
   },
-  "include": ["next-env.d.ts", "app/**/*.ts", "app/**/*.tsx", "components/**/*.ts", "components/**/*.tsx", "utils/**/*.ts", "utils/**/*.tsx", "types/**/*.d.ts", "*.config.ts"],
+  "include": [
+    "next-env.d.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "utils/**/*.ts",
+    "utils/**/*.tsx",
+    "types/**/*.d.ts",
+    "*.config.ts"
+  ],
   "exclude": [".next", "dist", "coverage", "node_modules"]
 }

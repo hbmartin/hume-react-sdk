@@ -12,6 +12,24 @@ import {
   useSyncExternalStore,
 } from 'react';
 
+import type {
+  AudioConstraints,
+  AudioDeviceKind,
+  ConnectOptions,
+} from '../models/connect-options';
+import type {
+  AssistantProsodyMessage,
+  AssistantTranscriptMessage,
+  AudioOutputMessage,
+  ChatMetadataMessage,
+  JSONMessage,
+  UserInterruptionMessage,
+  UserTranscriptMessage,
+} from '../models/messages';
+import {
+  type AudioContextCloseResult,
+  closeAudioContextWithTimeout,
+} from '../utils/closeAudioContextWithTimeout';
 import { getAuthStrategyError } from './auth';
 import type { ConnectionMessage } from './connection-message';
 import {
@@ -47,24 +65,6 @@ import {
   useVoiceClient,
   VoiceReadyState,
 } from './useVoiceClient';
-import type {
-  AudioConstraints,
-  AudioDeviceKind,
-  ConnectOptions,
-} from '../models/connect-options';
-import type {
-  AssistantProsodyMessage,
-  AssistantTranscriptMessage,
-  AudioOutputMessage,
-  ChatMetadataMessage,
-  JSONMessage,
-  UserInterruptionMessage,
-  UserTranscriptMessage,
-} from '../models/messages';
-import {
-  type AudioContextCloseResult,
-  closeAudioContextWithTimeout,
-} from '../utils/closeAudioContextWithTimeout';
 
 export type SocketErrorReason =
   | 'socket_connection_failure'
@@ -238,8 +238,7 @@ const getGrantedInputDeviceId = (
   requestedDeviceId: string | null,
 ): string | null => {
   try {
-    const grantedDeviceId =
-      stream.getAudioTracks()[0]?.getSettings().deviceId;
+    const grantedDeviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
     return grantedDeviceId === undefined || grantedDeviceId === ''
       ? requestedDeviceId
       : grantedDeviceId;

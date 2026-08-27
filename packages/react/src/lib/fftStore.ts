@@ -9,10 +9,7 @@ const EMPTY_FFT: FftSnapshot = Object.freeze(
 );
 
 export class FftStore {
-  private _buffer: number[] = Array.from(
-    { length: BARK_BAND_COUNT },
-    () => 0,
-  );
+  private _buffer: number[] = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
   private _snapshot: FftSnapshot = EMPTY_FFT;
 

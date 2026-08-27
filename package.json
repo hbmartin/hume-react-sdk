@@ -30,8 +30,8 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
-    "@microsoft/api-extractor": "7.59.0",
     "@humeai/typescript-config": "workspace:*",
+    "@microsoft/api-extractor": "7.59.0",
     "cspell": "10.1.1",
     "fallow": "3.19.0",
     "markdownlint-cli2": "0.23.2",
@@ -45,9 +45,9 @@
   "browserslist": [
     "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
   ],
-  "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=22.13",
     "pnpm": "11.24.0"
-  }
+  },
+  "packageManager": "pnpm@11.24.0"
 }

@@ -84,10 +84,10 @@ This guide helps you migrate to **@humeai/voice-react** 0.3.0, which moves high-
 
 Use the new granular hooks instead of reading these from `useVoice()`:
 
-| Previously (`useVoice()`) | Use instead |
-| ------------------------- | ----------- |
-| `const { fft } = useVoice()` | `const fft = usePlayerFft()` |
-| `const { micFft } = useVoice()` | `const micFft = useMicFft()` |
+| Previously (`useVoice()`)                      | Use instead                                                |
+| ---------------------------------------------- | ---------------------------------------------------------- |
+| `const { fft } = useVoice()`                   | `const fft = usePlayerFft()`                               |
+| `const { micFft } = useVoice()`                | `const micFft = useMicFft()`                               |
 | `const { callDurationTimestamp } = useVoice()` | `const callDurationTimestamp = useCallDurationTimestamp()` |
 
 Each of these hooks must be used within a `VoiceProvider`. They subscribe via `useSyncExternalStore` so only components that use a given hook rerender when that data changes.

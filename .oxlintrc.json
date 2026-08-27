@@ -96,7 +96,11 @@
       }
     },
     {
-      "files": ["**/*.config.{js,cjs,mjs,ts,mts,cts}", "tools/**/*", ".pnpmfile.cjs"],
+      "files": [
+        "**/*.config.{js,cjs,mjs,ts,mts,cts}",
+        "tools/**/*",
+        ".pnpmfile.cjs"
+      ],
       "rules": {
         "no-console": "off",
         "typescript/no-unsafe-argument": "off",

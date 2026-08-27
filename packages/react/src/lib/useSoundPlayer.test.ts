@@ -9,9 +9,9 @@ import {
   vi,
 } from 'vitest';
 
-import { useSoundPlayer } from './useSoundPlayer';
 import type { AudioOutputMessage } from '../models/messages';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
+import { useSoundPlayer } from './useSoundPlayer';
 
 vi.mock('./convertFrequencyScale', () => ({
   convertLinearFrequenciesToBark: (data: Uint8Array) => Array.from(data),

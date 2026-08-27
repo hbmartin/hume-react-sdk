@@ -3,9 +3,7 @@
   "version": "0.2",
   "language": "en",
   "useGitignore": true,
-  "files": [
-    "**/*.{cjs,css,js,json,jsonc,md,mjs,mts,ts,tsx,yaml,yml}"
-  ],
+  "files": ["**/*.{cjs,css,js,json,jsonc,md,mjs,mts,ts,tsx,yaml,yml}"],
   "ignorePaths": [
     "**/dist/**",
     "**/.next/**",

@@ -9,7 +9,9 @@ const execFileAsync = promisify(execFile);
 const toolsDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(toolsDirectory, '..');
 const packageRoot = resolve(process.argv[2] ?? '.');
-const dependencyPackageRoots = process.argv.slice(3).map((path) => resolve(path));
+const dependencyPackageRoots = process.argv
+  .slice(3)
+  .map((path) => resolve(path));
 /**
  * @param {unknown} value
  * @returns {value is Record<string, unknown>}
@@ -37,14 +39,7 @@ try {
   for (const root of [packageRoot, ...dependencyPackageRoots]) {
     const { stdout: packOutput } = await execFileAsync(
       'pnpm',
-      [
-        '--dir',
-        root,
-        'pack',
-        '--json',
-        '--pack-destination',
-        fixtureRoot,
-      ],
+      ['--dir', root, 'pack', '--json', '--pack-destination', fixtureRoot],
       { cwd: repositoryRoot },
     );
     /** @type {unknown} */
@@ -134,7 +129,9 @@ try {
     { cwd: fixtureRoot },
   );
 
-  console.log(`Verified packed ESM, CommonJS, types, and package.json for ${packageName}`);
+  console.log(
+    `Verified packed ESM, CommonJS, types, and package.json for ${packageName}`,
+  );
 } finally {
   await rm(fixtureRoot, { force: true, recursive: true });
 }

@@ -1,14 +1,14 @@
 import { convertBase64ToBlob } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import type { AudioOutputMessage } from '../models/messages';
+import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
+import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
 import type { VoiceDiagnosticsReporter } from './diagnostics';
 import { FftStore } from './fftStore';
 import { useLatestRef } from './useLatestRef';
 import type { AudioPlayerErrorReason } from './VoiceProvider';
-import type { AudioOutputMessage } from '../models/messages';
-import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
-import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 
 // Worklet message types (replaces Zod schemas)
 interface WorkletStartClipMessage {
@@ -232,107 +232,110 @@ export const useSoundPlayer = (props: {
    * This function is called when the current audio clip ends.
    * It will play the next clip in the queue if there is one.
    */
-  const playNextClip = useCallback(function playNextClip() {
-    // While a clip is mid-playback the queue may still hold entries, so
-    // report its real length instead of zeroing it.
-    if (clipQueue.current.length === 0 || isProcessing.current) {
-      publishQueueLength(clipQueue.current.length);
-      return;
-    }
+  const playNextClip = useCallback(
+    function playNextClip() {
+      // While a clip is mid-playback the queue may still hold entries, so
+      // report its real length instead of zeroing it.
+      if (clipQueue.current.length === 0 || isProcessing.current) {
+        publishQueueLength(clipQueue.current.length);
+        return;
+      }
 
-    const resources = playerResources.current;
-    const context = resources?.context;
-    const analyser = resources?.analyser;
-    if (!resources || !context || !analyser) {
-      onError.current(
-        'Audio player is not initialized',
-        'audio_player_initialization_failure',
-      );
-      return;
-    }
-    const nextClip = clipQueue.current.shift();
-    publishQueueLength(clipQueue.current.length);
-
-    if (!nextClip) return;
-
-    isProcessing.current = true;
-    publishIsPlaying(true);
-
-    const generation = playerGeneration.current;
-    const bufferSource = context.createBufferSource();
-
-    bufferSource.buffer = nextClip.buffer;
-
-    bufferSource.connect(analyser);
-
-    resources.source = bufferSource;
-
-    const frequencyDataBuffer = new Uint8Array(analyser.frequencyBinCount);
-    const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
-
-    const updateFrequencyData = () => {
-      try {
-        const bufferSampleRate = bufferSource.buffer?.sampleRate;
-
-        if (typeof bufferSampleRate === 'undefined') return;
-
-        analyser.getByteFrequencyData(frequencyDataBuffer);
-        convertLinearFrequenciesToBarkInto(
-          frequencyDataBuffer,
-          bufferSampleRate,
-          barkBuffer,
+      const resources = playerResources.current;
+      const context = resources?.context;
+      const analyser = resources?.analyser;
+      if (!resources || !context || !analyser) {
+        onError.current(
+          'Audio player is not initialized',
+          'audio_player_initialization_failure',
         );
-        fftStore.write(barkBuffer);
-      } catch {
-        fftStore.clear();
-      }
-    };
-
-    const pollFft = () => {
-      if (
-        generation !== playerGeneration.current ||
-        playerResources.current !== resources
-      ) {
         return;
       }
-      updateFrequencyData();
+      const nextClip = clipQueue.current.shift();
+      publishQueueLength(clipQueue.current.length);
+
+      if (!nextClip) return;
+
+      isProcessing.current = true;
+      publishIsPlaying(true);
+
+      const generation = playerGeneration.current;
+      const bufferSource = context.createBufferSource();
+
+      bufferSource.buffer = nextClip.buffer;
+
+      bufferSource.connect(analyser);
+
+      resources.source = bufferSource;
+
+      const frequencyDataBuffer = new Uint8Array(analyser.frequencyBinCount);
+      const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
+
+      const updateFrequencyData = () => {
+        try {
+          const bufferSampleRate = bufferSource.buffer?.sampleRate;
+
+          if (typeof bufferSampleRate === 'undefined') return;
+
+          analyser.getByteFrequencyData(frequencyDataBuffer);
+          convertLinearFrequenciesToBarkInto(
+            frequencyDataBuffer,
+            bufferSampleRate,
+            barkBuffer,
+          );
+          fftStore.write(barkBuffer);
+        } catch {
+          fftStore.clear();
+        }
+      };
+
+      const pollFft = () => {
+        if (
+          generation !== playerGeneration.current ||
+          playerResources.current !== resources
+        ) {
+          return;
+        }
+        updateFrequencyData();
+        resources.fftRafId = requestAnimationFrame(pollFft);
+      };
       resources.fftRafId = requestAnimationFrame(pollFft);
-    };
-    resources.fftRafId = requestAnimationFrame(pollFft);
 
-    bufferSource.start(0);
-    if (nextClip.index === 0) {
-      onPlayAudio.current(nextClip.id);
-    }
-
-    bufferSource.onended = () => {
-      if (
-        generation !== playerGeneration.current ||
-        playerResources.current !== resources ||
-        resources.source !== bufferSource
-      ) {
-        bufferSource.disconnect();
-        return;
+      bufferSource.start(0);
+      if (nextClip.index === 0) {
+        onPlayAudio.current(nextClip.id);
       }
-      bufferSource.onended = null;
-      cancelPlayerFft(resources);
-      fftStore.clear();
-      bufferSource.disconnect();
-      isProcessing.current = false;
-      publishIsPlaying(false);
-      onStopAudio.current(nextClip.id);
-      resources.source = null;
-      playNextClip();
-    };
-  }, [
-    cancelPlayerFft,
-    fftStore,
-    onError,
-    onPlayAudio,
-    onStopAudio,
-    publishIsPlaying,
-    publishQueueLength,
-  ]);
+
+      bufferSource.onended = () => {
+        if (
+          generation !== playerGeneration.current ||
+          playerResources.current !== resources ||
+          resources.source !== bufferSource
+        ) {
+          bufferSource.disconnect();
+          return;
+        }
+        bufferSource.onended = null;
+        cancelPlayerFft(resources);
+        fftStore.clear();
+        bufferSource.disconnect();
+        isProcessing.current = false;
+        publishIsPlaying(false);
+        onStopAudio.current(nextClip.id);
+        resources.source = null;
+        playNextClip();
+      };
+    },
+    [
+      cancelPlayerFft,
+      fftStore,
+      onError,
+      onPlayAudio,
+      onStopAudio,
+      publishIsPlaying,
+      publishQueueLength,
+    ],
+  );
 
   const initPlayer = useCallback(
     async (
@@ -531,10 +534,7 @@ export const useSoundPlayer = (props: {
           const frequencyDataBuffer = new Uint8Array(
             analyser.frequencyBinCount,
           );
-          const barkBuffer = Array.from(
-            { length: BARK_BAND_COUNT },
-            () => 0,
-          );
+          const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
           // Use requestAnimationFrame instead of setInterval(5ms) for display-rate updates
           const pollFft = () => {
@@ -568,7 +568,7 @@ export const useSoundPlayer = (props: {
           isInitialized.current = true;
         }
         return true;
-          } catch (_error) {
+      } catch (_error) {
         return failInitialization(
           'Failed to initialize audio player',
           'audio_player_initialization_failure',

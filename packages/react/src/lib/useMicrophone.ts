@@ -2,6 +2,7 @@
 import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
 import {
   createVoiceDiagnosticsReporter,
@@ -10,7 +11,6 @@ import {
 import { FftStore } from './fftStore';
 import { useLatestRef } from './useLatestRef';
 import type { MicErrorReason } from './VoiceProvider';
-import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 
 const BARK_BAND_COUNT = 24;
 const MICROPHONE_RECORDING_UNSUPPORTED_MESSAGE =
