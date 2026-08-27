@@ -440,9 +440,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const resourceCleanupCompletedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
   const currentConnectionGenerationRef = useRef<number | null>(null);
-  const pendingAttemptCleanupRef = useRef<Promise<void> | null>(null);
-  const pendingCloseCleanupRef = useRef<Promise<void> | null>(null);
+  const pendingResourceCleanupsRef = useRef(new Set<Promise<unknown>>());
   const pendingDisconnectCleanupRef = useRef<Promise<void> | null>(null);
+  const activeConnectPromiseRef = useRef<Promise<void> | null>(null);
   const inputSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const outputSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeAudioConstraintsRef = useRef<AudioConstraints | null>(null);
@@ -456,6 +456,17 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
   const isCurrentLifecycleGeneration = useCallback(
     (generation: number) => lifecycleGenerationRef.current === generation,
+    [],
+  );
+  const trackResourceCleanup = useCallback(
+    <Result,>(cleanup: Promise<Result>): Promise<Result> => {
+      pendingResourceCleanupsRef.current.add(cleanup);
+      const clearCleanup = () => {
+        pendingResourceCleanupsRef.current.delete(cleanup);
+      };
+      void cleanup.then(clearCleanup, clearCleanup);
+      return cleanup;
+    },
     [],
   );
 
@@ -511,8 +522,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         sharedAudioContextClosePromisesRef.current.set(context, closePromise);
       }
       const closeResult = await closePromise;
-      if (sharedAudioContextRef.current === context) {
+      if (closeResult.success && sharedAudioContextRef.current === context) {
         sharedAudioContextRef.current = null;
+      } else if (!closeResult.success) {
+        // A rejected or timed-out close is retryable. Do not cache the failed
+        // result or drop ownership of a context that may still be live.
+        sharedAudioContextClosePromisesRef.current.delete(context);
       }
       return closeResult;
     },
@@ -940,25 +955,37 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       ) => {
         const currentConnectionGeneration =
           currentConnectionGenerationRef.current;
-        if (
-          currentConnectionGeneration === null ||
-          connectionGeneration !== currentConnectionGeneration
-        ) {
-          return;
-        }
-        currentConnectionGenerationRef.current = null;
-
-        // A pending teardown owns every provider-wide mutation. Its socket close
-        // only publishes the close event for the lifecycle that requested it.
-        // In particular, a delayed consumer close must not cancel a reconnect.
-        if (consumerInitiated || pendingDisconnectCleanupRef.current !== null) {
-          resourceStatusRef.current.socket = 'disconnected';
+        const publishCloseEvent = () => {
           if (!clearMessagesOnDisconnect) {
             createDisconnectMessage(event);
           }
           invokeConsumerCallback(diagnostics, 'onClose', () =>
             onClose.current?.(event),
           );
+        };
+        if (
+          currentConnectionGeneration === null ||
+          connectionGeneration !== currentConnectionGeneration
+        ) {
+          // The socket belongs to a lifecycle that has already failed or been
+          // superseded. Its public close event still matters, but it must not
+          // mutate resources owned by the current lifecycle.
+          publishCloseEvent();
+          return;
+        }
+        currentConnectionGenerationRef.current = null;
+
+        if (!isCurrentLifecycleGeneration(connectionGeneration)) {
+          publishCloseEvent();
+          return;
+        }
+
+        // A pending teardown owns every provider-wide mutation. Its socket close
+        // only publishes the close event for the lifecycle that requested it.
+        // In particular, a delayed consumer close must not cancel a reconnect.
+        if (consumerInitiated || pendingDisconnectCleanupRef.current !== null) {
+          resourceStatusRef.current.socket = 'disconnected';
+          publishCloseEvent();
           return;
         }
 
@@ -1068,13 +1095,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           resourceCleanupCompletedRef.current = cleanupFailures.length === 0;
           completeDisconnectDiagnostic(cleanupFailures);
         });
-        pendingCloseCleanupRef.current = closeCleanup;
-        const clearCloseCleanup = () => {
-          if (pendingCloseCleanupRef.current === closeCleanup) {
-            pendingCloseCleanupRef.current = null;
-          }
-        };
-        void closeCleanup.then(clearCloseCleanup, clearCloseCleanup);
+        void trackResourceCleanup(closeCleanup);
         invokeConsumerCallback(diagnostics, 'onClose', () =>
           onClose.current?.(event),
         );
@@ -1097,6 +1118,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         stopStream,
         stopTimer,
         toolStatusClearStore,
+        trackResourceCleanup,
       ],
     ),
     onToolCall: props.onToolCall,
@@ -1385,7 +1407,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     [isCurrentLifecycleGeneration],
   );
 
-  const connect = useCallback(
+  const connectAttempt = useCallback(
     async (options: ConnectOptions) => {
       const {
         audioConstraints = {},
@@ -1394,37 +1416,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         ...socketConfig
       } = options;
       const connectRequestGeneration = lifecycleGenerationRef.current;
-      const connectionIsActive = () =>
-        isConnectingRef.current ||
-        resourceStatusRef.current.socket === 'connected';
-      const ignoreActiveConnection = () => {
-        if (!connectionIsActive()) {
-          return false;
-        }
-        diagnostics.emit({
-          level: 'warn',
-          category: 'connection',
-          name: 'connection.attempt_ignored',
-          details: {
-            reason: isConnectingRef.current
-              ? 'already_connecting'
-              : 'already_connected',
-          },
-        });
-        return true;
-      };
-
-      // Preserve the public contract that a concurrent connect is ignored,
-      // including while the current attempt is cleaning up its own resources.
-      if (ignoreActiveConnection()) {
-        return;
-      }
-
-      const pendingCleanups = [
-        pendingAttemptCleanupRef.current,
-        pendingCloseCleanupRef.current,
-        pendingDisconnectCleanupRef.current,
-      ].filter((cleanup): cleanup is Promise<void> => cleanup !== null);
+      const pendingCleanups = [...pendingResourceCleanupsRef.current];
       if (pendingCleanups.length > 0) {
         await Promise.allSettled(pendingCleanups);
         if (!isCurrentLifecycleGeneration(connectRequestGeneration)) {
@@ -1436,11 +1428,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           });
           return;
         }
-      }
-      // Multiple callers may have awaited the same teardown. Only the first one
-      // to resume may begin the next lifecycle.
-      if (ignoreActiveConnection()) {
-        return;
       }
 
       // Validate credentials before requesting microphone access so a
@@ -1458,9 +1445,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       }
 
       const generation = ++lifecycleGenerationRef.current;
-      // A new lifecycle must stop correlating closes to the previous socket
-      // before microphone or player initialization yields.
-      currentConnectionGenerationRef.current = null;
       resourceCleanupCompletedRef.current = false;
       const connectionStartedAt = getMonotonicTime();
       clearError('connect');
@@ -1542,7 +1526,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const stopCapturedStream = (failureMessage: string) => {
         try {
           stopStream(stream);
+          return null;
         } catch (cleanupError) {
+          const detail =
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : 'Unknown error';
           diagnostics.emit({
             level: 'warn',
             category: 'microphone',
@@ -1553,6 +1542,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               error: cleanupError,
             },
           });
+          return `${failureMessage} ${detail}`;
         }
       };
 
@@ -1595,22 +1585,47 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
       const cleanupAttemptResources = (stopPlayer: boolean) => {
         const cleanup = (async () => {
-          stopCapturedStream(
+          const failures: string[] = [];
+          const streamFailure = stopCapturedStream(
             'Failed to stop a canceled connection microphone stream.',
           );
+          if (streamFailure !== null) {
+            failures.push(streamFailure);
+          }
           if (stopPlayer) {
-            await playerStopAllForContext(sharedCtx);
+            try {
+              await playerStopAllForContext(sharedCtx);
+            } catch (cleanupError) {
+              failures.push(
+                `Audio player cleanup failed: ${
+                  cleanupError instanceof Error
+                    ? cleanupError.message
+                    : 'Unknown error'
+                }`,
+              );
+            }
           }
-          await closeSharedAudioContext(sharedCtx);
+          const closeResult = await closeSharedAudioContext(sharedCtx);
+          if (closeResult && !closeResult.success) {
+            failures.push(
+              `Shared audio context cleanup failed: ${closeResult.error.message}`,
+            );
+          }
+          if (failures.length > 0) {
+            diagnostics.emit({
+              level: 'warn',
+              category: 'connection',
+              name: 'resource.cleanup_failed',
+              details: {
+                resource: 'connection_attempt',
+                message: 'Failed to fully clean up a voice connection attempt.',
+                failures,
+              },
+            });
+          }
+          return failures;
         })();
-        pendingAttemptCleanupRef.current = cleanup;
-        const clearCleanup = () => {
-          if (pendingAttemptCleanupRef.current === cleanup) {
-            pendingAttemptCleanupRef.current = null;
-          }
-        };
-        void cleanup.then(clearCleanup, clearCleanup);
-        return cleanup;
+        return trackResourceCleanup(cleanup);
       };
 
       // Audio Player - must initialize before connecting to the socket
@@ -1666,12 +1681,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         resourceStatusRef.current.socket = 'disconnected';
         resourceStatusRef.current.audioPlayer = 'disconnecting';
         resourceStatusRef.current.mic = 'disconnecting';
-        await cleanupAttemptResources(true);
+        const cleanupFailures = await cleanupAttemptResources(true);
         if (!checkShouldContinueConnecting(generation)) {
           return;
         }
         markAllResourcesDisconnected();
         isConnectingRef.current = false;
+        resourceCleanupCompletedRef.current = cleanupFailures.length === 0;
         updateError(initializationError);
         return;
       }
@@ -1686,15 +1702,19 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return;
       }
       if (!playerInitialized) {
-        if (!isCurrentLifecycleGeneration(generation)) {
+        if (!checkShouldContinueConnecting(generation)) {
           return;
         }
-        await cleanupAttemptResources(true);
-        if (!isCurrentLifecycleGeneration(generation)) {
+        resourceStatusRef.current.socket = 'disconnected';
+        resourceStatusRef.current.audioPlayer = 'disconnecting';
+        resourceStatusRef.current.mic = 'disconnecting';
+        const cleanupFailures = await cleanupAttemptResources(true);
+        if (!checkShouldContinueConnecting(generation)) {
           return;
         }
         markAllResourcesDisconnected();
         isConnectingRef.current = false;
+        resourceCleanupCompletedRef.current = cleanupFailures.length === 0;
         setDisconnectedStatus();
         return;
       }
@@ -1729,17 +1749,21 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         if (!connectionIsCurrent) {
           return;
         }
+        if (currentConnectionGenerationRef.current === generation) {
+          currentConnectionGenerationRef.current = null;
+        }
         // Publish teardown state before stopping the player so cleanup failures
         // cannot replace the connection failure with a new user-facing error.
         resourceStatusRef.current.socket = 'disconnected';
         resourceStatusRef.current.audioPlayer = 'disconnecting';
         resourceStatusRef.current.mic = 'disconnecting';
-        await cleanupAttemptResources(true);
+        const cleanupFailures = await cleanupAttemptResources(true);
         if (!checkShouldContinueConnecting(generation)) {
           return;
         }
         markAllResourcesDisconnected();
         isConnectingRef.current = false;
+        resourceCleanupCompletedRef.current = cleanupFailures.length === 0;
         const connectionError = errorSnapshotRef.current.error;
         if (connectionError === null) {
           setDisconnectedStatus();
@@ -1838,8 +1862,53 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       setDisconnectedStatus,
       setErrorStatus,
       stopStream,
+      trackResourceCleanup,
       updateError,
     ],
+  );
+
+  const connect = useCallback(
+    (options: ConnectOptions) => {
+      const activeConnect = activeConnectPromiseRef.current;
+      if (activeConnect !== null) {
+        diagnostics.emit({
+          level: 'warn',
+          category: 'connection',
+          name: 'connection.attempt_ignored',
+          details: { reason: 'already_connecting' },
+        });
+        // A concurrent caller joins the in-flight lifecycle so awaiting
+        // connect() never reports completion before that lifecycle settles.
+        return activeConnect;
+      }
+      if (
+        isConnectingRef.current ||
+        resourceStatusRef.current.socket === 'connected'
+      ) {
+        diagnostics.emit({
+          level: 'warn',
+          category: 'connection',
+          name: 'connection.attempt_ignored',
+          details: {
+            reason: isConnectingRef.current
+              ? 'already_connecting'
+              : 'already_connected',
+          },
+        });
+        return Promise.resolve();
+      }
+
+      const connecting = connectAttempt(options);
+      activeConnectPromiseRef.current = connecting;
+      const clearConnect = () => {
+        if (activeConnectPromiseRef.current === connecting) {
+          activeConnectPromiseRef.current = null;
+        }
+      };
+      void connecting.then(clearConnect, clearConnect);
+      return connecting;
+    },
+    [connectAttempt, diagnostics],
   );
 
   // `disconnectAndCleanUpResources`: Internal function that is called to actually disconnect
@@ -1855,6 +1924,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const invalidateLifecycle = () => {
         lifecycleGenerationRef.current += 1;
         isConnectingRef.current = false;
+        // A later lifecycle may start once it joins the registered teardown;
+        // the superseded connect promise still settles for its original caller.
+        activeConnectPromiseRef.current = null;
       };
       const existingCleanup = pendingDisconnectCleanupRef.current;
       if (existingCleanup) {
@@ -1872,10 +1944,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // connect waiting for an earlier cleanup promise to settle.
       invalidateLifecycle();
 
-      const cleanupsToAwait = [
-        pendingAttemptCleanupRef.current,
-        pendingCloseCleanupRef.current,
-      ].filter((cleanup): cleanup is Promise<void> => cleanup !== null);
+      const cleanupsToAwait = [...pendingResourceCleanupsRef.current];
       if (
         cleanupsToAwait.length === 0 &&
         resourceCleanupCompletedRef.current &&
@@ -2008,6 +2077,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       })();
 
       pendingDisconnectCleanupRef.current = cleanup;
+      void trackResourceCleanup(cleanup);
       const clearCleanup = () => {
         if (pendingDisconnectCleanupRef.current === cleanup) {
           pendingDisconnectCleanupRef.current = null;
@@ -2030,6 +2100,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       closeSharedAudioContext,
       playerStopAllForContext,
       resetAudioDeviceState,
+      trackResourceCleanup,
       clearMessagesOnDisconnect,
       clearMessageStore,
       toolStatusClearStore,
