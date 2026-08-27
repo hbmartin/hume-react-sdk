@@ -32,6 +32,7 @@
     "**/.next/**",
     "**/coverage/**",
     "**/etc/*.api.md",
+    ".fallow-baselines/**",
     "packages/react/src/worklets/audio-worklet-20250702.js",
     "tools/lint-contract/fixtures/**"
   ]

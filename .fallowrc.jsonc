@@ -9,6 +9,7 @@
     "**/.next/**",
     "**/coverage/**",
     "**/etc/*.api.md",
+    ".fallow-baselines/**",
     "packages/core/**",
     "tools/lint-contract/fixtures/**",
   ],

@@ -1,0 +1,156 @@
+{
+  "finding_counts": {
+    "examples/next-app/app/page.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/ChatConnected.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/ExampleComponent.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/Voice.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "examples/vite-app-embed/src/App.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/embed/src/lib/embed.ts": {
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/VoiceProvider.tsx": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "packages/react/src/lib/diagnostics.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useAudioDevices.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useMessages.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useMicrophone.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "packages/react/src/lib/useSoundPlayer.ts": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "complexity_high": {
+        "count": 2
+      },
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 5
+      }
+    },
+    "packages/react/src/lib/useVoiceClient.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/worklets/audio-worklet-20250702.js": {
+      "complexity_critical": {
+        "count": 2
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 1
+      }
+    }
+  },
+  "runtime_coverage_findings": [],
+  "target_keys": [
+    "packages/react/src/lib/VoiceProvider.tsx:complexity",
+    "packages/react/src/lib/useSoundPlayer.ts:complexity",
+    "packages/react/src/lib/useMicrophone.ts:complexity",
+    "packages/react/src/lib/diagnostics.ts:complexity"
+  ]
+}

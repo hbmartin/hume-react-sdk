@@ -1,0 +1,35 @@
+{
+  "clone_groups": [
+    "packages/embed/src/lib/auth.ts:3-53|packages/react/src/lib/auth.ts:3-34",
+    "packages/react/src/lib/VoiceProvider.tsx:1916-1925|packages/react/src/lib/VoiceProvider.tsx:1940-1949|packages/react/src/lib/VoiceProvider.tsx:1989-1998",
+    "packages/embed/src/lib/auth.ts:41-53|packages/react/src/lib/auth.ts:43-55",
+    "packages/react/src/lib/useMicrophone.ts:334-345|packages/react/src/lib/useMicrophone.ts:359-370",
+    "packages/react/src/lib/useVoiceClient.ts:346-369|packages/react/src/lib/useVoiceClient.ts:373-386",
+    "packages/react/src/lib/useSoundPlayer.ts:162-171|packages/react/src/lib/useSoundPlayer.ts:874-883",
+    "packages/react/src/lib/fftStore.ts:49-62|packages/react/src/lib/useCallDuration.ts:11-24",
+    "packages/react/src/lib/useVoiceClient.ts:506-520|packages/react/src/lib/useVoiceClient.ts:557-569",
+    "packages/react/src/lib/useMicrophone.ts:438-450|packages/react/src/lib/useSoundPlayer.ts:215-227"
+  ],
+  "clone_fingerprints": [
+    "dup:73f76927:2",
+    "dup:f5e7971d:3",
+    "dup:fc5264d6:2",
+    "dup:adedbf91:2",
+    "dup:aed8ac12:2",
+    "dup:ee95d12c:2",
+    "dup:73fbd2ad:2",
+    "dup:135a9bfd:2",
+    "dup:a333cb6e:2"
+  ],
+  "normalized_clone_fingerprints": [
+    "dup:1bb4657b:2",
+    "dup:245ab91f:3",
+    "dup:36e231bd:2",
+    "dup:c77b3abb6f87acd9-5:2",
+    "dup:c77b3abb6f87acd9-3:2",
+    "dup:5a1bf585:2",
+    "dup:c77b3abb6f87acd9-4:2",
+    "dup:c77b3abb6f87acd9-2:2",
+    "dup:c77b3abb6f87acd9-1:2"
+  ]
+}
