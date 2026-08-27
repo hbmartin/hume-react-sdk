@@ -187,6 +187,30 @@ describe('useVoiceClient', () => {
     expect(result.current.readyState).toBe(VoiceReadyState.CLOSED);
   });
 
+  it('generates close correlation when the caller omits a generation', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onClose = vi.fn();
+    const { result } = renderHook(() => useVoiceClient({ onClose }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('close')?.({ code: 1006 } as never);
+    });
+
+    await expect(connecting).rejects.toThrow(
+      'The websocket closed before the voice connection opened (code 1006).',
+    );
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 1006 }),
+      false,
+      expect.any(Number),
+    );
+  });
+
   it('ignores a late tool call after the socket closes', async () => {
     const socket = createSocket();
     humeMocks.connect.mockReturnValue(socket);

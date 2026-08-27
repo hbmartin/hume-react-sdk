@@ -149,12 +149,13 @@ export const useVoiceClient = (props: {
   onClose?: (
     event: SocketCloseEvent,
     consumerInitiated: boolean,
-    connectionGeneration?: number,
+    connectionGeneration: number,
   ) => void | Promise<void>;
 }) => {
   const connectAbortController = useRef<AbortController | null>(null);
   const activeConnection = useRef<ActiveConnection | null>(null);
   const client = useRef<Hume.empathicVoice.chat.ChatSocket | null>(null);
+  const generatedConnectionGeneration = useRef(0);
 
   const [readyState, setReadyState] = useState<VoiceReadyState>(
     VoiceReadyState.IDLE,
@@ -187,6 +188,14 @@ export const useVoiceClient = (props: {
       const controller = new AbortController();
       const signal = controller.signal;
       connectAbortController.current = controller;
+      const resolvedConnectionGeneration =
+        connectionGeneration ?? ++generatedConnectionGeneration.current;
+      if (connectionGeneration !== undefined) {
+        generatedConnectionGeneration.current = Math.max(
+          generatedConnectionGeneration.current,
+          connectionGeneration,
+        );
+      }
 
       const connectSettings = getSessionSettingsOnConnect(sessionSettings);
 
@@ -574,15 +583,11 @@ export const useVoiceClient = (props: {
             },
           });
           const closeHandler = onClose.current;
-          if (connectionGeneration === undefined) {
-            void closeHandler?.(event, connection.consumerInitiated);
-          } else {
-            void closeHandler?.(
-              event,
-              connection.consumerInitiated,
-              connectionGeneration,
-            );
-          }
+          void closeHandler?.(
+            event,
+            connection.consumerInitiated,
+            resolvedConnectionGeneration,
+          );
           setReadyState(VoiceReadyState.CLOSED);
           if (!connectionOpened) {
             reject(
