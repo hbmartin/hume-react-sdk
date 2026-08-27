@@ -183,6 +183,11 @@ export const useVoiceClient = (props: {
     (
       config: SocketConfig,
       sessionSettings?: Hume.empathicVoice.SessionSettings,
+      /**
+       * Attempt identity used to correlate delayed close events. Explicit
+       * values must be non-negative and strictly increase across every call,
+       * including retries after failed attempts.
+       */
       connectionGeneration?: number,
     ) => {
       if (

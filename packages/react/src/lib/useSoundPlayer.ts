@@ -948,10 +948,8 @@ export const useSoundPlayer = (props: {
     ],
   );
 
-  const stopAllAndReport = useCallback(
+  const stopAllTracked = useCallback(
     (expectedContext?: AudioContext) => {
-      // This hook is publicly exported, so callers outside VoiceProvider can
-      // still request and deduplicate cleanup without an explicit context.
       if (expectedContext === undefined && implicitPlayerStopPromise.current) {
         return implicitPlayerStopPromise.current;
       }
@@ -964,17 +962,7 @@ export const useSoundPlayer = (props: {
         }
       }
 
-      const stopping = (async () => {
-        try {
-          await stopAll(expectedContext);
-        } catch (e) {
-          const message = e instanceof Error ? e.message : 'Unknown error';
-          onError.current?.(
-            `Failed to stop audio player: ${message}`,
-            'audio_player_closure_failure',
-          );
-        }
-      })();
+      const stopping = stopAll(expectedContext);
 
       if (expectedContext === undefined) {
         implicitPlayerStopPromise.current = stopping;
@@ -997,14 +985,29 @@ export const useSoundPlayer = (props: {
       }
       return stopping;
     },
-    [onError, stopAll],
+    [stopAll],
+  );
+
+  const stopAllAndReport = useCallback(
+    async (expectedContext?: AudioContext) => {
+      // This hook is publicly exported, so callers outside VoiceProvider can
+      // request deduplicated cleanup without handling resource-level failures.
+      try {
+        await stopAllTracked(expectedContext);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Unknown error';
+        onError.current?.(
+          `Failed to stop audio player: ${message}`,
+          'audio_player_closure_failure',
+        );
+      }
+    },
+    [onError, stopAllTracked],
   );
 
   const stopAllForContext = useCallback(
-    async (context: AudioContext) => {
-      await stopAllAndReport(context);
-    },
-    [stopAllAndReport],
+    (context: AudioContext) => stopAllTracked(context),
+    [stopAllTracked],
   );
 
   const clearQueue = useCallback(() => {

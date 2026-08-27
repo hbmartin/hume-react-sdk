@@ -182,7 +182,10 @@ vi.mock('./useMessages', async () => {
 });
 
 import type { VoiceDiagnosticEvent } from './diagnostics';
-import { isAudioDeviceSwitchError } from './errors';
+import {
+  isAudioDeviceSwitchError,
+  isConcurrentConnectAuthError,
+} from './errors';
 import type * as UseMessagesModule from './useMessages';
 import type * as UseVoiceClientModule from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
@@ -362,6 +365,41 @@ describe('VoiceProvider close lifecycle', () => {
       expect(mocks.playerStopForContext).toHaveBeenCalledOnce(),
     );
     expect(mocks.clearMessageStore).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the cleanup grace period for teardown created by unmount', async () => {
+    vi.useFakeTimers();
+    try {
+      const stalledMicrophone = createDeferred<void>();
+      mocks.micStop.mockReturnValueOnce(stalledMicrophone.promise);
+      const rendered = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+        ),
+      });
+      await act(() =>
+        rendered.result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
+
+      rendered.unmount();
+      await act(() => Promise.resolve());
+      expect(mocks.micStop).toHaveBeenCalledOnce();
+
+      await act(() => vi.advanceTimersByTimeAsync(14_999));
+      expect(mocks.stopStream).not.toHaveBeenCalled();
+
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(mocks.stopStream).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        stalledMicrophone.resolve();
+        await stalledMicrophone.promise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not emit a disconnect lifecycle when an idle provider unmounts', async () => {
@@ -746,7 +784,47 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('disconnected');
   });
 
-  it('publishes a delayed consumer close without mutating a newer connection', async () => {
+  it('lets an adopting teardown publish the final disconnect diagnostic', async () => {
+    mocks.micStop.mockRejectedValueOnce(new Error('first stop failed'));
+    const events: VoiceDiagnosticEvent[] = [];
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider
+          diagnostics={{
+            level: 'debug',
+            logger: false,
+            onEvent: (event) => events.push(event),
+          }}
+        >
+          {children}
+        </VoiceProvider>
+      ),
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    let disconnecting = Promise.resolve();
+    act(() => {
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+      disconnecting = result.current.disconnect();
+    });
+    await act(() => disconnecting);
+
+    expect(mocks.micStop).toHaveBeenCalledTimes(2);
+    const disconnectedEvents = events.filter(
+      (event) => event.name === 'connection.disconnected',
+    );
+    expect(disconnectedEvents).toHaveLength(1);
+    expect(disconnectedEvents[0]?.details).toMatchObject({
+      cleanupFailureCount: 0,
+      reason: 'server',
+    });
+  });
+
+  it('suppresses a delayed consumer close from a superseded connection', async () => {
     const secondStream = createDeferred<MediaStream>();
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -778,9 +856,7 @@ describe('VoiceProvider close lifecycle', () => {
     act(() => {
       void firstConnectionClose?.({ code: 1000 } as CloseEvent, true);
     });
-    expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 1000 }),
-    );
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.clearMessageStore).toHaveBeenCalledTimes(messageClearCount);
     expect(result.current.status.value).toBe('connecting');
 
@@ -903,7 +979,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.stopStream).toHaveBeenCalledOnce();
   });
 
-  it('publishes a delayed socket close after clientConnect rejects', async () => {
+  it('suppresses a delayed socket close after clientConnect rejects', async () => {
     mocks.clientConnect.mockRejectedValueOnce(new Error('connect failed'));
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -925,9 +1001,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 1006 }),
-    );
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledTimes(cleanupCalls);
     expect(result.current.status.value).toBe('disconnected');
   });
@@ -958,9 +1032,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 1006 }),
-    );
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledOnce();
     expect(mocks.waitForDrain).not.toHaveBeenCalled();
 
@@ -1057,7 +1129,7 @@ describe('VoiceProvider close lifecycle', () => {
     let concurrentConnect = Promise.resolve();
     act(() => {
       concurrentConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
     });
     expect(concurrentConnect).toBe(firstConnect);
@@ -1078,6 +1150,39 @@ describe('VoiceProvider close lifecycle', () => {
     );
     expect(mocks.clientConnect).toHaveBeenCalledTimes(2);
     expect(result.current.status.value).toBe('connected');
+  });
+
+  it('rejects a concurrent connect that supplies refreshed credentials', async () => {
+    const stream = createDeferred<MediaStream>();
+    mocks.getStream.mockReturnValueOnce(stream.promise);
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+
+    let firstConnect = Promise.resolve();
+    act(() => {
+      firstConnect = result.current.connect({
+        auth: { type: 'accessToken', value: 'first-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.getStream).toHaveBeenCalledOnce());
+
+    const conflict = await result.current
+      .connect({
+        auth: { type: 'accessToken', value: 'refreshed-token' },
+      })
+      .catch((error: unknown) => error);
+
+    expect(isConcurrentConnectAuthError(conflict)).toBe(true);
+    expect(conflict).toMatchObject({ reason: 'auth_conflict' });
+    expect(mocks.clientConnect).not.toHaveBeenCalled();
+
+    await act(async () => {
+      stream.resolve({} as MediaStream);
+      await firstConnect;
+    });
   });
 
   it('joins a concurrent connect during player initialization cleanup', async () => {
@@ -1104,7 +1209,7 @@ describe('VoiceProvider close lifecycle', () => {
     let concurrentConnect = Promise.resolve();
     act(() => {
       concurrentConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
     });
     expect(concurrentConnect).toBe(firstConnect);
@@ -1494,7 +1599,7 @@ describe('VoiceProvider close lifecycle', () => {
     let concurrentConnect = Promise.resolve();
     act(() => {
       concurrentConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
     });
     expect(concurrentConnect).toBe(firstConnect);
@@ -2192,7 +2297,7 @@ describe('VoiceProvider close lifecycle', () => {
     });
     connectAgain = () =>
       result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
 
     await act(() =>
@@ -2204,6 +2309,90 @@ describe('VoiceProvider close lifecycle', () => {
     await expect(reentrantResult).resolves.toBeUndefined();
     expect(mocks.getStream).toHaveBeenCalledOnce();
     expect(mocks.clientConnect).toHaveBeenCalledOnce();
+  });
+
+  it('awaits player shutdown before closing context in the server backstop', async () => {
+    vi.useFakeTimers();
+    try {
+      const stalledDrain = createDeferred<boolean>();
+      const playerStopped = createDeferred<void>();
+      mocks.waitForDrain.mockReturnValueOnce(stalledDrain.promise);
+      mocks.playerStopForContext.mockReturnValueOnce(playerStopped.promise);
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+        ),
+      });
+      await act(() =>
+        result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
+
+      act(() => {
+        void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+      });
+      await act(() => vi.advanceTimersByTimeAsync(15_000));
+
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
+      expect(mocks.contextClose).not.toHaveBeenCalled();
+
+      await act(async () => {
+        playerStopped.resolve();
+        await playerStopped.promise;
+        await Promise.resolve();
+      });
+      expect(mocks.contextClose).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        stalledDrain.resolve(true);
+        await stalledDrain.promise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('awaits player shutdown before closing context in the disconnect backstop', async () => {
+    vi.useFakeTimers();
+    try {
+      const stalledMicrophone = createDeferred<void>();
+      const playerStopped = createDeferred<void>();
+      mocks.micStop.mockReturnValueOnce(stalledMicrophone.promise);
+      mocks.playerStopForContext.mockReturnValueOnce(playerStopped.promise);
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+        ),
+      });
+      await act(() =>
+        result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
+
+      let disconnecting = Promise.resolve();
+      act(() => {
+        disconnecting = result.current.disconnect();
+      });
+      await act(() => vi.advanceTimersByTimeAsync(15_000));
+
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
+      expect(mocks.contextClose).not.toHaveBeenCalled();
+
+      await act(async () => {
+        playerStopped.resolve();
+        await Promise.all([playerStopped.promise, disconnecting]);
+      });
+      expect(mocks.contextClose).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        stalledMicrophone.resolve();
+        await stalledMicrophone.promise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('terminalizes a stalled disconnect without letting late cleanup clobber reconnect', async () => {
