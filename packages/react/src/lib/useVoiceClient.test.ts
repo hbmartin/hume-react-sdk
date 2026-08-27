@@ -5,6 +5,7 @@ import {
   createVoiceDiagnosticsReporter,
   type VoiceDiagnosticEvent,
 } from './diagnostics';
+import { isConnectionGenerationError } from './errors';
 import {
   type ToolCallHandler,
   useVoiceClient,
@@ -286,12 +287,9 @@ describe('useVoiceClient', () => {
     );
   });
 
-  it('allows reuse of a generation after its connection closes', async () => {
+  it('rejects reuse of an explicit generation after its connection closes', async () => {
     const firstSocket = createSocket();
-    const secondSocket = createSocket();
-    humeMocks.connect
-      .mockReturnValueOnce(firstSocket)
-      .mockReturnValueOnce(secondSocket);
+    humeMocks.connect.mockReturnValueOnce(firstSocket);
     const { result } = renderHook(() => useVoiceClient({}));
 
     let firstConnection = Promise.resolve(VoiceReadyState.IDLE);
@@ -303,16 +301,16 @@ describe('useVoiceClient', () => {
     });
     await expect(firstConnection).rejects.toThrow();
 
-    let secondConnection = Promise.resolve(VoiceReadyState.IDLE);
-    act(() => {
-      secondConnection = result.current.connect(config, undefined, 9);
-      secondSocket.handlers.get('message')?.({
-        type: 'chat_metadata',
-      } as never);
-    });
+    const generationError = await result.current
+      .connect(config, undefined, 9)
+      .catch((error: unknown) => error);
 
-    await expect(secondConnection).resolves.toBe(VoiceReadyState.OPEN);
-    expect(humeMocks.connect).toHaveBeenCalledTimes(2);
+    expect(isConnectionGenerationError(generationError)).toBe(true);
+    expect(generationError).toMatchObject({
+      connectionGeneration: 9,
+      reason: 'not_strictly_increasing',
+    });
+    expect(humeMocks.connect).toHaveBeenCalledOnce();
   });
 
   it('does not abort an active attempt for an invalid generation', async () => {

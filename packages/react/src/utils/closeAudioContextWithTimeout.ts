@@ -3,7 +3,11 @@ const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
 
 export type AudioContextCloseResult =
   | { success: true }
-  | { success: false; error: Error };
+  | {
+      success: false;
+      error: Error;
+      reason: 'rejected' | 'timeout';
+    };
 
 const toError = (error: unknown): Error => {
   if (error instanceof Error) {
@@ -27,10 +31,18 @@ export const closeAudioContextWithTimeout = async (
   try {
     closePromise = Promise.resolve(context.close()).then(
       () => ({ success: true }),
-      (error: unknown) => ({ success: false, error: toError(error) }),
+      (error: unknown) => ({
+        success: false,
+        error: toError(error),
+        reason: 'rejected' as const,
+      }),
     );
   } catch (error) {
-    return { success: false, error: toError(error) };
+    return {
+      success: false,
+      error: toError(error),
+      reason: 'rejected',
+    };
   }
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -42,6 +54,7 @@ export const closeAudioContextWithTimeout = async (
           resolve({
             success: false,
             error: new Error('Audio context close timed out.'),
+            reason: 'timeout',
           }),
         AUDIO_CONTEXT_CLOSE_TIMEOUT_MS,
       );

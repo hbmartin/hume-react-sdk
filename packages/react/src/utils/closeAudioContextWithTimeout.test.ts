@@ -44,6 +44,8 @@ describe('closeAudioContextWithTimeout', () => {
     }
     expect(synchronousResult.error.message).toBe('Already closed');
     expect(rejectedResult.error.message).toBe('Already closed');
+    expect(synchronousResult.reason).toBe('rejected');
+    expect(rejectedResult.reason).toBe('rejected');
   });
 
   it('resolves after one second when close never settles', async () => {
@@ -69,6 +71,7 @@ describe('closeAudioContextWithTimeout', () => {
       throw new Error('Expected the audio context close to time out.');
     }
     expect(result.error.message).toBe('Audio context close timed out.');
+    expect(result.reason).toBe('timeout');
     expect(settled).toBe(true);
   });
 });

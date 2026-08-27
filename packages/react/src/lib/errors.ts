@@ -34,6 +34,33 @@ export const isAudioDeviceSwitchError = (
   error: unknown,
 ): error is AudioDeviceSwitchError => error instanceof AudioDeviceSwitchError;
 
+export type ConnectionGenerationErrorReason =
+  | 'invalid'
+  | 'not_strictly_increasing';
+
+export class ConnectionGenerationError extends Error {
+  readonly reason: ConnectionGenerationErrorReason;
+
+  readonly connectionGeneration: number;
+
+  constructor(
+    connectionGeneration: number,
+    reason: ConnectionGenerationErrorReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ConnectionGenerationError';
+    this.connectionGeneration = connectionGeneration;
+    this.reason = reason;
+  }
+}
+
+/** Check whether an unknown value is a connection-generation validation error. */
+export const isConnectionGenerationError = (
+  error: unknown,
+): error is ConnectionGenerationError =>
+  error instanceof ConnectionGenerationError;
+
 export class SocketUnknownMessageError extends Error {
   constructor(message?: string) {
     super(`Unknown message type.${message ? ' ' + message : ''}`);
