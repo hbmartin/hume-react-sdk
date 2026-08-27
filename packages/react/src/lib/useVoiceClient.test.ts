@@ -190,10 +190,18 @@ describe('useVoiceClient', () => {
   it('settles a pre-open connection before invoking a throwing onClose', async () => {
     const socket = createSocket();
     humeMocks.connect.mockReturnValue(socket);
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
     const onClose = vi.fn(() => {
       throw new Error('consumer close failed');
     });
-    const { result } = renderHook(() => useVoiceClient({ onClose }));
+    const { result } = renderHook(() =>
+      useVoiceClient({ diagnostics, onClose }),
+    );
 
     let connecting = Promise.resolve(VoiceReadyState.IDLE);
     act(() => {
@@ -207,6 +215,9 @@ describe('useVoiceClient', () => {
       'The websocket closed before the voice connection opened (code 1006).',
     );
     expect(onClose).toHaveBeenCalledOnce();
+    expect(
+      events.filter((event) => event.name === 'consumer.callback_failed'),
+    ).toHaveLength(1);
     expect(result.current.readyState).toBe(VoiceReadyState.CLOSED);
   });
 
@@ -275,9 +286,12 @@ describe('useVoiceClient', () => {
     );
   });
 
-  it('rejects reuse of an explicit connection generation', async () => {
-    const socket = createSocket();
-    humeMocks.connect.mockReturnValue(socket);
+  it('allows reuse of a generation after its connection closes', async () => {
+    const firstSocket = createSocket();
+    const secondSocket = createSocket();
+    humeMocks.connect
+      .mockReturnValueOnce(firstSocket)
+      .mockReturnValueOnce(secondSocket);
     const { result } = renderHook(() => useVoiceClient({}));
 
     let firstConnection = Promise.resolve(VoiceReadyState.IDLE);
@@ -285,14 +299,41 @@ describe('useVoiceClient', () => {
       firstConnection = result.current.connect(config, undefined, 9);
     });
     act(() => {
-      socket.handlers.get('close')?.({ code: 1006 } as never);
+      firstSocket.handlers.get('close')?.({ code: 1006 } as never);
     });
     await expect(firstConnection).rejects.toThrow();
 
-    await expect(result.current.connect(config, undefined, 9)).rejects.toThrow(
-      'connectionGeneration 9 has already been used',
+    let secondConnection = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      secondConnection = result.current.connect(config, undefined, 9);
+      secondSocket.handlers.get('message')?.({
+        type: 'chat_metadata',
+      } as never);
+    });
+
+    await expect(secondConnection).resolves.toBe(VoiceReadyState.OPEN);
+    expect(humeMocks.connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not abort an active attempt for an invalid generation', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const { result } = renderHook(() => useVoiceClient({}));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config, undefined, 10);
+    });
+
+    await expect(result.current.connect(config, undefined, -1)).rejects.toThrow(
+      'connectionGeneration must be a non-negative safe integer',
     );
-    expect(humeMocks.connect).toHaveBeenCalledOnce();
+    expect(socket.close).not.toHaveBeenCalled();
+
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await expect(connecting).resolves.toBe(VoiceReadyState.OPEN);
   });
 
   it('ignores a late tool call after the socket closes', async () => {
