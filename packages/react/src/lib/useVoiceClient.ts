@@ -3,10 +3,12 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { type Simplify } from 'type-fest';
 
 import { type AuthStrategy, getAuthStrategyError } from './auth';
-import type {
-  VoiceDiagnosticInput,
-  VoiceDiagnosticsReporter,
+import {
+  invokeIsolatedConsumerCallback,
+  type VoiceDiagnosticInput,
+  type VoiceDiagnosticsReporter,
 } from './diagnostics';
+import { ConnectionGenerationError } from './errors';
 import { useLatestRef } from './useLatestRef';
 import type {
   AudioOutputMessage,
@@ -156,6 +158,7 @@ export const useVoiceClient = (props: {
   const activeConnection = useRef<ActiveConnection | null>(null);
   const client = useRef<Hume.empathicVoice.chat.ChatSocket | null>(null);
   const generatedConnectionGeneration = useRef(0);
+  const latestExplicitConnectionGeneration = useRef<number | null>(null);
 
   const [readyState, setReadyState] = useState<VoiceReadyState>(
     VoiceReadyState.IDLE,
@@ -188,8 +191,28 @@ export const useVoiceClient = (props: {
           connectionGeneration < 0)
       ) {
         return Promise.reject(
-          new Error('connectionGeneration must be a non-negative safe integer'),
+          new ConnectionGenerationError(
+            connectionGeneration,
+            'invalid',
+            'connectionGeneration must be a non-negative safe integer',
+          ),
         );
+      }
+      if (
+        connectionGeneration !== undefined &&
+        latestExplicitConnectionGeneration.current !== null &&
+        connectionGeneration <= latestExplicitConnectionGeneration.current
+      ) {
+        return Promise.reject(
+          new ConnectionGenerationError(
+            connectionGeneration,
+            'not_strictly_increasing',
+            `connectionGeneration ${connectionGeneration} must be greater than the previous explicit generation ${latestExplicitConnectionGeneration.current}`,
+          ),
+        );
+      }
+      if (connectionGeneration !== undefined) {
+        latestExplicitConnectionGeneration.current = connectionGeneration;
       }
       // Generated values occupy the negative namespace while provider-owned
       // lifecycle generations are non-negative, so the two modes cannot alias.
@@ -596,28 +619,13 @@ export const useVoiceClient = (props: {
               ),
             );
           }
-          const reportCloseHandlerFailure = (error: unknown) => {
-            report({
-              level: 'warn',
-              category: 'consumer',
-              name: 'consumer.callback_failed',
-              details: { callback: 'onClose', error },
-            });
-          };
-          try {
-            const closeResult = onClose.current?.(
+          invokeIsolatedConsumerCallback(diagnostics.current, 'onClose', () =>
+            onClose.current?.(
               event,
               connection.consumerInitiated,
               resolvedConnectionGeneration,
-            );
-            if (closeResult !== undefined) {
-              void Promise.resolve(closeResult).catch(
-                reportCloseHandlerFailure,
-              );
-            }
-          } catch (error) {
-            reportCloseHandlerFailure(error);
-          }
+            ),
+          );
         });
 
         socket.on('error', (e) => {

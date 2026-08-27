@@ -129,6 +129,31 @@ export interface VoiceDiagnosticsReporter {
   setChatId(chatId?: string): void;
 }
 
+/** Invoke application code without allowing sync or async failures into SDK control flow. */
+export const invokeIsolatedConsumerCallback = <Result>(
+  diagnostics: VoiceDiagnosticsReporter | undefined,
+  callback: string,
+  invoke: () => Result,
+): void => {
+  const reportFailure = (error: unknown) => {
+    diagnostics?.emit({
+      level: 'warn',
+      category: 'consumer',
+      name: 'consumer.callback_failed',
+      details: { callback, error },
+    });
+  };
+
+  try {
+    const result: unknown = invoke();
+    if (result !== undefined) {
+      void Promise.resolve(result).catch(reportFailure);
+    }
+  } catch (error) {
+    reportFailure(error);
+  }
+};
+
 const LEVEL_PRIORITY: Record<VoiceDiagnosticLevel, number> = {
   debug: 10,
   info: 20,

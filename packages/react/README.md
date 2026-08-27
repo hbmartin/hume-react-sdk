@@ -323,9 +323,9 @@ selection may also require HTTPS and browser-granted media permission.
 Opens a socket connection to the voice API and initializes the microphone.
 The promise resolves after that attempt settles; inspect `status` and `error`
 to determine whether it connected successfully. A call made while another
-connection attempt is still running rejects instead of discarding or queueing
-the later call's options. Calling `connect()` while already connected is a
-no-op that resolves.
+connection attempt is still running joins that attempt without starting a
+second set of resources; the later call's options are ignored. Calling
+`connect()` while already connected is a no-op that resolves.
 
 | Parameter | Type             | Description                           |
 | --------- | ---------------- | ------------------------------------- |
