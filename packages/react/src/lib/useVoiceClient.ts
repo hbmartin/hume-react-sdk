@@ -156,6 +156,7 @@ export const useVoiceClient = (props: {
   const activeConnection = useRef<ActiveConnection | null>(null);
   const client = useRef<Hume.empathicVoice.chat.ChatSocket | null>(null);
   const generatedConnectionGeneration = useRef(0);
+  const usedConnectionGenerations = useRef(new Set<number>());
 
   const [readyState, setReadyState] = useState<VoiceReadyState>(
     VoiceReadyState.IDLE,
@@ -182,20 +183,34 @@ export const useVoiceClient = (props: {
       sessionSettings?: Hume.empathicVoice.SessionSettings,
       connectionGeneration?: number,
     ) => {
+      if (
+        connectionGeneration !== undefined &&
+        (!Number.isSafeInteger(connectionGeneration) ||
+          connectionGeneration < 0)
+      ) {
+        return Promise.reject(
+          new Error('connectionGeneration must be a non-negative safe integer'),
+        );
+      }
+      // Generated values occupy the negative namespace while provider-owned
+      // lifecycle generations are non-negative, so the two modes cannot alias.
+      const resolvedConnectionGeneration =
+        connectionGeneration ?? --generatedConnectionGeneration.current;
+      if (usedConnectionGenerations.current.has(resolvedConnectionGeneration)) {
+        return Promise.reject(
+          new Error(
+            `connectionGeneration ${resolvedConnectionGeneration} has already been used`,
+          ),
+        );
+      }
+      usedConnectionGenerations.current.add(resolvedConnectionGeneration);
+
       // Abort previous attempt if any
       connectAbortController.current?.abort();
 
       const controller = new AbortController();
       const signal = controller.signal;
       connectAbortController.current = controller;
-      const resolvedConnectionGeneration =
-        connectionGeneration ?? ++generatedConnectionGeneration.current;
-      if (connectionGeneration !== undefined) {
-        generatedConnectionGeneration.current = Math.max(
-          generatedConnectionGeneration.current,
-          connectionGeneration,
-        );
-      }
 
       const connectSettings = getSessionSettingsOnConnect(sessionSettings);
 
@@ -582,12 +597,6 @@ export const useVoiceClient = (props: {
               consumerInitiated: connection.consumerInitiated,
             },
           });
-          const closeHandler = onClose.current;
-          void closeHandler?.(
-            event,
-            connection.consumerInitiated,
-            resolvedConnectionGeneration,
-          );
           setReadyState(VoiceReadyState.CLOSED);
           if (!connectionOpened) {
             reject(
@@ -595,6 +604,28 @@ export const useVoiceClient = (props: {
                 `The websocket closed before the voice connection opened (code ${event.code}).`,
               ),
             );
+          }
+          const reportCloseHandlerFailure = (error: unknown) => {
+            report({
+              level: 'warn',
+              category: 'consumer',
+              name: 'consumer.callback_failed',
+              details: { callback: 'onClose', error },
+            });
+          };
+          try {
+            const closeResult = onClose.current?.(
+              event,
+              connection.consumerInitiated,
+              resolvedConnectionGeneration,
+            );
+            if (closeResult !== undefined) {
+              void Promise.resolve(closeResult).catch(
+                reportCloseHandlerFailure,
+              );
+            }
+          } catch (error) {
+            reportCloseHandlerFailure(error);
           }
         });
 
