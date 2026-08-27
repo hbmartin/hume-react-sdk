@@ -45,13 +45,15 @@ jobs:
           # Note: NODE_ENV needs to be set to development to
           # install jest and other dev dependencies
           NODE_ENV: development
-        run: pnpm install
+        run:
+          pnpm install
 
           # Check that packages can build without errors
       - name: Builds without errors
         env:
           NODE_ENV: production
-        run: pnpm build
+        run:
+          pnpm build
 
           # Check for linting errors
       - name: Check for linting errors
@@ -66,19 +68,19 @@ jobs:
     if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-        - name: Checkout repo
-          uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-        - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-        - name: Set up node
-          uses: actions/setup-node@v4
-          with:
-              node-version: "18.18.0"
-              registry-url: 'https://registry.npmjs.org'
-              cache: 'pnpm'
+      - name: Set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
 
-        - name: Release
-          run: pnpm run release
-          env:
-              NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Release
+        run: pnpm run release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
