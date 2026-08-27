@@ -1,16 +1,12 @@
 name: ci
+
 on:
-  # Run workflow when a PR is merged onto main
   push:
-    tags:
-      - 'v*.*.*'
-    branches:
-      - main
-  # Run workflow on any open PR against main branch
+    branches: [main]
+    tags: ['v*.*.*']
   pull_request:
-    types: ['opened', 'reopened', 'ready_for_review', 'synchronize']
-    branches:
-      - main
+    branches: [main]
+    types: [opened, reopened, ready_for_review, synchronize]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,73 +15,250 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NODE_ENV: development
+
 jobs:
-  pr-check:
-    if: ${{ github.event.pull_request.draft == false }}
-
+  build-typecheck:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-
-    env:
-      NODE_ENV: development
-
     steps:
-      # Checkout repository files
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-
-      # Add Node.js and npm to runner
-      - name: Setup node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
-          cache: 'pnpm'
-
-      # Install project dependencies with pnpm
+          package-manager-cache: false
       - name: Install dependencies
-        env:
-          # Note: NODE_ENV needs to be set to development to
-          # install jest and other dev dependencies
-          NODE_ENV: development
-        run: pnpm install
-
-      # Check that packages can build without errors
-      - name: Builds without errors
+        run: pnpm install --frozen-lockfile
+      - name: Build all workspaces
         env:
           NODE_ENV: production
         run: pnpm build
+      - name: Typecheck source
+        run: pnpm typecheck
+      - name: Typecheck dependency declarations
+        run: pnpm typecheck:deps
 
-      # Check for linting errors
-      - name: Check for linting errors
+  oxlint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run Oxlint and rule contracts
         run: pnpm lint
 
-      # Check that project unit tests are successful
+  formatting-docs-dependencies:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check Oxfmt
+        run: pnpm format:check
+      - name: Check dependency consistency
+        run: pnpm check:deps
+      - name: Check spelling and Markdown
+        run: pnpm check:docs
+
+  tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
       - name: Run unit tests
         run: pnpm test
 
-  publish:
-    needs: pr-check
-    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+  fallow:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-
-      - name: Set up node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
-          registry-url: 'https://registry.npmjs.org'
-          cache: 'pnpm'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check dead code and architecture boundaries
+        run: pnpm check:fallow
+      - name: Report private type leaks
+        run: pnpm check:fallow:private-types
+      - name: Reject new duplication and complexity regressions
+        if: github.event_name == 'pull_request'
+        run: pnpm check:fallow:audit
 
-      - name: Release
-        run: pnpm run release
+  packages-api:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Validate packed packages
+        run: pnpm check:packages
+      - name: Check public API reports
+        run: pnpm api-report:check
+
+  workflow-security:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # allow Zizmor's online action metadata audits
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run pinned actionlint and ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="$RUNNER_TEMP/workflow-tools"
+          actionlint_archive="$RUNNER_TEMP/actionlint.tar.gz"
+          shellcheck_archive="$RUNNER_TEMP/shellcheck.tar.gz"
+          mkdir -p "$tool_dir"
+
+          curl --fail --location --silent --show-error \
+            --output "$actionlint_archive" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $actionlint_archive" | sha256sum --check
+          tar --extract --gzip --file "$actionlint_archive" --directory "$tool_dir" actionlint
+
+          curl --fail --location --silent --show-error \
+            --output "$shellcheck_archive" \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz
+          echo "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6  $shellcheck_archive" | sha256sum --check
+          tar --extract --gzip --file "$shellcheck_archive" --directory "$tool_dir"
+
+          "$tool_dir/actionlint" \
+            -shellcheck="$tool_dir/shellcheck-v0.11.0/shellcheck"
+      - name: Run pinned Zizmor
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          advanced-security: false
+          annotations: true
+          min-severity: low
+          persona: pedantic
+          version: 1.29.0
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build-typecheck
+      - fallow
+      - formatting-docs-dependencies
+      - oxlint
+      - packages-api
+      - tests
+      - workflow-security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - name: Set up Node.js for publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+          registry-url: 'https://registry.npmjs.org'
+      - name: Validate release tag and package versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          expected_version="${RELEASE_TAG#v}"
+          matching_package=false
+          for package_file in packages/embed/package.json packages/embed-react/package.json packages/react/package.json; do
+            package_version=$(node --input-type=module --eval \
+              "import manifest from './$package_file' with { type: 'json' }; console.log(manifest.version)")
+            if [[ ! "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "$package_file has an invalid version: $package_version" >&2
+              exit 1
+            fi
+            if [[ "$package_version" == "$expected_version" ]]; then
+              matching_package=true
+            fi
+          done
+          if [[ "$matching_package" != true ]]; then
+            echo "No publishable package matches release tag $RELEASE_TAG" >&2
+            exit 1
+          fi
+      - name: Install dependencies without restoring a cache
+        run: pnpm install --frozen-lockfile
+      - name: Re-run the complete release gate
+        run: pnpm check
+      - name: Publish packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --recursive --access public --no-git-checks
