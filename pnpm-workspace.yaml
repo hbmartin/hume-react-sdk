@@ -3,3 +3,7 @@ packages:
   - "tools/*"
   - "examples/*"
   - "apps/*"
+
+allowBuilds:
+  esbuild: true
+  sharp: true

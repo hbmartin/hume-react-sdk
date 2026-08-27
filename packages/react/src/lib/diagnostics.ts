@@ -121,7 +121,6 @@ export interface VoiceDiagnosticsReporter {
   beginConnection(secret?: string): string;
   clearConnection(): void;
   emit(input: VoiceDiagnosticInput): void;
-  getConnectionId(): string | undefined;
   getCorrelation(): Readonly<{
     connectionId?: string;
     chatId?: string;
@@ -358,11 +357,13 @@ export const createVoiceDiagnosticsReporter = (
         input.connectionId === null
           ? undefined
           : (input.connectionId ?? connectionId);
+      const shouldInheritActiveChat =
+        input.connectionId === undefined ||
+        (input.connectionId !== null && input.connectionId === connectionId);
       const eventChatId =
         input.chatId === null
           ? undefined
-          : (input.chatId ??
-            (input.connectionId === undefined ? chatId : undefined));
+          : (input.chatId ?? (shouldInheritActiveChat ? chatId : undefined));
       const event = Object.freeze({
         schemaVersion: 1 as const,
         sdkVersion: packageJson.version,
@@ -398,9 +399,6 @@ export const createVoiceDiagnosticsReporter = (
           // A broken logger is isolated from both the SDK and the event callback.
         }
       }
-    },
-    getConnectionId() {
-      return connectionId;
     },
     getCorrelation() {
       return Object.freeze({

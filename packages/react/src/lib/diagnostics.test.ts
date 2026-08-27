@@ -137,7 +137,6 @@ describe('voice diagnostics reporter', () => {
     const originalConnectionId = reporter.beginConnection();
     reporter.setChatId('original-chat');
     const originalCorrelation = reporter.getCorrelation();
-    expect(reporter.getConnectionId()).toBe(originalConnectionId);
     expect(originalCorrelation).toEqual({
       connectionId: originalConnectionId,
       chatId: 'original-chat',
@@ -145,15 +144,21 @@ describe('voice diagnostics reporter', () => {
     expect(Object.isFrozen(originalCorrelation)).toBe(true);
     reporter.clearConnection();
 
-    reporter.beginConnection();
+    const newConnectionId = reporter.beginConnection();
     reporter.setChatId('new-chat');
     reporter.emit({ ...input, ...originalCorrelation });
+    reporter.emit({ ...input, connectionId: newConnectionId });
+    reporter.emit({ ...input, connectionId: originalConnectionId });
     reporter.emit({ ...input, connectionId: null });
 
     expect(events[0]?.connectionId).toBe(originalConnectionId);
     expect(events[0]?.chatId).toBe('original-chat');
-    expect(events[1]?.connectionId).toBeUndefined();
-    expect(events[1]?.chatId).toBeUndefined();
+    expect(events[1]?.connectionId).toBe(newConnectionId);
+    expect(events[1]?.chatId).toBe('new-chat');
+    expect(events[2]?.connectionId).toBe(originalConnectionId);
+    expect(events[2]?.chatId).toBeUndefined();
+    expect(events[3]?.connectionId).toBeUndefined();
+    expect(events[3]?.chatId).toBeUndefined();
   });
 
   it('redacts secrets and protected fields from default events', () => {

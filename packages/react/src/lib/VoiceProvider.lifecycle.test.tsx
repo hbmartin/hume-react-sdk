@@ -37,7 +37,16 @@ const mocks = vi.hoisted(() => ({
   onCloseHandler: null as
     | null
     | ((event: CloseEvent, consumerInitiated: boolean) => void | Promise<void>),
-  connectionGeneration: undefined as number | undefined,
+  providerOnClose: null as
+    | null
+    | ((
+        event: CloseEvent,
+        consumerInitiated: boolean,
+        connectionGeneration?: number,
+      ) => void | Promise<void>),
+  connectionCloseHandlers: [] as Array<
+    (event: CloseEvent, consumerInitiated: boolean) => void | Promise<void>
+  >,
   playerInit: vi.fn(),
   playerSetOutputDevice: vi.fn(),
   playerErrorHandler: null as null | PlayerErrorHandler,
@@ -58,21 +67,25 @@ vi.mock('./useVoiceClient', async () => {
   return {
     ...actual,
     useVoiceClient: (props: Parameters<typeof actual.useVoiceClient>[0]) => {
-      mocks.onCloseHandler = props.onClose
-        ? (event, consumerInitiated) =>
-            props.onClose?.(
-              event,
-              consumerInitiated,
-              mocks.connectionGeneration,
-            )
-        : null;
+      mocks.providerOnClose = props.onClose ?? null;
       return {
         connect: (
           ...args: Parameters<
             ReturnType<typeof actual.useVoiceClient>['connect']
           >
         ): ReturnType<ReturnType<typeof actual.useVoiceClient>['connect']> => {
-          mocks.connectionGeneration = args[2];
+          const connectionGeneration = args[2];
+          const closeHandler = (
+            event: CloseEvent,
+            consumerInitiated: boolean,
+          ) =>
+            mocks.providerOnClose?.(
+              event,
+              consumerInitiated,
+              connectionGeneration,
+            );
+          mocks.connectionCloseHandlers.push(closeHandler);
+          mocks.onCloseHandler = closeHandler;
           return mocks.clientConnect(...args) as ReturnType<
             ReturnType<typeof actual.useVoiceClient>['connect']
           >;
@@ -210,7 +223,8 @@ describe('VoiceProvider close lifecycle', () => {
     globalThis.AudioContext = originalAudioContext;
     vi.clearAllMocks();
     mocks.onCloseHandler = null;
-    mocks.connectionGeneration = undefined;
+    mocks.providerOnClose = null;
+    mocks.connectionCloseHandlers.length = 0;
     mocks.playerErrorHandler = null;
     mocks.microphoneProps = null;
   });
@@ -694,8 +708,36 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.clientDisconnect).not.toHaveBeenCalled();
   });
 
+  it('clears an existing error after retrying failed close cleanup', async () => {
+    mocks.micStop.mockRejectedValueOnce(new Error('microphone stop failed'));
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    let disconnecting = Promise.resolve();
+    act(() => {
+      mocks.playerErrorHandler?.(
+        'audio playback failed',
+        'audio_player_initialization_failure',
+      );
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+      disconnecting = result.current.disconnect();
+    });
+    await act(() => disconnecting);
+
+    expect(mocks.micStop).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('disconnected');
+  });
+
   it('ignores a delayed consumer close after a reconnect begins', async () => {
-    const nextStream = createDeferred<MediaStream>();
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
       wrapper: ({ children }) => (
@@ -710,29 +752,54 @@ describe('VoiceProvider close lifecycle', () => {
       }),
     );
     await act(() => result.current.disconnect());
+    const firstConnectionClose = mocks.connectionCloseHandlers[0];
     const messageClearCount = mocks.clearMessageStore.mock.calls.length;
-    mocks.getStream.mockReturnValueOnce(nextStream.promise);
 
-    let reconnect = Promise.resolve();
-    act(() => {
-      reconnect = result.current.connect({
+    await act(() =>
+      result.current.connect({
         auth: { type: 'accessToken', value: 'second-token' },
-      });
-    });
-    await waitFor(() => expect(result.current.status.value).toBe('connecting'));
+      }),
+    );
+    expect(mocks.connectionCloseHandlers).toHaveLength(2);
+    expect(result.current.status.value).toBe('connected');
 
     act(() => {
-      void mocks.onCloseHandler?.({ code: 1000 } as CloseEvent, true);
+      void firstConnectionClose?.({ code: 1000 } as CloseEvent, true);
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(mocks.clearMessageStore).toHaveBeenCalledTimes(messageClearCount);
-    expect(result.current.status.value).toBe('connecting');
-
-    await act(async () => {
-      nextStream.resolve({} as MediaStream);
-      await reconnect;
-    });
     expect(result.current.status.value).toBe('connected');
+  });
+
+  it('handles a server close when the client omits its generation', async () => {
+    const onClose = vi.fn();
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false} onClose={onClose}>
+          {children}
+        </VoiceProvider>
+      ),
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    act(() => {
+      void mocks.providerOnClose?.(
+        { code: 1006 } as CloseEvent,
+        false,
+        undefined,
+      );
+    });
+
+    await waitFor(() =>
+      expect(result.current.status.value).toBe('disconnected'),
+    );
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 1006 }),
+    );
   });
 
   it('does not let a no-op disconnect overwrite a concurrent connect', async () => {
@@ -823,7 +890,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.stopStream).toHaveBeenCalledOnce();
   });
 
-  it('ignores the failed socket close after clientConnect rejects', async () => {
+  it('publishes the failed socket close after clientConnect rejects', async () => {
     mocks.clientConnect.mockRejectedValueOnce(new Error('connect failed'));
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -845,8 +912,11 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 1006 }),
+    );
     expect(mocks.stopStream).toHaveBeenCalledTimes(cleanupCalls);
+    expect(result.current.status.value).toBe('disconnected');
   });
 
   it('retries cleanup when a finalizer fails', async () => {
@@ -1023,7 +1093,8 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.clientConnect).not.toHaveBeenCalled();
     expect(mocks.micStart).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledTimes(2);
-    expect(mocks.playerStop).toHaveBeenCalledOnce();
+    expect(mocks.playerStopForContext).toHaveBeenCalled();
+    expect(mocks.playerStop).not.toHaveBeenCalled();
     expect(mocks.contextClose).toHaveBeenCalledOnce();
   });
 
@@ -1493,6 +1564,52 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.playerStopForContext).toHaveBeenCalledTimes(1);
     expect(mocks.playerStop).not.toHaveBeenCalled();
     expect(result.current.status.value).toBe('connected');
+  });
+
+  it('cancels a reconnect waiting on close cleanup before microphone access', async () => {
+    const deferredDrain = createDeferred<boolean>();
+    mocks.waitForDrain.mockReturnValueOnce(deferredDrain.promise);
+    let reconnecting = Promise.resolve();
+    const onClose = vi.fn();
+    const rendered = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false} onClose={onClose}>
+          {children}
+        </VoiceProvider>
+      ),
+    });
+    onClose.mockImplementation(() => {
+      reconnecting = rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'next-token' },
+      });
+    });
+
+    await act(() =>
+      rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    expect(mocks.getStream).toHaveBeenCalledOnce();
+
+    act(() => {
+      void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+
+    let disconnecting = Promise.resolve();
+    act(() => {
+      disconnecting = rendered.result.current.disconnect();
+    });
+
+    await act(async () => {
+      deferredDrain.resolve(true);
+      await disconnecting;
+      await reconnecting;
+    });
+
+    expect(mocks.getStream).toHaveBeenCalledOnce();
+    expect(mocks.clientConnect).toHaveBeenCalledOnce();
+    expect(rendered.result.current.status.value).toBe('disconnected');
   });
 
   it('allows onClose to reconnect after the registered cleanup completes', async () => {
