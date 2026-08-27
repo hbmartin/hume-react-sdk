@@ -186,6 +186,10 @@ type CurrentRef<T> = { current: T };
 
 const getMonotonicTime = () => globalThis.performance?.now() ?? Date.now();
 
+const RESOURCE_CLEANUP_TIMEOUT_MS = 15_000;
+const CONNECT_IN_PROGRESS_ERROR_MESSAGE =
+  'A voice connection attempt is already in progress.';
+
 const invokeConsumerCallback = <Result,>(
   diagnostics: VoiceDiagnosticsReporter,
   callback: string,
@@ -458,18 +462,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     (generation: number) => lifecycleGenerationRef.current === generation,
     [],
   );
-  const trackResourceCleanup = useCallback(
-    <Result,>(cleanup: Promise<Result>): Promise<Result> => {
-      pendingResourceCleanupsRef.current.add(cleanup);
-      const clearCleanup = () => {
-        pendingResourceCleanupsRef.current.delete(cleanup);
-      };
-      void cleanup.then(clearCleanup, clearCleanup);
-      return cleanup;
-    },
-    [],
-  );
-
   const publishInputDeviceState = useCallback(
     (requestedDeviceId: string | null, activeDeviceId: string | null) => {
       activeInputDeviceIdRef.current = activeDeviceId;
@@ -511,7 +503,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   }, []);
 
   const closeSharedAudioContext = useCallback(
-    async (context = sharedAudioContextRef.current) => {
+    async (
+      context = sharedAudioContextRef.current,
+    ): Promise<AudioContextCloseResult | null> => {
       if (!context) {
         return null;
       }
@@ -522,14 +516,17 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         sharedAudioContextClosePromisesRef.current.set(context, closePromise);
       }
       const closeResult = await closePromise;
-      if (closeResult.success && sharedAudioContextRef.current === context) {
+      const contextIsClosed = context.state === 'closed';
+      if (
+        (closeResult.success || contextIsClosed) &&
+        sharedAudioContextRef.current === context
+      ) {
         sharedAudioContextRef.current = null;
-      } else if (!closeResult.success) {
-        // A rejected or timed-out close is retryable. Do not cache the failed
-        // result or drop ownership of a context that may still be live.
-        sharedAudioContextClosePromisesRef.current.delete(context);
       }
-      return closeResult;
+      // AudioContext.close() changes the control state to closed before its
+      // promise settles, so a second close cannot recover from a timeout. Keep
+      // the original result cached and observe a later public `closed` state.
+      return contextIsClosed ? { success: true } : closeResult;
     },
     [],
   );
@@ -583,6 +580,58 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     );
   }
   const diagnostics = diagnosticsReporterRef.current;
+  const trackResourceCleanup = useCallback(
+    <Result,>(
+      cleanup: Promise<Result>,
+      resource: string,
+      timeoutResult: () => Result,
+      onSettled?: (cleanup: Promise<Result>) => void,
+    ): Promise<Result> => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      const trackedCleanup = new Promise<Result>((resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          settled = true;
+          try {
+            diagnostics.emit({
+              level: 'error',
+              category: 'connection',
+              name: 'resource.cleanup_failed',
+              details: {
+                resource,
+                message: `Resource cleanup exceeded ${RESOURCE_CLEANUP_TIMEOUT_MS} ms.`,
+              },
+            });
+            resolve(timeoutResult());
+          } catch (cleanupError) {
+            reject(cleanupError);
+          }
+        }, RESOURCE_CLEANUP_TIMEOUT_MS);
+        void cleanup.then(
+          (result) => {
+            if (settled) return;
+            settled = true;
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
+            resolve(result);
+          },
+          (cleanupError: unknown) => {
+            if (settled) return;
+            settled = true;
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
+            reject(cleanupError);
+          },
+        );
+      });
+      pendingResourceCleanupsRef.current.add(trackedCleanup);
+      const clearCleanup = () => {
+        pendingResourceCleanupsRef.current.delete(trackedCleanup);
+        onSettled?.(trackedCleanup);
+      };
+      void trackedCleanup.then(clearCleanup, clearCleanup);
+      return trackedCleanup;
+    },
+    [diagnostics],
+  );
   const disconnectDiagnosticRef = useRef<{
     reason: 'consumer' | 'server' | 'error' | 'unmount';
     startedAt: number;
@@ -950,7 +999,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     onClose: useCallback(
       (
         event: SocketCloseEvent,
-        consumerInitiated: boolean,
+        _consumerInitiated: boolean,
         connectionGeneration: number,
       ) => {
         const currentConnectionGeneration =
@@ -959,38 +1008,45 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           if (!clearMessagesOnDisconnect) {
             createDisconnectMessage(event);
           }
-          invokeConsumerCallback(diagnostics, 'onClose', () =>
-            onClose.current?.(event),
-          );
+          const reportFailure = (callbackError: unknown) => {
+            diagnostics.emit({
+              level: 'warn',
+              category: 'consumer',
+              name: 'consumer.callback_failed',
+              details: { callback: 'onClose', error: callbackError },
+            });
+          };
+          try {
+            const closeResult: unknown = onClose.current?.(event);
+            if (closeResult !== undefined) {
+              void Promise.resolve(closeResult).catch(reportFailure);
+            }
+          } catch (callbackError) {
+            reportFailure(callbackError);
+          }
         };
         if (
           currentConnectionGeneration === null ||
           connectionGeneration !== currentConnectionGeneration
         ) {
-          // The socket belongs to a lifecycle that has already failed or been
-          // superseded. Its public close event still matters, but it must not
-          // mutate resources owned by the current lifecycle.
-          publishCloseEvent();
+          // A stale close cannot be attributed through the public callback and
+          // must not publish a disconnect message into a newer lifecycle.
           return;
         }
         currentConnectionGenerationRef.current = null;
 
         if (!isCurrentLifecycleGeneration(connectionGeneration)) {
-          publishCloseEvent();
+          if (!isConnectingRef.current) {
+            publishCloseEvent();
+          }
           return;
         }
 
-        // A pending teardown owns every provider-wide mutation. Its socket close
-        // only publishes the close event for the lifecycle that requested it.
-        // In particular, a delayed consumer close must not cancel a reconnect.
-        if (consumerInitiated || pendingDisconnectCleanupRef.current !== null) {
-          resourceStatusRef.current.socket = 'disconnected';
-          publishCloseEvent();
-          return;
-        }
-
-        beginDisconnectDiagnostic('server');
         const closeGeneration = ++lifecycleGenerationRef.current;
+        // A reconnect requested by onClose must start a new attempt instead of
+        // joining the connect promise invalidated by this server close.
+        activeConnectPromiseRef.current = null;
+        beginDisconnectDiagnostic('server');
         const closeCleanupStillOwnsResources = () =>
           isCurrentLifecycleGeneration(closeGeneration) ||
           pendingDisconnectCleanupRef.current !== null;
@@ -1003,7 +1059,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         activeAudioConstraintsRef.current = null;
         resetAudioDeviceState();
 
-        createDisconnectMessage(event);
         if (clearMessagesOnDisconnect) {
           clearMessageStore();
         }
@@ -1095,10 +1150,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           resourceCleanupCompletedRef.current = cleanupFailures.length === 0;
           completeDisconnectDiagnostic(cleanupFailures);
         });
-        void trackResourceCleanup(closeCleanup);
-        invokeConsumerCallback(diagnostics, 'onClose', () =>
-          onClose.current?.(event),
+        void trackResourceCleanup(
+          closeCleanup,
+          'server_close',
+          () => undefined,
         );
+        publishCloseEvent();
       },
       [
         beginDisconnectDiagnostic,
@@ -1408,14 +1465,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const connectAttempt = useCallback(
-    async (options: ConnectOptions) => {
+    async (options: ConnectOptions, connectRequestGeneration: number) => {
       const {
         audioConstraints = {},
         sessionSettings,
         devices,
         ...socketConfig
       } = options;
-      const connectRequestGeneration = lifecycleGenerationRef.current;
       const pendingCleanups = [...pendingResourceCleanupsRef.current];
       if (pendingCleanups.length > 0) {
         await Promise.allSettled(pendingCleanups);
@@ -1625,7 +1681,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
           return failures;
         })();
-        return trackResourceCleanup(cleanup);
+        return trackResourceCleanup(cleanup, 'connection_attempt', () => [
+          `Connection attempt cleanup exceeded ${RESOURCE_CLEANUP_TIMEOUT_MS} ms.`,
+        ]);
       };
 
       // Audio Player - must initialize before connecting to the socket
@@ -1702,9 +1760,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         return;
       }
       if (!playerInitialized) {
-        if (!checkShouldContinueConnecting(generation)) {
-          return;
-        }
         resourceStatusRef.current.socket = 'disconnected';
         resourceStatusRef.current.audioPlayer = 'disconnecting';
         resourceStatusRef.current.mic = 'disconnecting';
@@ -1870,35 +1925,30 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const connect = useCallback(
     (options: ConnectOptions) => {
       const activeConnect = activeConnectPromiseRef.current;
-      if (activeConnect !== null) {
+      const alreadyConnecting =
+        activeConnect !== null || isConnectingRef.current;
+      const alreadyConnected = resourceStatusRef.current.socket === 'connected';
+      if (alreadyConnecting || alreadyConnected) {
+        const reason = alreadyConnecting
+          ? 'already_connecting'
+          : 'already_connected';
         diagnostics.emit({
           level: 'warn',
           category: 'connection',
           name: 'connection.attempt_ignored',
-          details: { reason: 'already_connecting' },
+          details: { reason },
         });
-        // A concurrent caller joins the in-flight lifecycle so awaiting
-        // connect() never reports completion before that lifecycle settles.
-        return activeConnect;
-      }
-      if (
-        isConnectingRef.current ||
-        resourceStatusRef.current.socket === 'connected'
-      ) {
-        diagnostics.emit({
-          level: 'warn',
-          category: 'connection',
-          name: 'connection.attempt_ignored',
-          details: {
-            reason: isConnectingRef.current
-              ? 'already_connecting'
-              : 'already_connected',
-          },
-        });
-        return Promise.resolve();
+        return alreadyConnecting
+          ? Promise.reject(new Error(CONNECT_IN_PROGRESS_ERROR_MESSAGE))
+          : Promise.resolve();
       }
 
-      const connecting = connectAttempt(options);
+      // Defer the attempt by one microtask so this ownership marker is installed
+      // before diagnostics or browser APIs can synchronously reenter connect().
+      const connectRequestGeneration = lifecycleGenerationRef.current;
+      const connecting = Promise.resolve().then(() =>
+        connectAttempt(options, connectRequestGeneration),
+      );
       activeConnectPromiseRef.current = connecting;
       const clearConnect = () => {
         if (activeConnectPromiseRef.current === connecting) {
@@ -1957,6 +2007,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
       const audioPlayerWasConnected =
         resourceStatusRef.current.audioPlayer === 'connected';
+      const cleanupGeneration = lifecycleGenerationRef.current;
 
       // Invalidate connection attempts and device switches synchronously. A
       // pending close cleanup may still finish its captured resources, but no
@@ -1970,9 +2021,14 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       if (resourceStatusRef.current.mic !== 'disconnected') {
         resourceStatusRef.current.mic = 'disconnecting';
       }
-      const cleanup = (async () => {
+      let cleanup: Promise<void> | null = null;
+      const cleanupStillOwnsLifecycle = () =>
+        isCurrentLifecycleGeneration(cleanupGeneration) ||
+        (cleanup !== null && pendingDisconnectCleanupRef.current === cleanup);
+      const rawCleanup = (async () => {
         if (cleanupsToAwait.length > 0) {
           await Promise.allSettled(cleanupsToAwait);
+          if (!cleanupStillOwnsLifecycle()) return;
         }
 
         if (
@@ -2013,16 +2069,20 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           isFlushingMicrophoneRef.current = true;
 
           await attempt('Call timer cleanup failed', stopTimer);
+          if (!cleanupStillOwnsLifecycle()) return;
 
           // Keep the socket connected until MediaRecorder has delivered its final
           // dataavailable payload, then release the underlying stream.
           await attempt('Microphone cleanup failed', micStop);
+          if (!cleanupStillOwnsLifecycle()) return;
           isFlushingMicrophoneRef.current = false;
           await attempt('Microphone stream cleanup failed', stopStream);
+          if (!cleanupStillOwnsLifecycle()) return;
 
           // Shut down the websocket before the audio player.
           if (clientReadyStateRef.current !== VoiceReadyState.CLOSED) {
             await attempt('Websocket cleanup failed', clientDisconnect);
+            if (!cleanupStillOwnsLifecycle()) return;
           }
 
           // Scope teardown to the context owned when this cleanup began so it can
@@ -2031,6 +2091,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             await attempt('Audio player cleanup failed', () =>
               playerStopAllForContext(sharedContextToClose),
             );
+            if (!cleanupStillOwnsLifecycle()) return;
           } else if (audioPlayerWasConnected) {
             recordFailure(
               'Audio player cleanup failed',
@@ -2046,44 +2107,57 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
                 throw closeResult.error;
               }
             });
+            if (!cleanupStillOwnsLifecycle()) return;
           }
         } finally {
-          isFlushingMicrophoneRef.current = false;
-          isConnectingRef.current = false;
-          markAllResourcesDisconnected();
-          activeAudioConstraintsRef.current = null;
-          resetAudioDeviceState();
-          if (clearMessagesOnDisconnect) {
-            finalize('Message store cleanup failed', clearMessageStore);
-          }
-          finalize('Tool status cleanup failed', toolStatusClearStore);
-          finalize('Pause state cleanup failed', () => setIsPaused(false));
-          resourceCleanupCompletedRef.current = failures.length === 0;
+          if (cleanupStillOwnsLifecycle()) {
+            isFlushingMicrophoneRef.current = false;
+            isConnectingRef.current = false;
+            markAllResourcesDisconnected();
+            activeAudioConstraintsRef.current = null;
+            resetAudioDeviceState();
+            if (clearMessagesOnDisconnect) {
+              finalize('Message store cleanup failed', clearMessageStore);
+            }
+            finalize('Tool status cleanup failed', toolStatusClearStore);
+            finalize('Pause state cleanup failed', () => setIsPaused(false));
+            resourceCleanupCompletedRef.current = failures.length === 0;
 
-          if (failures.length > 0) {
-            diagnostics.emit({
-              level: 'error',
-              category: 'connection',
-              name: 'resource.cleanup_failed',
-              details: {
-                resource: 'connection',
-                message: 'Failed to fully disconnect voice resources.',
-                failures,
-              },
-            });
+            if (failures.length > 0) {
+              diagnostics.emit({
+                level: 'error',
+                category: 'connection',
+                name: 'resource.cleanup_failed',
+                details: {
+                  resource: 'connection',
+                  message: 'Failed to fully disconnect voice resources.',
+                  failures,
+                },
+              });
+            }
+            completeDisconnectDiagnostic(failures);
           }
-          completeDisconnectDiagnostic(failures);
         }
       })();
 
+      cleanup = trackResourceCleanup(
+        rawCleanup,
+        'connection',
+        () => {
+          resourceCleanupCompletedRef.current = false;
+          if (isCurrentLifecycleGeneration(cleanupGeneration)) {
+            completeDisconnectDiagnostic([
+              `Connection cleanup exceeded ${RESOURCE_CLEANUP_TIMEOUT_MS} ms.`,
+            ]);
+          }
+        },
+        (settledCleanup) => {
+          if (pendingDisconnectCleanupRef.current === settledCleanup) {
+            pendingDisconnectCleanupRef.current = null;
+          }
+        },
+      );
       pendingDisconnectCleanupRef.current = cleanup;
-      void trackResourceCleanup(cleanup);
-      const clearCleanup = () => {
-        if (pendingDisconnectCleanupRef.current === cleanup) {
-          pendingDisconnectCleanupRef.current = null;
-        }
-      };
-      void cleanup.then(clearCleanup, clearCleanup);
       return cleanup;
     },
     [
@@ -2091,6 +2165,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       areAllResourcesDisconnected,
       completeDisconnectDiagnostic,
       diagnostics,
+      isCurrentLifecycleGeneration,
       markAllResourcesDisconnected,
       stopTimer,
       stopStream,

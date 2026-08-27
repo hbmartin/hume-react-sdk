@@ -156,7 +156,6 @@ export const useVoiceClient = (props: {
   const activeConnection = useRef<ActiveConnection | null>(null);
   const client = useRef<Hume.empathicVoice.chat.ChatSocket | null>(null);
   const generatedConnectionGeneration = useRef(0);
-  const usedConnectionGenerations = useRef(new Set<number>());
 
   const [readyState, setReadyState] = useState<VoiceReadyState>(
     VoiceReadyState.IDLE,
@@ -196,14 +195,6 @@ export const useVoiceClient = (props: {
       // lifecycle generations are non-negative, so the two modes cannot alias.
       const resolvedConnectionGeneration =
         connectionGeneration ?? --generatedConnectionGeneration.current;
-      if (usedConnectionGenerations.current.has(resolvedConnectionGeneration)) {
-        return Promise.reject(
-          new Error(
-            `connectionGeneration ${resolvedConnectionGeneration} has already been used`,
-          ),
-        );
-      }
-      usedConnectionGenerations.current.add(resolvedConnectionGeneration);
 
       // Abort previous attempt if any
       connectAbortController.current?.abort();
