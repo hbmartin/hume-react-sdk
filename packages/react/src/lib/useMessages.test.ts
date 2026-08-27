@@ -1,5 +1,8 @@
-import type { RenderHookResult } from '@testing-library/react-hooks';
-import { act, renderHook } from '@testing-library/react-hooks';
+import {
+  act,
+  renderHook,
+  type RenderHookResult,
+} from '@testing-library/react-hooks';
 import { fromPartial } from '@total-typescript/shoehorn';
 import type { Hume } from 'hume';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

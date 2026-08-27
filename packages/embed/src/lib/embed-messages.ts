@@ -45,11 +45,10 @@ const WindowDimensionsSchema = z.object({
 
 export type WindowDimensions = z.infer<typeof WindowDimensionsSchema>;
 
-export const SocketConnect =
-  z.custom<Hume.empathicVoice.chat.Chat.ConnectArgs>();
+const SocketConnect = z.custom<Hume.empathicVoice.chat.Chat.ConnectArgs>();
 export type SocketConnectSchema = z.infer<typeof SocketConnect>;
 
-export const BaseSocketConfig = z.object({
+const BaseSocketConfig = z.object({
   auth: AuthStrategySchema,
   hostname: z.string().optional(),
 });
@@ -75,7 +74,7 @@ const SocketConfigSchema = z
 // ---------------------------------------------------------------------------
 // Client to frame actions
 // ---------------------------------------------------------------------------
-export const ClientToFrameActionSchema = z.union([
+const ClientToFrameActionSchema = z.union([
   z.object({
     type: z.literal('update_config'),
     payload: SocketConfigSchema,

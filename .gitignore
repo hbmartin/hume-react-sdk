@@ -29,6 +29,8 @@ coverage
 out/
 build
 dist
+.types
+.api-extractor
 
 
 # Debug

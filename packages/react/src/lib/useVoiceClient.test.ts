@@ -471,7 +471,7 @@ describe('useVoiceClient', () => {
     const firstMessageEvent = events.find(
       (event) =>
         event.name === 'message.received' &&
-        event.details.type === 'user_message',
+        event.details['type'] === 'user_message',
     );
     expect(firstMessageEvent).toMatchObject({
       chatId: 'chat-123',

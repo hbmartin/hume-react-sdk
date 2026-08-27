@@ -186,6 +186,7 @@ const REDACTED_KEYS = new Set([
 let fallbackId = 0;
 
 const createId = (prefix: string) => {
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older supported browsers can omit crypto
   if (typeof globalThis.crypto?.randomUUID === 'function') {
     return `${prefix}-${globalThis.crypto.randomUUID()}`;
   }
@@ -239,7 +240,7 @@ const sanitizeValue = (
     return {
       name: redactSecrets(value.name, secrets),
       message: redactSecrets(value.message, secrets),
-      ...(value.stack
+      ...(value.stack !== undefined && value.stack !== ''
         ? { stack: redactSecrets(value.stack, secrets) }
         : undefined),
     };
@@ -278,7 +279,7 @@ const sanitizeValue = (
     }
     return result;
   }
-  return String(value);
+  return undefined;
 };
 
 const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
@@ -298,7 +299,11 @@ const sanitizeDetails = (
   secrets: ReadonlySet<string>,
 ): VoiceDiagnosticDetails => {
   const sanitized = sanitizeValue(details, secrets, new WeakSet());
-  if (sanitized && !Array.isArray(sanitized) && typeof sanitized === 'object') {
+  if (
+    sanitized !== null &&
+    !Array.isArray(sanitized) &&
+    typeof sanitized === 'object'
+  ) {
     return freezeDiagnosticValue(
       sanitized as Record<string, VoiceDiagnosticValue>,
     );
@@ -341,13 +346,13 @@ export const createVoiceDiagnosticsReporter = (
 
   return {
     addRedactionValue(value) {
-      if (value) {
+      if (value !== undefined && value !== '') {
         secrets.add(value);
       }
     },
     beginConnection(secret) {
       secrets.clear();
-      if (secret) {
+      if (secret !== undefined && secret !== '') {
         secrets.add(secret);
       }
       chatId = undefined;
@@ -368,7 +373,7 @@ export const createVoiceDiagnosticsReporter = (
       }
 
       const combinedDetails = {
-        ...(input.details ?? {}),
+        ...input.details,
         ...(configuration.includeContent ? (input.sensitiveDetails ?? {}) : {}),
       };
       let details: VoiceDiagnosticDetails;
@@ -394,10 +399,12 @@ export const createVoiceDiagnosticsReporter = (
         timestamp: new Date().toISOString(),
         sequence,
         instanceId,
-        ...(eventConnectionId
+        ...(eventConnectionId !== undefined && eventConnectionId !== ''
           ? { connectionId: eventConnectionId }
           : undefined),
-        ...(eventChatId ? { chatId: eventChatId } : undefined),
+        ...(eventChatId !== undefined && eventChatId !== ''
+          ? { chatId: eventChatId }
+          : undefined),
         level: input.level,
         category: input.category,
         name: input.name,
@@ -426,13 +433,18 @@ export const createVoiceDiagnosticsReporter = (
     },
     getCorrelation() {
       return Object.freeze({
-        ...(connectionId ? { connectionId } : undefined),
-        ...(chatId ? { chatId } : undefined),
+        ...(connectionId !== undefined && connectionId !== ''
+          ? { connectionId }
+          : undefined),
+        ...(chatId !== undefined && chatId !== '' ? { chatId } : undefined),
       });
     },
     isEnabled,
     setChatId(nextChatId) {
-      chatId = nextChatId ? redactSecrets(nextChatId, secrets) : undefined;
+      chatId =
+        nextChatId !== undefined && nextChatId !== ''
+          ? redactSecrets(nextChatId, secrets)
+          : undefined;
     },
   };
 };

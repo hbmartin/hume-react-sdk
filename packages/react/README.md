@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://storage.googleapis.com/hume-public-logos/hume/hume-banner.png">
+  <img src="https://storage.googleapis.com/hume-public-logos/hume/hume-banner.png" alt="Hume AI">
   <h1>@humeai/voice-react</h1>
   <p>
     <strong>Integrate Hume's Empathic Voice Interface in your React application</strong>
@@ -156,6 +156,8 @@ export function StartCall({ accessToken }: { accessToken: string }) {
 ```
 
 > **Keep your API key off the client.** The credential you pass to `connect` is sent from the browser as part of the WebSocket handshake, so anything you put there is visible to your end users. Your Hume API key is a long-lived secret that can bill your account, so for production apps always use `{ type: 'accessToken' }` with a short-lived token that your server mints with your API key and secret key (see [token authentication](https://dev.hume.ai/docs/introduction/api-key#token-authentication)). Reserve `{ type: 'apiKey' }` for local prototyping. `connect` rejects an empty or missing credential up front, before requesting microphone access, and surfaces it through `onError` as a `socket_error`.
+
+<!-- Separate security and browser-platform callouts. -->
 
 > [!IMPORTANT]
 > Under the hood, the React SDK uses the AudioContext API, which [must be initialized by a user gesture](https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Best_practices#autoplay_policy).
@@ -477,7 +479,7 @@ If true, a microphone error has occurred.
 
 If true, there was an error connecting to the websocket.
 
-#### `toolStatusStore`: Record<string, { call?: [ToolCall](); resolved?: [ToolResponse]() | [ToolError]() }>
+#### `toolStatusStore`: Record<string, { call?: ToolCall; resolved?: ToolResponse | ToolError }>
 
 A map of tool call IDs to their associated tool messages.
 

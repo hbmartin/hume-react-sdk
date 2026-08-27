@@ -13,7 +13,9 @@ const getAudioStream = async (
       echoCancellation: audioConstraints.echoCancellation ?? true,
       noiseSuppression: audioConstraints.noiseSuppression ?? true,
       autoGainControl: audioConstraints.autoGainControl ?? true,
-      deviceId: audioConstraints.deviceId,
+      ...(audioConstraints.deviceId === undefined
+        ? {}
+        : { deviceId: audioConstraints.deviceId }),
     },
     video: false,
   });

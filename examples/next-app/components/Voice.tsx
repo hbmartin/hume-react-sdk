@@ -1,10 +1,9 @@
 'use client';
-import type { ToolCallHandler } from '@humeai/voice-react';
-import { VoiceProvider } from '@humeai/voice-react';
+import { type ToolCallHandler, VoiceProvider } from '@humeai/voice-react';
 import { useCallback, useState } from 'react';
 import { z } from 'zod';
 
-import { ExampleComponent } from '@/components/ExampleComponent';
+import { ExampleComponent } from './ExampleComponent';
 
 export const Voice = ({
   accessToken,
@@ -33,7 +32,7 @@ export const Voice = ({
           }
 
           const location: unknown = await fetch(
-            `https://geocode.maps.co/search?q=${String(args.data.location)}&api_key=${process.env.NEXT_PUBLIC_GEOCODE_API_KEY}`,
+            `https://geocode.maps.co/search?q=${String(args.data.location)}&api_key=${process.env['NEXT_PUBLIC_GEOCODE_API_KEY']}`,
           ).then((res) => res.json());
 
           const locationResults = z
@@ -50,7 +49,11 @@ export const Voice = ({
               'Location results did not match the expected schema',
             );
           }
-          const { lat, lon } = locationResults.data[0];
+          const firstLocation = locationResults.data[0];
+          if (firstLocation === undefined) {
+            throw new Error('No matching location was found');
+          }
+          const { lat, lon } = firstLocation;
           const pointMetadataEndpoint: string = `https://api.weather.gov/points/${parseFloat(lat).toFixed(3)},${parseFloat(lon).toFixed(3)}`;
 
           const result: unknown = await fetch(pointMetadataEndpoint, {
@@ -87,7 +90,7 @@ export const Voice = ({
           const forecast = forecastJson.data.properties.periods;
 
           return response.success(forecast);
-        } catch (error) {
+        } catch (_error) {
           return response.error({
             error: 'Weather tool error',
             code: 'weather_tool_error',
@@ -127,46 +130,41 @@ export const Voice = ({
         messageHistoryLimit={10}
         enableAudioWorklet={enableAudioWorklet}
         onOpen={() => {
-          // eslint-disable-next-line no-console
           console.log('onOpen');
         }}
         onMessage={(message) => {
-          // eslint-disable-next-line no-console
           console.log('message', message);
         }}
         onError={(message) => {
-          // eslint-disable-next-line no-console
           console.log('onError', message);
         }}
         onAudioStart={(clipId) => {
-          // eslint-disable-next-line no-console
           console.log('Start playing clip with ID:', clipId);
         }}
         onAudioEnd={(clipId) => {
-          // eslint-disable-next-line no-console
           console.log('Stop playing clip with ID:', clipId);
         }}
         onInterruption={(message) => {
-          // eslint-disable-next-line no-console
           console.log(
             'Interruption triggered on the following message',
             message,
           );
         }}
-        {...(configId ? { onToolCall } : {})}
+        {...(configId !== undefined && configId !== '' ? { onToolCall } : {})}
         onClose={(event) => {
-          // eslint-disable-next-line no-console
           console.log('onClose', event);
           const niceClosure = 1000;
           const code = event.code;
 
           if (code !== niceClosure) {
-            // eslint-disable-next-line no-console
             console.error('close event was not nice', event);
           }
         }}
       >
-        <ExampleComponent accessToken={accessToken} configId={configId} />
+        <ExampleComponent
+          accessToken={accessToken}
+          {...(configId === undefined ? {} : { configId })}
+        />
       </VoiceProvider>
     </>
   );

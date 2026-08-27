@@ -40,7 +40,7 @@ export const useCallDuration = () => {
     store.write('00:00:00');
 
     interval.current = window.setInterval(() => {
-      if (startTime.current) {
+      if (startTime.current !== null) {
         const duration = intervalToDuration({
           start: startTime.current,
           end: Date.now(),
@@ -56,7 +56,7 @@ export const useCallDuration = () => {
   }, [store]);
 
   const stop = useCallback(() => {
-    if (interval.current) {
+    if (interval.current !== null) {
       window.clearInterval(interval.current);
       interval.current = null;
     }
@@ -64,7 +64,7 @@ export const useCallDuration = () => {
 
   useEffect(() => {
     return () => {
-      if (interval.current) {
+      if (interval.current !== null) {
         window.clearInterval(interval.current);
         interval.current = null;
       }

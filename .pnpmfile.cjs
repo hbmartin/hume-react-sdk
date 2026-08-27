@@ -1,6 +1,6 @@
 module.exports = {
   hooks: {
-    readPackage(pkg, context) {
+    readPackage(pkg, _context) {
       const needsBundle = ['@humeai/voice-react'];
 
       if (needsBundle.includes(pkg.name)) {

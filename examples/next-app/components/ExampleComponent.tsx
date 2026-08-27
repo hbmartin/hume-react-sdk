@@ -9,14 +9,14 @@ import {
 import { useState } from 'react';
 import { match } from 'ts-pattern';
 
-import { ChatConnected } from '@/components/ChatConnected';
+import { ChatConnected } from './ChatConnected';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/Select';
+} from './Select';
 
 const BROWSER_DEFAULT_DEVICE_VALUE = 'browser-default';
 const DEVICE_VALUE_PREFIX = 'device:';
@@ -127,8 +127,12 @@ export const ExampleComponent = ({
       type: 'accessToken' as const,
       value: accessToken,
     },
-    hostname: process.env.NEXT_PUBLIC_HUME_VOICE_HOSTNAME || 'api.hume.ai',
-    ...(configId
+    hostname:
+      process.env['NEXT_PUBLIC_HUME_VOICE_HOSTNAME'] === undefined ||
+      process.env['NEXT_PUBLIC_HUME_VOICE_HOSTNAME'] === ''
+        ? 'api.hume.ai'
+        : process.env['NEXT_PUBLIC_HUME_VOICE_HOSTNAME'],
+    ...(configId !== undefined && configId !== ''
       ? {
           configId,
           sessionSettings: {
@@ -138,8 +142,12 @@ export const ExampleComponent = ({
         }
       : {}),
     devices: {
-      microphoneDeviceId: selectedMicrophoneId ?? undefined,
-      speakerDeviceId: selectedSpeakerId ?? undefined,
+      ...(selectedMicrophoneId === null
+        ? {}
+        : { microphoneDeviceId: selectedMicrophoneId }),
+      ...(selectedSpeakerId === null
+        ? {}
+        : { speakerDeviceId: selectedSpeakerId }),
     },
   };
 
@@ -283,7 +291,7 @@ export const ExampleComponent = ({
             ))
             .with('disconnected', () => (
               <div className="flex flex-col gap-4">
-                {!configId && (
+                {(configId === undefined || configId === '') && (
                   <div className="rounded border border-yellow-400 bg-yellow-50 p-3 text-sm text-yellow-800">
                     Tool use is disabled. Please provide the HUME_CONFIG_ID
                     environment variable to enable tool use.
@@ -316,7 +324,7 @@ export const ExampleComponent = ({
             ))
             .with('error', () => (
               <div className="flex flex-col gap-4">
-                {!configId && (
+                {(configId === undefined || configId === '') && (
                   <div className="rounded border border-yellow-400 bg-yellow-50 p-3 text-sm text-yellow-800">
                     Tool use is disabled. Please provide the HUME_CONFIG_ID
                     environment variable to enable tool use.

@@ -1,0 +1,136 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import",
+    "react",
+    "vitest",
+    "jsx-a11y",
+    "nextjs",
+    "promise",
+    "node"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    "eqeqeq": "error",
+    "no-console": "warn",
+    "no-debugger": "error",
+    "no-duplicate-imports": "error",
+    "no-nested-ternary": "error",
+    "no-unused-vars": "off",
+    "typescript/await-thenable": "error",
+    "typescript/consistent-type-exports": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+    "typescript/strict-boolean-expressions": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "import/no-cycle": "error",
+    "react/exhaustive-deps": "error",
+    "react/preserve-manual-memoization": "off",
+    "react/react-in-jsx-scope": "off",
+    "react/rules-of-hooks": "error",
+    "react/immutability": "error",
+    "react/purity": "error",
+    "react/refs": "error",
+    "react/set-state-in-effect": "error",
+    "react/set-state-in-render": "error",
+    "react/static-components": "error",
+    "react/unsupported-syntax": "error",
+    "vitest/expect-expect": "error",
+    "vitest/no-conditional-expect": "off",
+    "vitest/no-focused-tests": "error",
+    "vitest/require-mock-type-parameters": "off",
+    "vitest/require-to-throw-message": "off",
+    "vitest/valid-expect": "error"
+  },
+  "env": {
+    "browser": true,
+    "builtin": true,
+    "node": true
+  },
+  "globals": {
+    "AudioWorkletProcessor": "readonly",
+    "registerProcessor": "readonly",
+    "sampleRate": "readonly"
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "**/*.d.ts",
+    "packages/react/src/worklets/audio-worklet-20250702.js",
+    "tools/lint-contract/fixtures/**"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+      "rules": {
+        "no-console": "off",
+        "typescript/no-misused-spread": "off",
+        "typescript/no-unsafe-type-assertion": "off",
+        "unicorn/consistent-function-scoping": "off"
+      }
+    },
+    {
+      "files": ["**/*.config.{js,cjs,mjs,ts,mts,cts}", "tools/**/*", ".pnpmfile.cjs"],
+      "rules": {
+        "no-console": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off"
+      }
+    },
+    {
+      "files": ["examples/**/*"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/react/src/lib/VoiceProvider.tsx",
+        "packages/react/src/lib/useMicrophone.ts",
+        "packages/react/src/lib/useSoundPlayer.ts",
+        "packages/react/src/lib/useVoiceClient.ts"
+      ],
+      "rules": {
+        "typescript/no-unnecessary-condition": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/react/src/lib/useCallDuration.ts",
+        "packages/react/src/lib/useLatestRef.ts",
+        "packages/react/src/lib/useMicrophone.ts",
+        "packages/react/src/lib/useSoundPlayer.ts"
+      ],
+      "rules": {
+        "react/refs": "off"
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-// This function converts linear-scaled frequency decibels from an AnalyserNode's frequncy data to Bark scale [https://en.wikipedia.org/wiki/Bark_scale]
+// This function converts linear-scaled frequency decibels from an AnalyserNode's frequency data to Bark scale [https://en.wikipedia.org/wiki/Bark_scale]
 // This implementation uses a simple approach of mapping indices in the linear-scaled array to the closest
 // Bark scale center frequency and is not intended to be an accurate representation, but rather "close-enough" for visualization purposes
 const barkCenterFrequencies = [
@@ -30,13 +30,4 @@ export function convertLinearFrequenciesToBarkInto(
       out[i] = 0;
     }
   }
-}
-
-export function convertLinearFrequenciesToBark(
-  linearData: Uint8Array,
-  sampleRate: number,
-): number[] {
-  const out = new Array<number>(barkCenterFrequencies.length);
-  convertLinearFrequenciesToBarkInto(linearData, sampleRate, out);
-  return out;
 }

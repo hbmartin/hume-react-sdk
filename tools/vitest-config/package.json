@@ -1,0 +1,19 @@
+{
+  "name": "@humeai/vitest-config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./base": "./base.mts"
+  },
+  "scripts": {
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
+    "typecheck": "tsc --noEmit -p .",
+    "typecheck:deps": "tsc --noEmit -p tsconfig.deps.json"
+  },
+  "devDependencies": {
+    "@humeai/typescript-config": "workspace:*",
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2"
+  }
+}

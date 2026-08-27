@@ -7,7 +7,7 @@ import { useMicrophone } from './useMicrophone';
 
 type RecorderInstance = {
   stream: MediaStream;
-  options?: MediaRecorderOptions;
+  options: MediaRecorderOptions | undefined;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
@@ -28,6 +28,8 @@ const stubMediaRecorder = (
   const instances: RecorderInstance[] = [];
 
   class MediaRecorderStub {
+    public options: MediaRecorderOptions | undefined;
+
     private listeners = new Map<
       string,
       Set<EventListenerOrEventListenerObject>
@@ -67,8 +69,9 @@ const stubMediaRecorder = (
 
     constructor(
       public stream: MediaStream,
-      public options?: MediaRecorderOptions,
+      options?: MediaRecorderOptions,
     ) {
+      this.options = options;
       instances.push(this);
     }
   }
@@ -691,10 +694,12 @@ describe('useMicrophone', () => {
     const mimeErrorEvent = consoleError.mock.calls[0]?.[1] as unknown as
       | VoiceDiagnosticEvent
       | undefined;
-    expect(mimeErrorEvent?.details.message).toBe(
+    expect(mimeErrorEvent?.details['message']).toBe(
       'Failed to detect supported microphone MIME types.',
     );
-    expect(mimeErrorEvent?.details.error).toMatchObject({ name: 'TypeError' });
+    expect(mimeErrorEvent?.details['error']).toMatchObject({
+      name: 'TypeError',
+    });
     expect(() =>
       result.current.start(createStream(), createAudioContext()),
     ).toThrow('No MimeType specified');
@@ -896,10 +901,12 @@ describe('useMicrophone', () => {
     const cleanupErrorEvent = consoleError.mock.calls[0]?.[1] as unknown as
       | VoiceDiagnosticEvent
       | undefined;
-    expect(cleanupErrorEvent?.details.message).toBe(
+    expect(cleanupErrorEvent?.details['message']).toBe(
       'Failed to fully dispose microphone resources during unmount.',
     );
-    expect(cleanupErrorEvent?.details.error).toMatchObject({ name: 'Error' });
+    expect(cleanupErrorEvent?.details['error']).toMatchObject({
+      name: 'Error',
+    });
     consoleError.mockRestore();
   });
 

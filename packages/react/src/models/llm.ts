@@ -9,6 +9,5 @@ export const LanguageModelOption = {
   GPT_35_TURBO: 'GPT_35_TURBO',
   FIREWORKS_MIXTRAL_8X7B: 'FIREWORKS_MIXTRAL_8X7B',
 } as const;
-// eslint-disable-next-line @typescript-eslint/no-redeclare -- intentional const + type pairing
 export type LanguageModelOption =
   (typeof LanguageModelOption)[keyof typeof LanguageModelOption];

@@ -1,14 +1,17 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { Mock } from 'vitest';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from 'vitest';
 
 import { useSoundPlayer } from './useSoundPlayer';
 import type { AudioOutputMessage } from '../models/messages';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
-
-vi.mock('./generateEmptyFft', () => ({
-  generateEmptyFft: () => new Uint8Array(32).fill(0),
-}));
 
 vi.mock('./convertFrequencyScale', () => ({
   convertLinearFrequenciesToBark: (data: Uint8Array) => Array.from(data),
@@ -91,7 +94,7 @@ describe('useSoundPlayer', () => {
     disconnectGainNode = vi.fn();
     gainSetters = [];
     decodeAudioData = vi.fn((buffer: ArrayBuffer) =>
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- assertion follows the queue population above
       Promise.resolve(createFakeAudioBuffer(new Uint8Array(buffer)[0]!)),
     );
     bufferSources = [];

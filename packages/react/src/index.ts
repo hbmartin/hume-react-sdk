@@ -1,4 +1,4 @@
-export * from './lib/connection-message';
+export type * from './lib/connection-message';
 export type {
   VoiceDiagnosticCategory,
   VoiceDiagnosticDetails,
@@ -23,7 +23,7 @@ export * from './models/audio';
 export * from './models/llm';
 export * from './models/messages';
 export * from './models/ttsService';
-export * from './models/connect-options';
+export type * from './models/connect-options';
 
 export {
   getAllAudioDevices,

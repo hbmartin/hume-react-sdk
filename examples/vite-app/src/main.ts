@@ -1,6 +1,9 @@
 import { type Hume, HumeClient } from 'hume';
 
-const body = document.querySelector('body')!;
+const body = document.querySelector('body');
+if (body === null) {
+  throw new Error('The example requires a document body');
+}
 
 const container = document.createElement('div');
 body.appendChild(container);
@@ -29,7 +32,7 @@ const appendMessage = (message: Hume.empathicVoice.SubscribeEvent) => {
 
 // String(...) would turn an unset env var into the literal "undefined",
 // which passes non-empty credential checks and fails only at the server.
-const apiKey = import.meta.env['VITE_HUME_API_KEY'];
+const apiKey: unknown = import.meta.env['VITE_HUME_API_KEY'];
 if (typeof apiKey !== 'string' || apiKey.trim() === '') {
   connectionState.textContent =
     'Connection State: VITE_HUME_API_KEY is not set. Add it to a .env file.';

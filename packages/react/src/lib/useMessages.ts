@@ -113,7 +113,7 @@ export const useMessages = ({
         case 'assistant_message':
           // For assistant messages, `sendMessageToParent` is called in `onPlayAudio`
           // to line up the transcript event with the correct audio clip.
-          if (message.id) {
+          if (message.id !== undefined && message.id !== '') {
             voiceMessageMapRef.current[message.id] = message;
           }
           break;
@@ -147,6 +147,7 @@ export const useMessages = ({
         case 'tool_response':
         case 'tool_error':
         case 'assistant_end':
+        case 'session_settings':
           sendMessageToParent?.(message);
           setMessages((prev) => addMessageKeepingInterimLast(prev, message));
           break;

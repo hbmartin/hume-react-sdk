@@ -5,11 +5,14 @@ const BARK_BAND_COUNT = 24;
 export type FftSnapshot = readonly number[];
 
 const EMPTY_FFT: FftSnapshot = Object.freeze(
-  new Array<number>(BARK_BAND_COUNT).fill(0),
+  Array.from({ length: BARK_BAND_COUNT }, () => 0),
 );
 
 export class FftStore {
-  private _buffer: number[] = new Array<number>(BARK_BAND_COUNT).fill(0);
+  private _buffer: number[] = Array.from(
+    { length: BARK_BAND_COUNT },
+    () => 0,
+  );
 
   private _snapshot: FftSnapshot = EMPTY_FFT;
 

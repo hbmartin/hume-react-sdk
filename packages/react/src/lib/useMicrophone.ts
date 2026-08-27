@@ -1,6 +1,5 @@
 // cspell:ignore dataavailable
-import type { MimeType } from 'hume';
-import { getBrowserSupportedMimeType } from 'hume';
+import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
@@ -160,7 +159,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       const bufferLength = currentAnalyzer.current.frequencyBinCount;
 
       const dataArray = new Uint8Array(bufferLength);
-      const barkBuffer = new Array<number>(BARK_BAND_COUNT).fill(0);
+      const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
       source.connect(currentAnalyzer.current);
       const draw = () => {
@@ -357,7 +356,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           const flushStartedAt = globalThis.performance?.now() ?? Date.now();
           let timeoutId: ReturnType<typeof setTimeout> | undefined;
           const finalDataFlushed = await Promise.race([
-            Promise.allSettled([...pendingDataTasks.current]).then(() => true),
+            Promise.allSettled(pendingDataTasks.current).then(() => true),
             new Promise<boolean>((resolve) => {
               timeoutId = setTimeout(
                 () => resolve(false),
@@ -477,9 +476,6 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const start = useCallback(
     (stream: MediaStream, sharedAudioContext?: AudioContext) => {
-      if (!stream) {
-        throw new Error('No stream connected');
-      }
       if (
         !microphoneMounted.current ||
         pendingMicrophoneOperationCount.current > 0
@@ -488,7 +484,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       const mimeType = mimeTypeRef.current;
-      if (!mimeType) {
+      if (mimeType === null) {
         throw new Error('No MimeType specified');
       }
 
@@ -499,7 +495,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       const context = sharedAudioContext ?? new AudioContext();
       recordingGeneration.current += 1;
       currentStream.current = stream;
-      ownsAudioContext.current = !sharedAudioContext;
+      ownsAudioContext.current = sharedAudioContext === undefined;
       audioContext.current = context;
 
       try {
@@ -579,10 +575,6 @@ export const useMicrophone = (props: MicrophoneProps) => {
       sharedAudioContext: AudioContext | undefined,
       isCurrent: () => boolean,
     ) => {
-      if (!stream) {
-        throw new Error('No stream connected');
-      }
-
       const stopCandidateStream = () => {
         try {
           stream.getTracks().forEach((track) => track.stop());
@@ -596,7 +588,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       const mimeType = mimeTypeRef.current;
-      if (!mimeType) {
+      if (mimeType === null) {
         throw new Error('No MimeType specified');
       }
 

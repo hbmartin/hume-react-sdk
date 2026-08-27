@@ -197,6 +197,7 @@ export const useAudioDevices = ({
   useEffect(() => {
     isMounted.current = true;
     const supported = isAudioDeviceEnumerationSupported();
+    // oxlint-disable-next-line react/set-state-in-effect -- capability detection must run after SSR hydration
     setIsSupported(supported);
     if (!supported) {
       isMounted.current = false;

@@ -16,8 +16,8 @@ import {
   SelectGroup,
   SelectTrigger,
   SelectValue,
-} from '@/components/Select';
-import { Waveform } from '@/components/Waveform';
+} from './Select';
+import { Waveform } from './Waveform';
 
 export const ChatConnected = () => {
   const {

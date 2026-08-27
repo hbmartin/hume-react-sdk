@@ -6,5 +6,4 @@ export const TTSService = {
   /** Play HT's Text-To-Speech */
   PLAY_HT: 'play_ht',
 } as const;
-// eslint-disable-next-line @typescript-eslint/no-redeclare -- intentional const + type pairing
 export type TTSService = (typeof TTSService)[keyof typeof TTSService];

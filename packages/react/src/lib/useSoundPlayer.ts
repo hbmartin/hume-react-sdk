@@ -83,9 +83,9 @@ export const useSoundPlayer = (props: {
   // chunkBufferQueues and lastQueuedChunk are used to make sure that
   // we don't play chunks out of order. chunkBufferQueues is NOT the
   // audio playback queue.
-  const chunkBufferQueues = useRef<
-    Record<string, Array<AudioBuffer | undefined>>
-  >({});
+  const chunkBufferQueues = useRef(
+    new Map<string, Array<AudioBuffer | undefined>>(),
+  );
   const lastQueuedChunk = useRef<{ id: string; index: number } | null>(null);
 
   /**
@@ -124,7 +124,7 @@ export const useSoundPlayer = (props: {
       queueLengthRef.current = length;
       setQueueLength(length);
       notifyDrainWaiters();
-      if (diagnostics.current?.isEnabled('debug')) {
+      if (diagnostics.current?.isEnabled('debug') === true) {
         diagnostics.current.emit({
           level: 'debug',
           category: 'audio_player',
@@ -232,7 +232,7 @@ export const useSoundPlayer = (props: {
    * This function is called when the current audio clip ends.
    * It will play the next clip in the queue if there is one.
    */
-  const playNextClip = useCallback(() => {
+  const playNextClip = useCallback(function playNextClip() {
     // While a clip is mid-playback the queue may still hold entries, so
     // report its real length instead of zeroing it.
     if (clipQueue.current.length === 0 || isProcessing.current) {
@@ -268,7 +268,7 @@ export const useSoundPlayer = (props: {
     resources.source = bufferSource;
 
     const frequencyDataBuffer = new Uint8Array(analyser.frequencyBinCount);
-    const barkBuffer = new Array<number>(BARK_BAND_COUNT).fill(0);
+    const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
     const updateFrequencyData = () => {
       try {
@@ -346,7 +346,7 @@ export const useSoundPlayer = (props: {
       isProcessing.current = false;
       publishIsPlaying(false);
       publishQueueLength(0);
-      chunkBufferQueues.current = {};
+      chunkBufferQueues.current.clear();
       lastQueuedChunk.current = null;
       clipQueue.current = [];
 
@@ -432,7 +432,11 @@ export const useSoundPlayer = (props: {
         }
 
         // Set the speaker device if specified and supported
-        if (speakerDeviceId && 'setSinkId' in initAudioContext) {
+        if (
+          speakerDeviceId !== undefined &&
+          speakerDeviceId !== '' &&
+          'setSinkId' in initAudioContext
+        ) {
           try {
             // TypeScript doesn't recognize setSinkId on AudioContext yet, so we need to cast
             await (
@@ -527,7 +531,10 @@ export const useSoundPlayer = (props: {
           const frequencyDataBuffer = new Uint8Array(
             analyser.frequencyBinCount,
           );
-          const barkBuffer = new Array<number>(BARK_BAND_COUNT).fill(0);
+          const barkBuffer = Array.from(
+            { length: BARK_BAND_COUNT },
+            () => 0,
+          );
 
           // Use requestAnimationFrame instead of setInterval(5ms) for display-rate updates
           const pollFft = () => {
@@ -561,7 +568,7 @@ export const useSoundPlayer = (props: {
           isInitialized.current = true;
         }
         return true;
-      } catch (e) {
+          } catch (_error) {
         return failInitialization(
           'Failed to initialize audio player',
           'audio_player_initialization_failure',
@@ -596,10 +603,11 @@ export const useSoundPlayer = (props: {
   const getNextAudioBuffers = useCallback(
     (message: AudioOutputMessage, audioBuffer: AudioBuffer) => {
       //1. Add the current buffer to the queue
-      if (!chunkBufferQueues.current[message.id]) {
-        chunkBufferQueues.current[message.id] = [];
+      let queueForCurrMessage = chunkBufferQueues.current.get(message.id);
+      if (queueForCurrMessage === undefined) {
+        queueForCurrMessage = [];
+        chunkBufferQueues.current.set(message.id, queueForCurrMessage);
       }
-      const queueForCurrMessage = chunkBufferQueues.current[message.id] || [];
       queueForCurrMessage[message.index] = audioBuffer;
 
       // 2. Now collect buffers that are ready to be played
@@ -632,9 +640,9 @@ export const useSoundPlayer = (props: {
       // Drain the queue - basically if any chunks were received out of order previously,
       // and they're now ready to be played because the earlier chunks
       // have been received, we can add them to the buffers array.
-      let nextIdx = (lastQueuedChunk.current?.index || 0) + 1;
+      let nextIdx = (lastQueuedChunk.current?.index ?? 0) + 1;
       let nextBuf = queueForCurrMessage[nextIdx];
-      while (nextBuf) {
+      while (nextBuf !== undefined) {
         buffers.push({ index: nextIdx, buffer: nextBuf, id: message.id });
         // As above re: setting queueForCurrMessage[nextIdx] to undefined
         queueForCurrMessage[nextIdx] = undefined;
@@ -676,14 +684,6 @@ export const useSoundPlayer = (props: {
         ) {
           return;
         }
-        if (!audioBuffer) {
-          onError.current(
-            'Failed to convert data to audio buffer',
-            'malformed_audio',
-          );
-          return;
-        }
-
         // Because converting the data to an audio buffer is async, chunks that
         // are only a few ms apart can end up converting out of order. Preserve
         // playback order before adding the ready buffers to the player queue.
@@ -867,7 +867,7 @@ export const useSoundPlayer = (props: {
       publishQueueLength(0);
       fftStore.clear();
 
-      chunkBufferQueues.current = {};
+      chunkBufferQueues.current.clear();
       lastQueuedChunk.current = null;
       clipQueue.current = [];
 
