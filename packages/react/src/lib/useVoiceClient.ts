@@ -149,6 +149,7 @@ export const useVoiceClient = (props: {
   onClose?: (
     event: SocketCloseEvent,
     consumerInitiated: boolean,
+    connectionGeneration?: number,
   ) => void | Promise<void>;
 }) => {
   const connectAbortController = useRef<AbortController | null>(null);
@@ -178,6 +179,7 @@ export const useVoiceClient = (props: {
     (
       config: SocketConfig,
       sessionSettings?: Hume.empathicVoice.SessionSettings,
+      connectionGeneration?: number,
     ) => {
       // Abort previous attempt if any
       connectAbortController.current?.abort();
@@ -236,6 +238,7 @@ export const useVoiceClient = (props: {
           consumerInitiated: false,
           socket,
         };
+        let connectionOpened = false;
         activeConnection.current = connection;
         const isConnectionActive = () =>
           !signal.aborted &&
@@ -277,6 +280,7 @@ export const useVoiceClient = (props: {
           }
 
           if (message.type === 'chat_metadata') {
+            connectionOpened = true;
             const chatId = (message as unknown as { chatId?: string }).chatId;
             diagnostics.current?.setChatId(chatId);
             report({
@@ -569,8 +573,24 @@ export const useVoiceClient = (props: {
               consumerInitiated: connection.consumerInitiated,
             },
           });
-          void onClose.current?.(event, connection.consumerInitiated);
+          const closeHandler = onClose.current;
+          if (connectionGeneration === undefined) {
+            void closeHandler?.(event, connection.consumerInitiated);
+          } else {
+            void closeHandler?.(
+              event,
+              connection.consumerInitiated,
+              connectionGeneration,
+            );
+          }
           setReadyState(VoiceReadyState.CLOSED);
+          if (!connectionOpened) {
+            reject(
+              new Error(
+                `The websocket closed before the voice connection opened (code ${event.code}).`,
+              ),
+            );
+          }
         });
 
         socket.on('error', (e) => {
