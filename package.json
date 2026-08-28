@@ -28,12 +28,13 @@
     "api-report:check": "pnpm build:packages && pnpm --recursive --filter='./packages/**' api-report:check",
     "api-report:update": "pnpm build:packages && pnpm --recursive --filter='./packages/**' api-report:update",
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm typecheck:deps && pnpm format:check && pnpm check:deps && pnpm check:docs && pnpm check:fallow && pnpm check:packages && pnpm api-report:check && pnpm test",
-    "release": "pnpm check && node tools/publish-release.mjs"
+    "release": "node tools/run-release.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
     "@humeai/typescript-config": "workspace:*",
     "@microsoft/api-extractor": "7.59.0",
+    "@types/node": "22.20.1",
     "cspell": "10.1.1",
     "fallow": "3.19.0",
     "markdownlint-cli2": "0.23.2",
