@@ -1,5 +1,6 @@
-# Preserve the validated pnpm 10 behavior while requiring explicit review for
-# future versions that add or change dependency build scripts.
+# Reviewed against humeai/hume-api-examples at the commit pinned in
+# .github/workflows/test-examples.yml. Update both files together whenever the
+# example lockfile changes.
 allowBuilds:
   'sharp@0.34.5': false
   'unrs-resolver@1.12.2': false

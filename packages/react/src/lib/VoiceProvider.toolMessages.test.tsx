@@ -46,7 +46,7 @@ vi.mock('./useVoiceClient', async () => {
 });
 
 vi.mock('./useSoundPlayer', () => ({
-  useSoundPlayer: () => ({
+  useSoundPlayerForVoiceProvider: () => ({
     addToQueue: vi.fn(),
     clearQueue: vi.fn(),
     fftStore,

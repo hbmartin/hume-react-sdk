@@ -105,9 +105,9 @@ after they are successfully passed to the socket so they stay in sync with
 
 #### `onClose?`: (event: [CloseEvent](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/core/websocket/events.ts#L20)) => void
 
-(_Optional_) Callback function invoked when the provider's current web socket
-connection closes. Delayed close events from superseded connection attempts are
-not published because the callback does not expose a connection identifier.
+(_Optional_) Callback function invoked when a web socket connection closes.
+Delayed close events from superseded connection attempts are still published,
+but they do not change the provider's current connection state.
 
 #### `clearMessagesOnDisconnect?`: boolean
 
@@ -327,11 +327,11 @@ selection may also require HTTPS and browser-granted media permission.
 Opens a socket connection to the voice API and initializes the microphone.
 The promise resolves after that attempt settles; inspect `status` and `error`
 to determine whether it connected successfully. A call made while another
-connection attempt with the same authentication credentials is still running
-joins that attempt without starting a second set of resources; later non-auth
-options are ignored. A concurrent call with different credentials rejects with
-`ConcurrentConnectAuthError` so a refreshed token is never silently discarded.
-Calling `connect()` while already connected is a no-op that resolves.
+connection attempt is still running joins that attempt without starting a
+second set of resources; all options from the later call are ignored. Calling
+`connect()` while already connected is a no-op that resolves. These no-op and
+joined calls do not reject, so `connect()` remains safe to use from event
+handlers without attaching a rejection handler.
 
 | Parameter | Type             | Description                           |
 | --------- | ---------------- | ------------------------------------- |

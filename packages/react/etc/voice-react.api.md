@@ -117,13 +117,6 @@ export type ChatMetadataMessage = WithReceivedAt<ChatMetadata>;
 type CloseEvent_2 = Parameters<NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>>[0];
 export { CloseEvent_2 as CloseEvent }
 
-// @public
-export class ConcurrentConnectAuthError extends Error {
-    constructor();
-    // (undocumented)
-    readonly reason: 'auth_conflict';
-}
-
 // @public (undocumented)
 export class ConnectionGenerationError extends Error {
     constructor(connectionGeneration: number, reason: ConnectionGenerationErrorReason, message: string);
@@ -197,9 +190,6 @@ export const isAudioDeviceEnumerationSupported: () => boolean;
 
 // @public
 export const isAudioDeviceSwitchError: (error: unknown) => error is AudioDeviceSwitchError;
-
-// @public
-export const isConcurrentConnectAuthError: (error: unknown) => error is ConcurrentConnectAuthError;
 
 // @public
 export const isConnectionGenerationError: (error: unknown) => error is ConnectionGenerationError;
@@ -419,7 +409,7 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 // @public (undocumented)
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
-// @public (undocumented)
+// @public
 export const useSoundPlayer: (props: {
     diagnostics?: VoiceDiagnosticsReporter;
     enableAudioWorklet: boolean;
@@ -613,13 +603,13 @@ export enum VoiceReadyState {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:314:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:327:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:387:5 - (ae-forgotten-export) The symbol "AuthStrategy" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:548:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:723:5 - (ae-forgotten-export) The symbol "VoiceStatus" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:725:5 - (ae-forgotten-export) The symbol "VoiceError" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:735:5 - (ae-forgotten-export) The symbol "useToolStatus" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:301:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:314:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:374:5 - (ae-forgotten-export) The symbol "AuthStrategy" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:535:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:711:5 - (ae-forgotten-export) The symbol "VoiceStatus" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:713:5 - (ae-forgotten-export) The symbol "VoiceError" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:723:5 - (ae-forgotten-export) The symbol "useToolStatus" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

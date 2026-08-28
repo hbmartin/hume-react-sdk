@@ -41,7 +41,6 @@ import {
 import {
   AudioDeviceSwitchError,
   type AudioDeviceSwitchErrorReason,
-  ConcurrentConnectAuthError,
   isAudioDeviceSwitchError,
 } from './errors';
 import {
@@ -55,7 +54,7 @@ import { useLatestRef } from './useLatestRef';
 import { useMessages } from './useMessages';
 import { useMicrophone } from './useMicrophone';
 import { useMicrophoneStream } from './useMicrophoneStream';
-import { useSoundPlayer } from './useSoundPlayer';
+import { useSoundPlayerForVoiceProvider } from './useSoundPlayer';
 import { useToolStatus } from './useToolStatus';
 import {
   type SessionSettingsUpdate,
@@ -788,6 +787,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     owner: DisconnectDiagnosticOwner;
     reason: 'consumer' | 'server' | 'error' | 'unmount';
     startedAt: number;
+    cleanupFailures: string[];
   } | null>(null);
 
   const beginDisconnectDiagnostic = useCallback(
@@ -808,6 +808,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         owner,
         reason,
         startedAt: getMonotonicTime(),
+        cleanupFailures: [],
       };
       diagnostics.emit({
         level: 'info',
@@ -827,23 +828,26 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       cleanupFailures: readonly string[] = [],
     ) => {
       const pending = disconnectDiagnosticRef.current;
-      if (
-        pending === null ||
-        pending.token !== token ||
-        pending.owner !== owner
-      ) {
+      if (pending === null || pending.token !== token) {
         return;
       }
+      for (const cleanupFailure of cleanupFailures) {
+        if (!pending.cleanupFailures.includes(cleanupFailure)) {
+          pending.cleanupFailures.push(cleanupFailure);
+        }
+      }
+      if (pending.owner !== owner) return;
+      const accumulatedCleanupFailures = pending.cleanupFailures;
       diagnostics.emit({
-        level: cleanupFailures.length > 0 ? 'warn' : 'info',
+        level: accumulatedCleanupFailures.length > 0 ? 'warn' : 'info',
         category: 'connection',
         name: 'connection.disconnected',
         durationMs: getMonotonicTime() - pending.startedAt,
         details: {
           reason: pending.reason,
-          cleanupFailureCount: cleanupFailures.length,
-          ...(cleanupFailures.length > 0
-            ? { cleanupFailures: [...cleanupFailures] }
+          cleanupFailureCount: accumulatedCleanupFailures.length,
+          ...(accumulatedCleanupFailures.length > 0
+            ? { cleanupFailures: [...accumulatedCleanupFailures] }
             : undefined),
         },
       });
@@ -976,7 +980,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   const micStopFnRef = useRef<null | (() => Promise<void>)>(null);
 
-  const player = useSoundPlayer({
+  const player = useSoundPlayerForVoiceProvider({
     diagnostics,
     enableAudioWorklet,
     onError: (message, reason) => {
@@ -1056,10 +1060,35 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         await runStep(step);
       }
       if (context) {
-        await runStep({
-          label: 'Audio player cleanup failed',
-          run: () => playerStopAllForContext(context),
-        });
+        // The normal cleanup may already be stalled inside this exact stop
+        // promise. Starting it again is useful for synchronous best effort, but
+        // awaiting the deduplicated promise would defeat the timeout backstop.
+        if (stillOwnsResources()) {
+          try {
+            void Promise.resolve(playerStopAllForContext(context)).catch(
+              (failure: unknown) => {
+                diagnostics.emit({
+                  level: 'warn',
+                  category: 'audio_player',
+                  name: 'resource.cleanup_failed',
+                  details: {
+                    resource: 'audio_player',
+                    message:
+                      failure instanceof Error
+                        ? failure.message
+                        : 'Unknown audio player cleanup error',
+                  },
+                });
+              },
+            );
+          } catch (failure) {
+            failures.push(
+              `Audio player cleanup failed: ${
+                failure instanceof Error ? failure.message : 'Unknown error'
+              }`,
+            );
+          }
+        }
         await runStep({
           label: 'Shared audio context cleanup failed',
           run: async () => {
@@ -1076,7 +1105,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         stillOwnsResources: stillOwnsResources(),
       };
     },
-    [closeSharedAudioContext, playerStopAllForContext],
+    [closeSharedAudioContext, diagnostics, playerStopAllForContext],
   );
 
   const client = useVoiceClient({
@@ -1238,16 +1267,17 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           currentConnectionGeneration === null ||
           connectionGeneration !== currentConnectionGeneration
         ) {
-          // The public callback has no connection identity. Suppress stale
-          // closes so application code cannot mistake an old socket for the
-          // provider's current connection.
+          // Preserve the public callback contract without allowing a stale
+          // socket to mutate the provider's current connection lifecycle.
+          publishCloseCallback();
           return;
         }
         currentConnectionGenerationRef.current = null;
 
         if (!isCurrentLifecycleGeneration(connectionGeneration)) {
-          if (isConnectingRef.current) return;
-          publishDisconnectMessage();
+          if (!isConnectingRef.current) {
+            publishDisconnectMessage();
+          }
           publishCloseCallback();
           return;
         }
@@ -1257,6 +1287,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // joining the connect promise invalidated by this server close.
         activeConnectPromiseRef.current = null;
         activeConnectAuthRef.current = null;
+        // Diagnostics are delivered synchronously. Publish a state that permits
+        // reconnecting before beginning the disconnect diagnostic so a listener
+        // can safely call connect(). The deferred attempt joins cleanup below.
+        isConnectingRef.current = false;
+        resourceStatusRef.current.socket = 'disconnected';
         const closeDiagnosticOwner = Symbol('server-close-diagnostic');
         const disconnectDiagnosticToken = beginDisconnectDiagnostic(
           'server',
@@ -1278,8 +1313,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // onClose handler needs to handle resource cleanup in the event that the
         // websocket connection is closed by the server and not the user/client
         stopTimer();
-        isConnectingRef.current = false;
-        resourceStatusRef.current.socket = 'disconnected';
         activeAudioConstraintsRef.current = null;
         resetAudioDeviceState();
 
@@ -2214,7 +2247,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             name: 'connection.attempt_ignored',
             details: { reason: 'auth_conflict' },
           });
-          return Promise.reject(new ConcurrentConnectAuthError());
+          // Keep connect safe for fire-and-forget event handlers. The active
+          // attempt remains authoritative and later options are ignored.
+          return activeConnect;
         }
         diagnostics.emit({
           level: 'warn',
@@ -2223,11 +2258,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           details: { reason: 'already_connecting' },
         });
         if (activeConnect === null) {
-          return Promise.reject(
-            new Error(
-              'Voice connection state is inconsistent: an active attempt has no joinable promise.',
-            ),
-          );
+          // A terminal attempt can settle just before its error-triggered
+          // teardown effect registers cleanup. Treat that short state as a
+          // no-op instead of manufacturing an unhandled rejection.
+          return Promise.resolve();
         }
         return activeConnect;
       }
@@ -2250,10 +2284,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       activeConnectPromiseRef.current = connecting;
       activeConnectAuthRef.current = { ...options.auth };
       const clearConnect = () => {
-        if (
-          activeConnectPromiseRef.current === connecting &&
-          !isConnectingRef.current
-        ) {
+        if (activeConnectPromiseRef.current === connecting) {
           activeConnectPromiseRef.current = null;
           activeConnectAuthRef.current = null;
         }
@@ -2590,15 +2621,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     const cleanupTimeouts = pendingResourceCleanupTimeoutsRef.current;
     // disconnect from socket when the voice provider component unmounts
     return () => {
-      // Only accelerate cleanup that was already pending before unmount. The
-      // teardown created below retains its normal bounded grace period.
-      const preexistingCleanupTimeouts = [...cleanupTimeouts];
       // Intentionally read the latest cleanup callback when unmount begins.
       // oxlint-disable-next-line react/exhaustive-deps -- lifecycle callbacks are tracked through refs
       const cleanup = disconnectAndCleanUpResourcesRef.current('unmount');
-      // Preexisting stalled work must not retain its old timer after the
-      // provider is gone; its backstop runs on the next task.
-      for (const timeoutControl of preexistingCleanupTimeouts) {
+      // Unmount must not retain provider closures for the normal 15-second
+      // grace period. Let ordinary cleanup finish at this microtask checkpoint,
+      // then run every remaining backstop on the next task.
+      for (const timeoutControl of cleanupTimeouts) {
         timeoutControl.expedite();
       }
       // Cleanup invalidates its lifecycle synchronously before returning.
