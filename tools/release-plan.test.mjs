@@ -50,7 +50,7 @@ await test('private packages are not selected for publication', () => {
   );
 });
 
-await test('publish arguments filter packages that do not match and preserve the dist-tag', () => {
+await test('publish arguments filter packages and require provenance', () => {
   const plan = createReleasePlan('v0.3.0-beta.7', packages);
 
   assert.deepEqual(createPublishArguments(plan, { dryRun: true }), [
@@ -60,6 +60,7 @@ await test('publish arguments filter packages that do not match and preserve the
     '--access',
     'public',
     '--no-git-checks',
+    '--provenance',
     '--tag',
     'next',
     '--filter',

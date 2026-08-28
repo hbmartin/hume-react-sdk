@@ -306,10 +306,15 @@ const enqueueDeviceSwitch = <T,>({
   return switchPromise;
 };
 
+/** Requested and active audio devices for the current voice connection. */
 export type VoiceAudioDeviceState = {
+  /** Requested microphone device ID, or `null` for the browser default. */
   requestedInputDeviceId: string | null;
+  /** Microphone device ID actually granted by the browser. */
   activeInputDeviceId: string | null;
+  /** Requested speaker device ID, or `null` for the system default. */
   requestedOutputDeviceId: string | null;
+  /** Speaker device ID currently used for assistant audio. */
   activeOutputDeviceId: string | null;
 };
 
@@ -320,45 +325,118 @@ const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
   activeOutputDeviceId: null,
 };
 
+/**
+ * State and controls exposed by {@link useVoice}.
+ *
+ * High-frequency FFT and call-duration values are available through the
+ * granular subscription hooks instead of this context.
+ */
 export type VoiceContextType = VoiceAudioDeviceState & {
+  /**
+   * Opens a voice connection and initializes its microphone and audio player.
+   *
+   * @param options - Required authentication, connection, and session options.
+   */
   connect: (options: ConnectOptions) => Promise<void>;
+  /** Closes the connection and releases its socket, microphone, and player. */
   disconnect: () => Promise<void>;
+  /**
+   * Switches the microphone for an active connection.
+   *
+   * @param deviceId - A microphone device ID, or `null` for the browser default.
+   */
   setInputDevice: (deviceId: string | null) => Promise<void>;
+  /**
+   * Switches the speaker for an active connection.
+   *
+   * @param deviceId - A speaker device ID, or `null` for the system default.
+   */
   setOutputDevice: (deviceId: string | null) => Promise<void>;
+  /** Whether microphone input is muted. */
   isMuted: boolean;
+  /** Whether assistant audio output is muted. */
   isAudioMuted: boolean;
+  /** Whether assistant audio is currently playing. */
   isPlaying: boolean;
+  /** Stored connection and JSON messages for the current conversation. */
   messages: (JSONMessage | ConnectionMessage)[];
+  /** Most recent assistant transcript message, or `null` if none exists. */
   lastVoiceMessage: AssistantTranscriptMessage | null;
+  /** Most recent user transcript message, or `null` if none exists. */
   lastUserMessage: UserTranscriptMessage | null;
+  /** Most recent assistant prosody message, or `null` if none exists. */
   lastAssistantProsodyMessage: AssistantProsodyMessage | null;
+  /** Clears the stored conversation message history. */
   clearMessages: () => void;
+  /** Mutes microphone input. */
   mute: () => void;
+  /** Turns microphone input back on. */
   unmute: () => void;
+  /** Mutes assistant audio without changing the configured volume. */
   muteAudio: () => void;
+  /** Restores assistant audio at the configured volume. */
   unmuteAudio: () => void;
+  /** Current state of the underlying voice WebSocket. */
   readyState: VoiceReadyState;
+  /**
+   * Sends text as user input.
+   *
+   * @param text - User text to send to the assistant.
+   */
   sendUserInput: (text: string) => void;
+  /**
+   * Sends text for the assistant to speak.
+   *
+   * @param text - Assistant text to synthesize.
+   */
   sendAssistantInput: (text: string) => void;
+  /**
+   * Updates settings for the active session.
+   *
+   * @param sessionSettings - Settings without the wire-level `type` field.
+   */
   sendSessionSettings: (sessionSettings: SessionSettingsUpdate) => void;
+  /**
+   * Sends a tool result and records a successful send in message history.
+   *
+   * @param type - Tool response or tool error to send.
+   */
   sendToolMessage: (
     type:
       | Hume.empathicVoice.ToolResponseMessage
       | Hume.empathicVoice.ToolErrorMessage,
   ) => void;
+  /** Pauses assistant responses while preserving conversation history. */
   pauseAssistant: () => void;
+  /** Resumes assistant responses after a pause. */
   resumeAssistant: () => void;
+  /** Combined lifecycle status for the voice connection and audio resources. */
   status: VoiceStatus;
+  /** Current voice error, or `null` when no error is active. */
   error: VoiceError | null;
+  /** Whether the current error originated from assistant audio playback. */
   isAudioError: boolean;
+  /** Whether any voice error is currently active. */
   isError: boolean;
+  /** Whether the current error originated from microphone capture. */
   isMicrophoneError: boolean;
+  /** Whether the current error originated from the voice socket. */
   isSocketError: boolean;
+  /** Tool calls and their resolved responses, keyed by tool-call ID. */
   toolStatusStore: ReturnType<typeof useToolStatus>['store'];
+  /** Metadata for the current chat, or `null` before metadata is received. */
   chatMetadata: ChatMetadataMessage | null;
+  /** Number of queued assistant clips, including the currently playing clip. */
   playerQueueLength: number;
+  /** Whether assistant responses are currently paused. */
   isPaused: boolean;
+  /** Configured assistant playback volume from `0` to `1`. */
   volume: number;
+  /**
+   * Sets assistant playback volume without changing mute state.
+   *
+   * @param level - Desired level; values are clamped to the range `0` to `1`.
+   */
   setVolume: (level: number) => void;
 };
 
@@ -394,6 +472,11 @@ export type VoiceProviderProps = PropsWithChildren<{
   diagnostics?: false | VoiceDiagnosticsOptions;
 }>;
 
+/**
+ * Returns voice state and controls from the nearest {@link VoiceProvider}.
+ *
+ * Use the granular FFT and call-duration hooks for high-frequency values.
+ */
 export const useVoice = () => {
   const ctx = useContext(VoiceContext);
   if (!ctx) {
@@ -408,6 +491,11 @@ const StoresContext = createContext<{
   callDurationStore: CallDurationStore;
 } | null>(null);
 
+/**
+ * Subscribes to live frequency data for assistant audio playback.
+ *
+ * @returns The current assistant-audio FFT snapshot.
+ */
 export const usePlayerFft = (): FftSnapshot => {
   const ctx = useContext(StoresContext);
   if (!ctx) {
@@ -416,6 +504,11 @@ export const usePlayerFft = (): FftSnapshot => {
   return useFftSubscription(ctx.playerFftStore);
 };
 
+/**
+ * Subscribes to live frequency data for microphone input.
+ *
+ * @returns The current microphone FFT snapshot.
+ */
 export const useMicFft = (): FftSnapshot => {
   const ctx = useContext(StoresContext);
   if (!ctx) {
@@ -424,6 +517,11 @@ export const useMicFft = (): FftSnapshot => {
   return useFftSubscription(ctx.micFftStore);
 };
 
+/**
+ * Subscribes to the formatted duration of the current or most recent call.
+ *
+ * @returns A formatted duration, or `null` before a call has started.
+ */
 export const useCallDurationTimestamp = (): string | null => {
   const ctx = useContext(StoresContext);
   if (!ctx) {

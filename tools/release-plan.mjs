@@ -74,6 +74,7 @@ export function createPublishArguments(plan, { dryRun = false } = {}) {
     '--access',
     'public',
     '--no-git-checks',
+    '--provenance',
     '--tag',
     plan.npmTag,
     ...plan.packageNames.flatMap((packageName) => ['--filter', packageName]),
