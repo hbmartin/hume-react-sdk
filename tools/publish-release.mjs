@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
+import { getPnpmCommand } from './pnpm-command.mjs';
 import {
   createPublishArguments,
   createReleasePlan,
@@ -26,7 +27,9 @@ process.stdout.write(
   `${dryRun ? 'Dry-running' : 'Publishing'} ${plan.packageNames.join(', ')} with the npm dist-tag ${plan.npmTag}.\n`,
 );
 
-const result = spawnSync('pnpm', publishArguments, { stdio: 'inherit' });
+const result = spawnSync(getPnpmCommand(), publishArguments, {
+  stdio: 'inherit',
+});
 
 if (result.error !== undefined) {
   throw result.error;

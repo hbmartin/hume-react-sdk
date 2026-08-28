@@ -10,7 +10,7 @@ const publishablePackagePaths = [
 
 const packageNamePattern = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i;
 const versionPattern =
-  /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/;
+  /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 /**
  * @typedef {{
@@ -65,10 +65,15 @@ function getRuntimeWorkspaceDependencies(packageManifest) {
     .map(([name]) => name);
 }
 
-/** @param {PackageManifest | undefined} dependency */
-function requirePublishableWorkspaceDependency(dependency) {
+/**
+ * @param {string} dependencyName
+ * @param {PackageManifest | undefined} dependency
+ */
+function requirePublishableWorkspaceDependency(dependencyName, dependency) {
   if (dependency === undefined) {
-    throw new Error('A runtime workspace dependency is not publishable.');
+    throw new Error(
+      `Runtime workspace dependency ${dependencyName} is not publishable.`,
+    );
   }
   if (dependency.private === true) {
     throw new Error(
@@ -81,8 +86,13 @@ function requirePublishableWorkspaceDependency(dependency) {
 /**
  * @param {readonly string[]} selectedPackageNames
  * @param {readonly PackageManifest[]} packages
+ * @param {string} expectedVersion
  */
-function includeRuntimeWorkspaceDependencies(selectedPackageNames, packages) {
+function includeRuntimeWorkspaceDependencies(
+  selectedPackageNames,
+  packages,
+  expectedVersion,
+) {
   const packagesByName = new Map(
     packages.map((packageManifest) => [packageManifest.name, packageManifest]),
   );
@@ -92,11 +102,11 @@ function includeRuntimeWorkspaceDependencies(selectedPackageNames, packages) {
     for (const dependencyName of getRuntimeWorkspaceDependencies(
       /** @type {PackageManifest} */ (packageManifest),
     )) {
-      includedPackageNames.add(
-        requirePublishableWorkspaceDependency(
-          packagesByName.get(dependencyName),
-        ),
-      );
+      const dependency = packagesByName.get(dependencyName);
+      requirePublishableWorkspaceDependency(dependencyName, dependency);
+      if (dependency.version === expectedVersion) {
+        includedPackageNames.add(dependency.name);
+      }
     }
   }
   return packages
@@ -162,6 +172,7 @@ export function createReleasePlan(releaseTag, packages) {
   const packageNames = includeRuntimeWorkspaceDependencies(
     releasePackageNames,
     packages,
+    expectedVersion,
   );
 
   return {

@@ -16,5 +16,7 @@
     "!**/etc/*.api.md",
     "!**/.next/**",
     "!**/node_modules/**",
+    "!docs/packages/**",
+    "!docs/reference/api/**",
   ],
 }

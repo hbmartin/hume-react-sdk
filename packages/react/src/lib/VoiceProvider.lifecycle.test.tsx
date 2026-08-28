@@ -980,7 +980,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.stopStream).toHaveBeenCalledOnce();
   });
 
-  it('publishes a delayed socket close after clientConnect rejects', async () => {
+  it('suppresses a delayed socket close after clientConnect rejects', async () => {
     mocks.clientConnect.mockRejectedValueOnce(new Error('connect failed'));
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -1002,7 +1002,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledTimes(cleanupCalls);
     expect(result.current.status.value).toBe('disconnected');
   });
@@ -1033,7 +1033,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledOnce();
     expect(mocks.waitForDrain).not.toHaveBeenCalled();
 
@@ -1184,6 +1184,46 @@ describe('VoiceProvider close lifecycle', () => {
       stream.resolve({} as MediaStream);
       await firstConnect;
     });
+  });
+
+  it('starts teardown when a connect settles while still owning resources', async () => {
+    mocks.micStart.mockImplementationOnce(() => {
+      throw new Error('microphone start failed');
+    });
+    const onError = vi.fn(() => {
+      throw new Error('consumer error callback failed');
+    });
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false} onError={onError}>
+          {children}
+        </VoiceProvider>
+      ),
+    });
+
+    let firstConnect = Promise.resolve();
+    act(() => {
+      firstConnect = result.current.connect({
+        auth: { type: 'accessToken', value: 'first-token' },
+      });
+    });
+    await act(async () => {
+      await expect(firstConnect).rejects.toThrow(
+        'consumer error callback failed',
+      );
+    });
+
+    let retry = Promise.resolve();
+    act(() => {
+      retry = result.current.connect({
+        auth: { type: 'accessToken', value: 'second-token' },
+      });
+    });
+    await act(() => retry);
+
+    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
+    expect(mocks.clientConnect).toHaveBeenCalledTimes(2);
+    expect(result.current.status.value).toBe('connected');
   });
 
   it('joins the active attempt when later non-auth options differ', async () => {

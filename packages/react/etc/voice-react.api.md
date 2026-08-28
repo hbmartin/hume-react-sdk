@@ -613,13 +613,13 @@ export enum VoiceReadyState {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:314:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:327:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:387:5 - (ae-forgotten-export) The symbol "AuthStrategy" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:548:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:724:5 - (ae-forgotten-export) The symbol "VoiceStatus" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:726:5 - (ae-forgotten-export) The symbol "VoiceError" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:736:5 - (ae-forgotten-export) The symbol "useToolStatus" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:302:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:315:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:369:5 - (ae-forgotten-export) The symbol "AuthStrategy" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:528:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:704:5 - (ae-forgotten-export) The symbol "VoiceStatus" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:706:5 - (ae-forgotten-export) The symbol "VoiceError" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:716:5 - (ae-forgotten-export) The symbol "useToolStatus" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

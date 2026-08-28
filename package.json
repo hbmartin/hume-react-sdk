@@ -7,12 +7,16 @@
     "build:packages": "turbo build --filter='./packages/**'",
     "dev": "turbo dev",
     "dev:iframe": "turbo run dev --filter='./packages/**' --filter=example-vite-app-embed",
+    "docs:api": "pnpm build:packages && node tools/generate-api-docs.mjs",
+    "docs:build": "pnpm docs:api && vitepress build docs",
+    "docs:dev": "pnpm docs:api && vitepress dev docs",
+    "docs:preview": "vitepress preview docs",
     "lint": "pnpm build:packages && oxlint --disable-nested-config --type-aware --deny-warnings --report-unused-disable-directives . && pnpm lint:contracts",
     "lint:contracts": "node --test tools/lint-contract/config.test.mjs",
     "typecheck": "turbo typecheck",
     "typecheck:deps": "turbo typecheck:deps",
     "test": "pnpm test:tools && turbo test",
-    "test:tools": "node --test tools/release-plan.test.mjs",
+    "test:tools": "node --test tools/*.test.mjs",
     "test-watch": "turbo test-watch",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
@@ -30,9 +34,13 @@
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm typecheck:deps && pnpm format:check && pnpm check:deps && pnpm check:docs && pnpm check:fallow && pnpm check:packages && pnpm api-report:check && pnpm test",
     "release": "node tools/run-release.mjs"
   },
+  "dependencies": {
+    "vitepress": "1.6.4"
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
     "@humeai/typescript-config": "workspace:*",
+    "@microsoft/api-documenter": "7.30.13",
     "@microsoft/api-extractor": "7.59.0",
     "@types/node": "22.20.1",
     "cspell": "10.1.1",

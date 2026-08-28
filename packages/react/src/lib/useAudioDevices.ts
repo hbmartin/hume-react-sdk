@@ -58,8 +58,6 @@ const reconcileSelection = (
 };
 
 /**
- * @name useAudioDevices
- * @description
  * Enumerate the available microphones and speakers, and track which one is
  * selected. Pass the selected ids to `connect` via its `devices` option.
  *

@@ -12,8 +12,6 @@ export const keepLastN = <T>(n: number, arr: T[]): T[] => {
 };
 
 /**
- * @name isAudioDeviceEnumerationSupported
- * @description
  * Whether the current environment can enumerate audio devices. Returns `false`
  * during server-side rendering and in insecure (non-HTTPS) contexts, where
  * `navigator.mediaDevices` is not exposed.
@@ -42,8 +40,6 @@ const toAudioDevice = (
 });
 
 /**
- * @name requestAudioDevicePermission
- * @description
  * Request microphone permission and immediately release the stream. Browsers
  * report empty `label` values for every device until permission has been
  * granted at least once, so call this before enumerating if you intend to show
@@ -66,8 +62,6 @@ export const requestAudioDevicePermission = async (): Promise<void> => {
 };
 
 /**
- * @name getAllAudioDevices
- * @description
  * Enumerate the available audio input and output devices. Returns empty lists
  * when device enumeration is unsupported.
  * @example
@@ -93,8 +87,6 @@ export const getAllAudioDevices = async (): Promise<AudioDevices> => {
 };
 
 /**
- * @name getInputDevices
- * @description
  * Enumerate the available audio input devices (microphones).
  * @example
  * ```ts
@@ -105,8 +97,6 @@ export const getInputDevices = async (): Promise<AudioDevice[]> =>
   (await getAllAudioDevices()).inputDevices;
 
 /**
- * @name getOutputDevices
- * @description
  * Enumerate the available audio output devices (speakers).
  * @example
  * ```ts
