@@ -1,10 +1,11 @@
 import type { Hume } from 'hume';
 
-import type { ClientToFrameAction, SocketConfig } from './embed-messages';
 import {
+  type ClientToFrameAction,
   EXPAND_FROM_CLIENT_ACTION,
   FrameToClientActionSchema,
   SEND_WINDOW_SIZE_ACTION,
+  type SocketConfig,
   UPDATE_CONFIG_ACTION,
   WIDGET_IFRAME_IS_READY_ACTION,
 } from './embed-messages';
@@ -67,9 +68,9 @@ export class EmbeddedVoice {
   }): EmbeddedVoice {
     return new EmbeddedVoice({
       rendererUrl: rendererUrl ?? 'https://voice-widget.hume.ai',
-      onMessage,
-      onClose,
-      openOnMount,
+      ...(onMessage === undefined ? {} : { onMessage }),
+      ...(onClose === undefined ? {} : { onClose }),
+      ...(openOnMount === undefined ? {} : { openOnMount }),
       ...config,
     });
   }
@@ -92,7 +93,7 @@ export class EmbeddedVoice {
       window.addEventListener('resize', resizeHandler);
       el.appendChild(this.iframe);
       this.isMounted = true;
-    } catch (e) {
+    } catch {
       this.isMounted = false;
     }
 
@@ -102,7 +103,7 @@ export class EmbeddedVoice {
         window.removeEventListener('resize', resizeHandler);
         this.iframe.remove();
         this.isMounted = false;
-      } catch (e) {
+      } catch {
         this.isMounted = true;
       }
 
@@ -166,10 +167,6 @@ export class EmbeddedVoice {
   }
 
   private messageHandler(event: MessageEvent<unknown>) {
-    if (!this.iframe) {
-      return;
-    }
-
     if (event.origin !== new URL(this.iframe.src).origin) {
       return;
     }
@@ -200,6 +197,10 @@ export class EmbeddedVoice {
       }
       case 'collapse_widget': {
         this.onClose();
+        break;
+      }
+      case 'expand_widget':
+      case 'minimize_widget': {
         break;
       }
     }

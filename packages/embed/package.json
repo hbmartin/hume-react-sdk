@@ -2,41 +2,64 @@
   "name": "@humeai/voice-embed",
   "version": "0.2.18",
   "description": "",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
+  "keywords": [],
+  "license": "ISC",
+  "author": "",
   "repository": {
     "type": "git",
-    "url": "https://github.com/HumeAI/empathic-voice-api-js.git",
+    "url": "git+https://github.com/HumeAI/hume-react-sdk.git",
     "directory": "packages/embed"
   },
   "files": [
     "package.json",
     "dist"
   ],
+  "type": "commonjs",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "test": "vitest run",
     "test-watch": "vitest --watch",
-    "build": "tsup",
+    "build": "tsup && pnpm build:types",
+    "build:types": "tsc -p tsconfig.build.json && api-extractor run --local --config api-extractor.build.json && pnpm --dir ../.. finalize-types packages/embed",
     "dev": "tsup --watch",
-    "lint": "eslint ./src ./vitest.config.mts && tsc --noEmit -p .",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives src vitest.config.mts tsup.config.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "typecheck:deps": "tsc --noEmit -p tsconfig.deps.json",
+    "package:check": "publint && attw --pack . --profile node16 && pnpm --dir ../.. package:smoke packages/embed",
+    "api-report:check": "api-extractor run --config api-extractor.json",
+    "api-report:update": "api-extractor run --local --config api-extractor.json",
     "pack": "npm pack"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@humeai/eslint-config": "workspace:*",
-    "@humeai/typescript-config": "workspace:*",
-    "@types/node": "^20.11.30",
-    "eslint": "^8.57.0",
-    "jsdom": "^24.0.0",
-    "tsup": "^8.3.5",
-    "typescript": "^5.4.3",
-    "vitest": "^3.2.6"
   },
   "dependencies": {
     "hume": "0.16.1",
     "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@humeai/typescript-config": "workspace:*",
+    "@humeai/vitest-config": "workspace:*",
+    "@types/node": "22.20.1",
+    "jsdom": "^24.0.0",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vitest": "^3.2.6"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

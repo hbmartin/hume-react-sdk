@@ -3,13 +3,13 @@ import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useAudioDevices } from './useAudioDevices';
 import type { AudioDevices } from '../models/connect-options';
 import {
   getAllAudioDevices,
   isAudioDeviceEnumerationSupported,
   requestAudioDevicePermission,
 } from '../utils';
+import { useAudioDevices } from './useAudioDevices';
 
 vi.mock('../utils', () => ({
   getAllAudioDevices: vi.fn(),

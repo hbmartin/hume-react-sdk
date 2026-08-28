@@ -488,7 +488,7 @@ describe('VoiceProvider close lifecycle', () => {
     const cleanupEvent = consoleError.mock.calls[0]?.[1] as unknown as
       | VoiceDiagnosticEvent
       | undefined;
-    const failures = cleanupEvent?.details.failures;
+    const failures = cleanupEvent?.details['failures'];
     expect(
       Array.isArray(failures) &&
         failures.some(
@@ -1569,8 +1569,8 @@ describe('VoiceProvider close lifecycle', () => {
     const cleanupEvent = events.find(
       (event) => event.name === 'resource.cleanup_failed',
     );
-    expect(cleanupEvent?.details.resource).toBe('connection_attempt');
-    expect(cleanupEvent?.details.failures).toEqual([
+    expect(cleanupEvent?.details['resource']).toBe('connection_attempt');
+    expect(cleanupEvent?.details['failures']).toEqual([
       'Shared audio context cleanup failed: context close failed',
     ]);
     await act(() => result.current.disconnect());

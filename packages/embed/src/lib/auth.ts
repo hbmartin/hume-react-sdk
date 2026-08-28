@@ -31,12 +31,10 @@ export const AuthStrategySchema = z.discriminatedUnion(
   },
 );
 
-export type AuthStrategy = z.infer<typeof AuthStrategySchema>;
-
 /**
  * Describes why `auth` cannot be used to authenticate with the Hume API.
  *
- * Returns `null` when `auth` is a usable {@link AuthStrategy}; otherwise a
+ * Returns `null` when `auth` matches the validated strategy union; otherwise a
  * human-readable message for the first problem found (for example an empty
  * API key, or a missing `type`).
  */

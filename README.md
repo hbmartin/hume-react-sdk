@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://storage.googleapis.com/hume-public-logos/hume/hume-banner.png">
+  <img src="https://storage.googleapis.com/hume-public-logos/hume/hume-banner.png" alt="Hume AI">
   <h1>Hume React SDK</h1>
   <p>
     <strong>Integrate Hume AI in your React application</strong>
@@ -30,14 +30,14 @@ Or, integrate with the API directly
 <table>
   <tr>
     <td>
-      <img src="https://github.com/HumeAI/hume-evi-next-js-starter/raw/main/preview.png" width="300"/>
+      <img src="https://github.com/HumeAI/hume-evi-next-js-starter/raw/main/preview.png" alt="EVI Next.js Starter preview" width="300"/>
     </td>
     <td>
      <strong><a href="https://github.com/humeai/hume-evi-next-js-starter">EVI Next.js Starter</a></strong>
      <p>
      A starter template for building an Empathic Voice Interface (EVI) using Next.js.
      </p>
-     <a href="https://vercel.com/templates/ai/empathic-voice-interface-starter"><img src="https://vercel.com/button"/></a>
+     <a href="https://vercel.com/templates/ai/empathic-voice-interface-starter"><img src="https://vercel.com/button" alt="Deploy with Vercel"/></a>
     </td>
   </tr>
 </table>
@@ -46,7 +46,7 @@ Or, integrate with the API directly
 
 This SDK is developed on Turborepo. To get started with local development, run:
 
-```
+```sh
 pnpm install
 pnpm dev
 ```

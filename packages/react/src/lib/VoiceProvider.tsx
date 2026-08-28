@@ -1,7 +1,8 @@
 import { type Hume } from 'hume';
-import type { FC, PropsWithChildren } from 'react';
 import {
   createContext,
+  type FC,
+  type PropsWithChildren,
   useCallback,
   useContext,
   useEffect,
@@ -11,38 +12,6 @@ import {
   useSyncExternalStore,
 } from 'react';
 
-import { getAuthStrategyError } from './auth';
-import type { ConnectionMessage } from './connection-message';
-import {
-  createVoiceDiagnosticsReporter,
-  invokeIsolatedConsumerCallback,
-  type VoiceDiagnosticsOptions,
-  type VoiceDiagnosticsReporter,
-} from './diagnostics';
-import {
-  AudioDeviceSwitchError,
-  type AudioDeviceSwitchErrorReason,
-  ConcurrentConnectAuthError,
-  isAudioDeviceSwitchError,
-} from './errors';
-import type { FftSnapshot, FftStore } from './fftStore';
-import { useFftSubscription } from './fftStore';
-import { noop } from './noop';
-import type { CallDurationStore } from './useCallDuration';
-import { useCallDuration } from './useCallDuration';
-import { useLatestRef } from './useLatestRef';
-import { useMessages } from './useMessages';
-import { useMicrophone } from './useMicrophone';
-import { useMicrophoneStream } from './useMicrophoneStream';
-import { useSoundPlayer } from './useSoundPlayer';
-import { useToolStatus } from './useToolStatus';
-import type { ToolCallErrorSource, ToolCallHandler } from './useVoiceClient';
-import {
-  type SessionSettingsUpdate,
-  type SocketCloseEvent,
-  useVoiceClient,
-  VoiceReadyState,
-} from './useVoiceClient';
 import type {
   AudioConstraints,
   AudioDeviceKind,
@@ -61,6 +30,41 @@ import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
 } from '../utils/closeAudioContextWithTimeout';
+import { getAuthStrategyError } from './auth';
+import type { ConnectionMessage } from './connection-message';
+import {
+  createVoiceDiagnosticsReporter,
+  invokeIsolatedConsumerCallback,
+  type VoiceDiagnosticsOptions,
+  type VoiceDiagnosticsReporter,
+} from './diagnostics';
+import {
+  AudioDeviceSwitchError,
+  type AudioDeviceSwitchErrorReason,
+  ConcurrentConnectAuthError,
+  isAudioDeviceSwitchError,
+} from './errors';
+import {
+  type FftSnapshot,
+  type FftStore,
+  useFftSubscription,
+} from './fftStore';
+import { noop } from './noop';
+import { type CallDurationStore, useCallDuration } from './useCallDuration';
+import { useLatestRef } from './useLatestRef';
+import { useMessages } from './useMessages';
+import { useMicrophone } from './useMicrophone';
+import { useMicrophoneStream } from './useMicrophoneStream';
+import { useSoundPlayer } from './useSoundPlayer';
+import { useToolStatus } from './useToolStatus';
+import {
+  type SessionSettingsUpdate,
+  type SocketCloseEvent,
+  type ToolCallErrorSource,
+  type ToolCallHandler,
+  useVoiceClient,
+  VoiceReadyState,
+} from './useVoiceClient';
 
 export type SocketErrorReason =
   | 'socket_connection_failure'
@@ -234,9 +238,10 @@ const getGrantedInputDeviceId = (
   requestedDeviceId: string | null,
 ): string | null => {
   try {
-    return (
-      stream.getAudioTracks()[0]?.getSettings().deviceId || requestedDeviceId
-    );
+    const grantedDeviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
+    return grantedDeviceId === undefined || grantedDeviceId === ''
+      ? requestedDeviceId
+      : grantedDeviceId;
   } catch {
     return requestedDeviceId;
   }
@@ -865,7 +870,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         type: 'socket_error',
         reason: 'socket_connection_failure',
         message,
-        error: err,
+        ...(err === undefined ? {} : { error: err }),
       });
     },
     [stopTimer, updateError],
@@ -1078,7 +1083,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             type: 'socket_error',
             reason: 'failed_to_send_message',
             message,
-            error: err,
+            ...(err === undefined ? {} : { error: err }),
           });
           return;
         }
@@ -1086,7 +1091,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           type: 'socket_error',
           reason: 'received_tool_call_error',
           message,
-          error: err,
+          ...(err === undefined ? {} : { error: err }),
         };
         // Tool handlers are application code, not socket infrastructure. Report
         // their failures without moving the live connection into the provider's
@@ -1335,7 +1340,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         trackResourceCleanup,
       ],
     ),
-    onToolCall: props.onToolCall,
+    ...(props.onToolCall === undefined ? {} : { onToolCall: props.onToolCall }),
   });
 
   const {
@@ -1353,8 +1358,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   const mic = useMicrophone({
     diagnostics,
-    onStartRecording: props.onStartRecording,
-    onStopRecording: props.onStopRecording,
+    ...(props.onStartRecording === undefined
+      ? {}
+      : { onStartRecording: props.onStartRecording }),
+    ...(props.onStopRecording === undefined
+      ? {}
+      : { onStopRecording: props.onStopRecording }),
     onAudioCaptured: useCallback(
       (arrayBuffer) => {
         if (
@@ -1699,7 +1708,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
       const micConstraints: MediaTrackConstraints = {
         ...audioConstraints,
-        deviceId: devices?.microphoneDeviceId,
+        ...(devices?.microphoneDeviceId === undefined
+          ? {}
+          : { deviceId: devices.microphoneDeviceId }),
       };
 
       diagnostics.emit({
@@ -2485,7 +2496,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // teardown created below retains its normal bounded grace period.
       const preexistingCleanupTimeouts = [...cleanupTimeouts];
       // Intentionally read the latest cleanup callback when unmount begins.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+      // oxlint-disable-next-line react/exhaustive-deps -- lifecycle callbacks are tracked through refs
       const cleanup = disconnectAndCleanUpResourcesRef.current('unmount');
       // Preexisting stalled work must not retain its old timer after the
       // provider is gone; its backstop runs on the next task.
@@ -2493,7 +2504,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         timeoutControl.expedite();
       }
       // Cleanup invalidates its lifecycle synchronously before returning.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       const unmountGeneration = lifecycleGenerationRef.current;
       void cleanup.then(() => {
         if (!isCurrentLifecycleGeneration(unmountGeneration)) {

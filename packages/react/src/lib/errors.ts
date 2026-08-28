@@ -85,7 +85,9 @@ export const isConcurrentConnectAuthError = (
 
 export class SocketUnknownMessageError extends Error {
   constructor(message?: string) {
-    super(`Unknown message type.${message ? ' ' + message : ''}`);
+    super(
+      `Unknown message type.${message !== undefined && message !== '' ? ' ' + message : ''}`,
+    );
     this.name = 'SocketUnknownMessageError';
   }
 }
@@ -113,7 +115,7 @@ export const isSocketUnknownMessageError = (
 export class SocketFailedToParseMessageError extends Error {
   constructor(message?: string) {
     super(
-      `Failed to parse message from socket.${message ? ' ' + message : ''}`,
+      `Failed to parse message from socket.${message !== undefined && message !== '' ? ' ' + message : ''}`,
     );
     this.name = 'SocketFailedToParseMessageError';
   }

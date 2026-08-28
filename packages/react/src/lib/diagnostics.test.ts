@@ -123,8 +123,8 @@ describe('voice diagnostics reporter', () => {
     expect(Date.parse(events[0]?.timestamp ?? '')).not.toBeNaN();
     expect(Object.isFrozen(events[0])).toBe(true);
     expect(Object.isFrozen(events[0]?.details)).toBe(true);
-    expect(Object.isFrozen(events[0]?.details.resource)).toBe(true);
-    expect(Object.isFrozen(events[0]?.details.states)).toBe(true);
+    expect(Object.isFrozen(events[0]?.details['resource'])).toBe(true);
+    expect(Object.isFrozen(events[0]?.details['states'])).toBe(true);
   });
 
   it('supports explicit correlation for events emitted after cleanup', () => {
@@ -249,6 +249,6 @@ describe('voice diagnostics reporter', () => {
       reporter.emit({ ...input, details: { circular } }),
     ).not.toThrow();
     expect(() => JSON.stringify(events)).not.toThrow();
-    expect(events[0]?.details.circular).toEqual(['[Circular]']);
+    expect(events[0]?.details['circular']).toEqual(['[Circular]']);
   });
 });

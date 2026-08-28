@@ -1,18 +1,23 @@
 {
   "name": "example-vite-app",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --port 3001 --strictPort",
-    "build": "tsc && vite build",
+    "build": "vite build",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
+    "typecheck": "tsc --noEmit -p .",
+    "typecheck:deps": "tsc --noEmit -p tsconfig.deps.json",
     "preview": "vite preview"
   },
   "dependencies": {
     "hume": "0.16.1"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
+    "@humeai/typescript-config": "workspace:*",
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2",
     "vite": "^6.4.2"
   }
 }

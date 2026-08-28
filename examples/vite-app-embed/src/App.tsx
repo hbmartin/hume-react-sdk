@@ -1,5 +1,5 @@
 import { EmbeddedVoice } from '@humeai/voice-embed-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import './App.css';
 
@@ -9,15 +9,10 @@ function App() {
     String(import.meta.env['VITE_PUBLIC_RENDERER_URL'] ?? '').trim() ||
     'https://voice-widget.hume.ai/';
   const [isEmbedOpen, setIsEmbedOpen] = useState(false);
-  const [openOnMount, setIsOpenOnMount] = useState(false);
-
-  useEffect(() => {
+  const [openOnMount] = useState(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    const launch = urlParams.get('launchWidget');
-    if (launch === 'true') {
-      setIsOpenOnMount(true);
-    }
-  }, []);
+    return urlParams.get('launchWidget') === 'true';
+  });
 
   return (
     <>

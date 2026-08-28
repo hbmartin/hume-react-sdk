@@ -1,0 +1,104 @@
+{
+  "$schema": "./node_modules/fallow/schema.json",
+  "entry": [
+    ".pnpmfile.cjs",
+    "packages/react/src/worklets/audio-worklet-20250702.js",
+  ],
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "**/etc/*.api.md",
+    ".fallow-baselines/**",
+    "packages/core/**",
+    "tools/lint-contract/fixtures/**",
+  ],
+  "typeAware": {
+    "enabled": true,
+    "require": "best-effort",
+  },
+  "usedClassMembers": [
+    "clear",
+    "create",
+    "destroy",
+    "getServerSnapshot",
+    "getSnapshot",
+    "mount",
+    "subscribe",
+    "write",
+  ],
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-types": "error",
+    "private-type-leaks": "off",
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "error",
+    "unused-optional-dependencies": "error",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "duplicate-exports": "error",
+    "circular-dependencies": "error",
+    "re-export-cycle": "error",
+    "boundary-violation": "error",
+    "stale-suppressions": "error",
+  },
+  "boundaries": {
+    "zones": [
+      {
+        "name": "voice-embed",
+        "patterns": ["packages/embed/src/**"],
+      },
+      {
+        "name": "voice-embed-react",
+        "patterns": ["packages/embed-react/src/**"],
+      },
+      {
+        "name": "voice-react",
+        "patterns": ["packages/react/src/**"],
+      },
+      {
+        "name": "examples",
+        "patterns": ["examples/**"],
+      },
+      {
+        "name": "tools",
+        "patterns": ["tools/**"],
+      },
+    ],
+    "rules": [
+      {
+        "from": "voice-embed",
+        "allow": ["voice-embed"],
+      },
+      {
+        "from": "voice-embed-react",
+        "allow": ["voice-embed-react", "voice-embed"],
+      },
+      {
+        "from": "voice-react",
+        "allow": ["voice-react"],
+      },
+      {
+        "from": "examples",
+        "allow": [
+          "examples",
+          "voice-embed",
+          "voice-embed-react",
+          "voice-react",
+        ],
+      },
+      {
+        "from": "tools",
+        "allow": ["tools"],
+      },
+    ],
+    "coverage": {
+      "requireAllFiles": false,
+    },
+  },
+  "audit": {
+    "gate": "new-only",
+    "typeAware": true,
+  },
+}

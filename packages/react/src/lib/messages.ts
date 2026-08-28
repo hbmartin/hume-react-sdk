@@ -7,6 +7,23 @@ import {
   SocketUnknownMessageError,
 } from './errors';
 
+type SubscribeEventParseResult =
+  | { ok: true; value: Hume.empathicVoice.SubscribeEvent }
+  | { ok: false };
+
+type SubscribeEventParser = {
+  parse: (value: unknown) => SubscribeEventParseResult;
+};
+
+// TypeScript 7 currently resolves the `hume/serialization` namespace through
+// the SDK's API declaration namespace. Keep the compatibility cast isolated at
+// this boundary while retaining the SDK's runtime parser and a typed result.
+const subscribeEventParser = (
+  HumeSerialization.empathicVoice as unknown as {
+    SubscribeEvent: SubscribeEventParser;
+  }
+).SubscribeEvent;
+
 /**
  * The result of parsing a message off the socket: either the decoded message,
  * or the error explaining why it could not be decoded.
@@ -63,8 +80,19 @@ export const parseMessageData = async (
     };
   }
 
-  const parseResponse =
-    HumeSerialization.empathicVoice.SubscribeEvent.parse(data);
+  let serializedEvent: unknown;
+  try {
+    serializedEvent = JSON.parse(data);
+  } catch {
+    return {
+      success: false,
+      error: new SocketUnknownMessageError(
+        `Received JSON was not a known message type.`,
+      ),
+    };
+  }
+
+  const parseResponse = subscribeEventParser.parse(serializedEvent);
 
   if (!parseResponse.ok) {
     return {

@@ -4,7 +4,7 @@ import {
   type EmbeddedVoiceConfig,
   type TranscriptMessageHandler,
 } from '@humeai/voice-embed';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
   NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
@@ -24,34 +24,40 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   } = props;
   const embeddedVoice = useRef<EA | null>(null);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
-  onMessageHandler.current = onMessage;
-
   const onCloseHandler = useRef<CloseHandler | undefined>();
-  onCloseHandler.current = onClose;
-
-  const stableConfig = useRef<
+  const [stableConfig] = useState<
     Partial<EmbeddedVoiceConfig> &
       NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>>
-  >();
-  stableConfig.current = config;
+  >(config);
 
   useEffect(() => {
-    let unmount: () => void;
-    if (!embeddedVoice.current && stableConfig.current) {
+    onMessageHandler.current = onMessage;
+    onCloseHandler.current = onClose;
+  }, [onClose, onMessage]);
+
+  useEffect(() => {
+    let unmount: (() => void) | undefined;
+    if (!embeddedVoice.current) {
       embeddedVoice.current = EA.create({
-        onMessage: onMessageHandler.current,
-        onClose: onCloseHandler.current,
+        ...(onMessageHandler.current === undefined
+          ? {}
+          : { onMessage: onMessageHandler.current }),
+        ...(onCloseHandler.current === undefined
+          ? {}
+          : { onClose: onCloseHandler.current }),
         openOnMount: openOnMount,
-        ...stableConfig.current,
+        ...stableConfig,
       });
       unmount = embeddedVoice.current.mount();
     }
 
     return () => {
-      unmount?.();
+      if (unmount !== undefined) {
+        unmount();
+      }
       embeddedVoice.current = null;
     };
-  }, [openOnMount]);
+  }, [openOnMount, stableConfig]);
 
   useEffect(() => {
     if (isEmbedOpen) {

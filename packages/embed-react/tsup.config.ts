@@ -8,7 +8,7 @@ export default defineConfig([
     banner: {
       js: `'use client';`,
     },
-    dts: true,
+    dts: false,
     sourcemap: true,
   },
 ]);

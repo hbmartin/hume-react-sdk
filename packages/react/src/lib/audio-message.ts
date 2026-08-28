@@ -1,6 +1,6 @@
 import z from 'zod';
 
-export const AudioMessageSchema = z
+const AudioMessageSchema = z
   .object({
     type: z.literal('audio'),
     data: z.instanceof(ArrayBuffer),

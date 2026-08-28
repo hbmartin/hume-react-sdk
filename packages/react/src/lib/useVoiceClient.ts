@@ -2,6 +2,11 @@ import { Hume, HumeClient } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type Simplify } from 'type-fest';
 
+import type {
+  AudioOutputMessage,
+  JSONMessage,
+  ToolCall,
+} from '../models/messages';
 import { type AuthStrategy, getAuthStrategyError } from './auth';
 import {
   invokeIsolatedConsumerCallback,
@@ -10,11 +15,6 @@ import {
 } from './diagnostics';
 import { ConnectionGenerationError } from './errors';
 import { useLatestRef } from './useLatestRef';
-import type {
-  AudioOutputMessage,
-  JSONMessage,
-  ToolCall,
-} from '../models/messages';
 
 const isNever = (_n: never) => {
   return;
@@ -25,24 +25,26 @@ const getMonotonicTime = () => globalThis.performance?.now() ?? Date.now();
 const getMessageDiagnostics = (message: { type: string }) => {
   const record = message as unknown as Record<string, unknown>;
   const nestedMessage =
-    typeof record.message === 'object' && record.message !== null
-      ? (record.message as Record<string, unknown>)
+    typeof record['message'] === 'object' && record['message'] !== null
+      ? (record['message'] as Record<string, unknown>)
       : undefined;
-  const content = nestedMessage?.content ?? record.content;
-  const parameters = record.parameters;
-  const toolError = record.error;
+  const content = nestedMessage?.['content'] ?? record['content'];
+  const parameters = record['parameters'];
+  const toolError = record['error'];
   const contentLength =
     typeof content === 'string' ? content.length : undefined;
   return {
     details: {
       direction: 'inbound',
       type: message.type,
-      ...(typeof record.id === 'string' ? { messageId: record.id } : undefined),
-      ...(typeof record.toolCallId === 'string'
-        ? { toolCallId: record.toolCallId }
+      ...(typeof record['id'] === 'string'
+        ? { messageId: record['id'] }
         : undefined),
-      ...(typeof record.name === 'string'
-        ? { toolName: record.name }
+      ...(typeof record['toolCallId'] === 'string'
+        ? { toolCallId: record['toolCallId'] }
+        : undefined),
+      ...(typeof record['name'] === 'string'
+        ? { toolName: record['name'] }
         : undefined),
       ...(contentLength === undefined ? undefined : { contentLength }),
     },
@@ -249,7 +251,10 @@ export const useVoiceClient = (props: {
           return;
         }
 
-        const hostname = config.hostname || 'api.hume.ai';
+        const hostname =
+          config.hostname === undefined || config.hostname === ''
+            ? 'api.hume.ai'
+            : config.hostname;
 
         report({
           level: 'info',
@@ -302,7 +307,7 @@ export const useVoiceClient = (props: {
           }
 
           if (message.type === 'audio_output') {
-            if (diagnostics.current?.isEnabled('debug')) {
+            if (diagnostics.current?.isEnabled('debug') === true) {
               diagnostics.current.emit({
                 level: 'debug',
                 category: 'audio_player',
@@ -349,7 +354,7 @@ export const useVoiceClient = (props: {
             message.type === 'assistant_end' ||
             message.type === 'assistant_prosody'
           ) {
-            if (diagnostics.current?.isEnabled('debug')) {
+            if (diagnostics.current?.isEnabled('debug') === true) {
               diagnostics.current.emit({
                 level: 'debug',
                 category: 'message',
@@ -366,7 +371,7 @@ export const useVoiceClient = (props: {
           }
 
           if (message.type === 'tool_call') {
-            if (diagnostics.current?.isEnabled('debug')) {
+            if (diagnostics.current?.isEnabled('debug') === true) {
               diagnostics.current.emit({
                 level: 'debug',
                 category: 'message',
@@ -433,7 +438,7 @@ export const useVoiceClient = (props: {
                           toolCallId: messageWithReceivedAt.toolCallId,
                           error,
                           code,
-                          level: level !== null ? 'warn' : undefined, // level can only be warn
+                          ...(level === null ? {} : { level: 'warn' as const }),
                           content,
                         }),
                       },
@@ -714,7 +719,7 @@ export const useVoiceClient = (props: {
   const sendAudio = useCallback(
     (arrayBuffer: ArrayBufferLike) => {
       if (readyState !== VoiceReadyState.OPEN) {
-        if (diagnostics.current?.isEnabled('debug')) {
+        if (diagnostics.current?.isEnabled('debug') === true) {
           report({
             level: 'debug',
             category: 'message',
@@ -729,7 +734,7 @@ export const useVoiceClient = (props: {
         return;
       }
       client.current?.socket?.send(arrayBuffer as ArrayBuffer);
-      if (diagnostics.current?.isEnabled('debug')) {
+      if (diagnostics.current?.isEnabled('debug') === true) {
         report({
           level: 'debug',
           category: 'message',

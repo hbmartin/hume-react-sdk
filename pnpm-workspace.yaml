@@ -1,8 +1,10 @@
 packages:
-  - "packages/*"
-  - "tools/*"
-  - "examples/*"
-  - "apps/*"
+  - 'packages/*'
+  - 'examples/*'
+  - 'tools/lint-contract'
+  - 'tools/typescript-config'
+  - 'tools/vitest-config'
+  - '!packages/core'
 
 allowBuilds:
   esbuild: true
