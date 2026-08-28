@@ -71,7 +71,7 @@ describe('EmbeddedVoice', () => {
     expect(latestOnClose).toHaveBeenCalledOnce();
   });
 
-  it('uses the latest configuration when openOnMount causes a remount', () => {
+  it('does not apply changed configuration during an unrelated remount', () => {
     const { rerender } = render(
       <EmbeddedVoice
         auth={{ type: 'accessToken', value: 'first-token' }}
@@ -93,9 +93,9 @@ describe('EmbeddedVoice', () => {
     expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
     expect(embeddedVoiceMocks.create).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        auth: { type: 'accessToken', value: 'latest-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
         openOnMount: true,
-        rendererUrl: 'https://latest.example.com',
+        rendererUrl: 'https://first.example.com',
       }),
     );
   });
@@ -109,6 +109,22 @@ describe('EmbeddedVoice', () => {
     rerender(<EmbeddedVoice auth={auth} isEmbedOpen={true} />);
 
     expect(embeddedVoiceMocks.create).toHaveBeenCalledOnce();
+    expect(embeddedVoiceMocks.openEmbed).toHaveBeenCalledOnce();
+  });
+
+  it('reopens a controlled embed after openOnMount remounts it closed', () => {
+    const auth = { type: 'accessToken' as const, value: 'token' };
+    const { rerender } = render(
+      <EmbeddedVoice auth={auth} isEmbedOpen={true} openOnMount={true} />,
+    );
+
+    expect(embeddedVoiceMocks.openEmbed).not.toHaveBeenCalled();
+
+    rerender(
+      <EmbeddedVoice auth={auth} isEmbedOpen={true} openOnMount={false} />,
+    );
+
+    expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
     expect(embeddedVoiceMocks.openEmbed).toHaveBeenCalledOnce();
   });
 });

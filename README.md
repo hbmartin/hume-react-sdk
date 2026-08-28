@@ -10,11 +10,11 @@
 
 This monorepo contains packages for adding Hume AI to your React applications.
 
-| Package                                                                                                | Version                                                                                                                   | README                                                                                        | npm URL                                               | Supports                       |
-| :----------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------- | :---------------------------------------------------- | :----------------------------- |
-| [@humeai/voice-react](https://github.com/hbmartin/hume-react-sdk/tree/main/packages/react)             | ![https://img.shields.io/npm/v/%40humeai%2Fvoice-react](https://img.shields.io/npm/v/%40humeai%2Fvoice-react)             | [README](https://github.com/hbmartin/hume-react-sdk/tree/main/packages/react/README.md)       | <https://npmjs.com/package/@humeai/voice-react>       | Empathic Voice Interface (EVI) |
-| [@humeai/voice-embed](https://github.com/hbmartin/hume-react-sdk/tree/main/packages/embed)             | ![https://img.shields.io/npm/v/%40humeai%2Fvoice-embed](https://img.shields.io/npm/v/%40humeai%2Fvoice-embed)             | [README](https://github.com/hbmartin/hume-react-sdk/tree/main/packages/embed/README.md)       | <https://npmjs.com/package/@humeai/voice-embed>       | Empathic Voice Interface (EVI) |
-| [@humeai/voice-embed-react](https://github.com/hbmartin/hume-react-sdk/tree/main/packages/embed-react) | ![https://img.shields.io/npm/v/%40humeai%2Fvoice-embed-react](https://img.shields.io/npm/v/%40humeai%2Fvoice-embed-react) | [README](https://github.com/hbmartin/hume-react-sdk/tree/main/packages/embed-react/README.md) | <https://npmjs.com/package/@humeai/voice-embed-react> | Empathic Voice Interface (EVI) |
+| Package                                                                                              | Version                                                                                                                   | README                                                                                      | npm URL                                               | Supports                       |
+| :--------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------ | :---------------------------------------------------- | :----------------------------- |
+| [@humeai/voice-react](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/react)             | ![https://img.shields.io/npm/v/%40humeai%2Fvoice-react](https://img.shields.io/npm/v/%40humeai%2Fvoice-react)             | [README](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/react/README.md)       | <https://npmjs.com/package/@humeai/voice-react>       | Empathic Voice Interface (EVI) |
+| [@humeai/voice-embed](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed)             | ![https://img.shields.io/npm/v/%40humeai%2Fvoice-embed](https://img.shields.io/npm/v/%40humeai%2Fvoice-embed)             | [README](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed/README.md)       | <https://npmjs.com/package/@humeai/voice-embed>       | Empathic Voice Interface (EVI) |
+| [@humeai/voice-embed-react](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed-react) | ![https://img.shields.io/npm/v/%40humeai%2Fvoice-embed-react](https://img.shields.io/npm/v/%40humeai%2Fvoice-embed-react) | [README](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed-react/README.md) | <https://npmjs.com/package/@humeai/voice-embed-react> | Empathic Voice Interface (EVI) |
 
 ## Which package should I use?
 
@@ -38,11 +38,11 @@ Renders Hume's prebuilt voice widget (hosted at `voice-widget.hume.ai`) inside a
 
 ### `@humeai/voice-embed` — Hume's widget, framework-agnostic
 
-The same iframe widget with an imperative API instead of a component: `EmbeddedVoice.create({ auth, ... })` returns a handle with `mount()`, `openEmbed()`, and an unmount callback. It has no React dependency, so it drops into Vue, Svelte, Angular, plain HTML, or a bare `<script>` tag.
+The same iframe widget with an imperative API instead of a component: `EmbeddedVoice.create({ auth, ... })` returns a handle with `mount()`, `openEmbed()`, and an unmount callback. It has no React dependency, so it works in Vue, Svelte, Angular, or bundled vanilla-JavaScript applications that consume npm packages.
 
-- **Best for:** non-React (or no-framework) web apps, and pages where you can only inject a script.
+- **Best for:** non-React web apps, including bundled no-framework applications.
 - **Trade-off:** same as above, plus you manage the mount/unmount lifecycle yourself.
-- **Requires:** a browser DOM. If you are on React, prefer `@humeai/voice-embed-react`.
+- **Requires:** a browser DOM and an npm-aware build tool. If you are on React, prefer `@humeai/voice-embed-react`.
 
 ### Decision tree
 

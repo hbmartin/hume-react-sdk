@@ -41,6 +41,7 @@ import {
 import {
   AudioDeviceSwitchError,
   type AudioDeviceSwitchErrorReason,
+  ConcurrentConnectAuthError,
   isAudioDeviceSwitchError,
 } from './errors';
 import {
@@ -204,6 +205,11 @@ type ForcedCleanupResult = Readonly<{
   failures: string[];
   stillOwnsResources: boolean;
 }>;
+
+type ForcedPlayerCleanupResult =
+  | Readonly<{ status: 'fulfilled' }>
+  | Readonly<{ status: 'pending' }>
+  | Readonly<{ failure: unknown; status: 'rejected' }>;
 
 const getMonotonicTime = () => globalThis.performance?.now() ?? Date.now();
 
@@ -1060,32 +1066,43 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         await runStep(step);
       }
       if (context) {
-        // The normal cleanup may already be stalled inside this exact stop
-        // promise. Starting it again is useful for synchronous best effort, but
-        // awaiting the deduplicated promise would defeat the timeout backstop.
         if (stillOwnsResources()) {
+          // The normal cleanup may already be stalled inside this exact stop
+          // promise. Give it a microtask checkpoint to settle, then force
+          // context closure without losing incomplete teardown from the report.
+          let playerCleanup: Promise<ForcedPlayerCleanupResult>;
           try {
-            void Promise.resolve(playerStopAllForContext(context)).catch(
-              (failure: unknown) => {
-                diagnostics.emit({
-                  level: 'warn',
-                  category: 'audio_player',
-                  name: 'resource.cleanup_failed',
-                  details: {
-                    resource: 'audio_player',
-                    message:
-                      failure instanceof Error
-                        ? failure.message
-                        : 'Unknown audio player cleanup error',
-                  },
-                });
-              },
+            playerCleanup = Promise.resolve(
+              playerStopAllForContext(context),
+            ).then(
+              (): ForcedPlayerCleanupResult => ({ status: 'fulfilled' }),
+              (failure: unknown): ForcedPlayerCleanupResult => ({
+                failure,
+                status: 'rejected',
+              }),
             );
           } catch (failure) {
+            playerCleanup = Promise.resolve({
+              failure,
+              status: 'rejected',
+            });
+          }
+          await Promise.resolve();
+          const playerResult = await Promise.race<ForcedPlayerCleanupResult>([
+            playerCleanup,
+            Promise.resolve({ status: 'pending' }),
+          ]);
+          if (playerResult.status === 'rejected') {
             failures.push(
               `Audio player cleanup failed: ${
-                failure instanceof Error ? failure.message : 'Unknown error'
+                playerResult.failure instanceof Error
+                  ? playerResult.failure.message
+                  : 'Unknown error'
               }`,
+            );
+          } else if (playerResult.status === 'pending') {
+            failures.push(
+              'Audio player cleanup failed: cleanup did not settle before forced context closure.',
             );
           }
         }
@@ -1105,7 +1122,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         stillOwnsResources: stillOwnsResources(),
       };
     },
-    [closeSharedAudioContext, diagnostics, playerStopAllForContext],
+    [closeSharedAudioContext, playerStopAllForContext],
   );
 
   const client = useVoiceClient({
@@ -1275,9 +1292,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         currentConnectionGenerationRef.current = null;
 
         if (!isCurrentLifecycleGeneration(connectionGeneration)) {
-          if (!isConnectingRef.current) {
-            publishDisconnectMessage();
-          }
+          if (isConnectingRef.current) return;
+          publishDisconnectMessage();
           publishCloseCallback();
           return;
         }
@@ -2247,9 +2263,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             name: 'connection.attempt_ignored',
             details: { reason: 'auth_conflict' },
           });
-          // Keep connect safe for fire-and-forget event handlers. The active
-          // attempt remains authoritative and later options are ignored.
-          return activeConnect;
+          return Promise.reject(new ConcurrentConnectAuthError());
         }
         diagnostics.emit({
           level: 'warn',
@@ -2258,10 +2272,11 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           details: { reason: 'already_connecting' },
         });
         if (activeConnect === null) {
-          // A terminal attempt can settle just before its error-triggered
-          // teardown effect registers cleanup. Treat that short state as a
-          // no-op instead of manufacturing an unhandled rejection.
-          return Promise.resolve();
+          return Promise.reject(
+            new Error(
+              'Voice connection state is inconsistent: an active attempt has no joinable promise.',
+            ),
+          );
         }
         return activeConnect;
       }
@@ -2284,7 +2299,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       activeConnectPromiseRef.current = connecting;
       activeConnectAuthRef.current = { ...options.auth };
       const clearConnect = () => {
-        if (activeConnectPromiseRef.current === connecting) {
+        if (
+          activeConnectPromiseRef.current === connecting &&
+          !isConnectingRef.current
+        ) {
           activeConnectPromiseRef.current = null;
           activeConnectAuthRef.current = null;
         }
@@ -2621,13 +2639,15 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     const cleanupTimeouts = pendingResourceCleanupTimeoutsRef.current;
     // disconnect from socket when the voice provider component unmounts
     return () => {
+      // Only accelerate cleanup that was already pending before unmount. The
+      // teardown created below retains its normal bounded grace period.
+      const preexistingCleanupTimeouts = [...cleanupTimeouts];
       // Intentionally read the latest cleanup callback when unmount begins.
       // oxlint-disable-next-line react/exhaustive-deps -- lifecycle callbacks are tracked through refs
       const cleanup = disconnectAndCleanUpResourcesRef.current('unmount');
-      // Unmount must not retain provider closures for the normal 15-second
-      // grace period. Let ordinary cleanup finish at this microtask checkpoint,
-      // then run every remaining backstop on the next task.
-      for (const timeoutControl of cleanupTimeouts) {
+      // Preexisting stalled work must not retain its old timer after the
+      // provider is gone; its backstop runs on the next task.
+      for (const timeoutControl of preexistingCleanupTimeouts) {
         timeoutControl.expedite();
       }
       // Cleanup invalidates its lifecycle synchronously before returning.

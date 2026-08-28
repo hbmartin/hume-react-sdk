@@ -61,6 +61,28 @@ export const isConnectionGenerationError = (
 ): error is ConnectionGenerationError =>
   error instanceof ConnectionGenerationError;
 
+/**
+ * A concurrent connection request supplied credentials that differ from the
+ * active attempt. The request is rejected so refreshed credentials are never
+ * silently discarded.
+ */
+export class ConcurrentConnectAuthError extends Error {
+  readonly reason = 'auth_conflict' as const;
+
+  constructor() {
+    super(
+      'A voice connection attempt is already in progress with different authentication credentials.',
+    );
+    this.name = 'ConcurrentConnectAuthError';
+  }
+}
+
+/** Check whether an unknown value is a concurrent-connect auth conflict. */
+export const isConcurrentConnectAuthError = (
+  error: unknown,
+): error is ConcurrentConnectAuthError =>
+  error instanceof ConcurrentConnectAuthError;
+
 export class SocketUnknownMessageError extends Error {
   constructor(message?: string) {
     super(

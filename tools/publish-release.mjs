@@ -4,6 +4,7 @@ import {
   createPublishArguments,
   createReleasePlan,
   readPublishablePackages,
+  validateProvenanceRepository,
 } from './release-plan.mjs';
 
 const cliArguments = process.argv.slice(2);
@@ -17,6 +18,7 @@ if (releaseTags.length > 1) {
 
 const releaseTag = releaseTags[0] ?? process.env.RELEASE_TAG;
 const packages = await readPublishablePackages();
+validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
 const plan = createReleasePlan(releaseTag, packages);
 const publishArguments = createPublishArguments(plan, { dryRun });
 

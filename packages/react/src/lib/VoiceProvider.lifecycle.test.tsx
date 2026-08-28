@@ -182,7 +182,10 @@ vi.mock('./useMessages', async () => {
 });
 
 import type { VoiceDiagnosticEvent } from './diagnostics';
-import { isAudioDeviceSwitchError } from './errors';
+import {
+  isAudioDeviceSwitchError,
+  isConcurrentConnectAuthError,
+} from './errors';
 import type * as UseMessagesModule from './useMessages';
 import type * as UseVoiceClientModule from './useVoiceClient';
 import { useVoice, VoiceProvider } from './VoiceProvider';
@@ -364,7 +367,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.clearMessageStore).toHaveBeenCalledOnce();
   });
 
-  it('expedites the cleanup backstop created by unmount', async () => {
+  it('preserves the cleanup grace period for teardown created by unmount', async () => {
     vi.useFakeTimers();
     try {
       const stalledMicrophone = createDeferred<void>();
@@ -384,7 +387,10 @@ describe('VoiceProvider close lifecycle', () => {
       await act(() => Promise.resolve());
       expect(mocks.micStop).toHaveBeenCalledOnce();
 
-      await act(() => vi.advanceTimersByTimeAsync(0));
+      await act(() => vi.advanceTimersByTimeAsync(14_999));
+      expect(mocks.stopStream).not.toHaveBeenCalled();
+
+      await act(() => vi.advanceTimersByTimeAsync(1));
       expect(mocks.stopStream).toHaveBeenCalledOnce();
 
       await act(async () => {
@@ -819,7 +825,7 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
-  it('publishes a delayed consumer close without changing the current connection', async () => {
+  it('suppresses a delayed consumer close from a superseded connection', async () => {
     const secondStream = createDeferred<MediaStream>();
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -851,7 +857,7 @@ describe('VoiceProvider close lifecycle', () => {
     act(() => {
       void firstConnectionClose?.({ code: 1000 } as CloseEvent, true);
     });
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.clearMessageStore).toHaveBeenCalledTimes(messageClearCount);
     expect(result.current.status.value).toBe('connecting');
 
@@ -1124,7 +1130,7 @@ describe('VoiceProvider close lifecycle', () => {
     let concurrentConnect = Promise.resolve();
     act(() => {
       concurrentConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
     });
     expect(concurrentConnect).toBe(firstConnect);
@@ -1147,7 +1153,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('connected');
   });
 
-  it('joins a concurrent connect that supplies refreshed credentials', async () => {
+  it('rejects a concurrent connect that supplies refreshed credentials', async () => {
     const stream = createDeferred<MediaStream>();
     mocks.getStream.mockReturnValueOnce(stream.promise);
     const { result } = renderHook(() => useVoice(), {
@@ -1164,19 +1170,19 @@ describe('VoiceProvider close lifecycle', () => {
     });
     await waitFor(() => expect(mocks.getStream).toHaveBeenCalledOnce());
 
-    let concurrentConnect = Promise.resolve();
-    act(() => {
-      concurrentConnect = result.current.connect({
+    const conflict = await result.current
+      .connect({
         auth: { type: 'accessToken', value: 'refreshed-token' },
-      });
-    });
+      })
+      .catch((error: unknown) => error);
 
-    expect(concurrentConnect).toBe(firstConnect);
+    expect(isConcurrentConnectAuthError(conflict)).toBe(true);
+    expect(conflict).toMatchObject({ reason: 'auth_conflict' });
     expect(mocks.clientConnect).not.toHaveBeenCalled();
 
     await act(async () => {
       stream.resolve({} as MediaStream);
-      await Promise.all([firstConnect, concurrentConnect]);
+      await firstConnect;
     });
   });
 
@@ -1241,7 +1247,7 @@ describe('VoiceProvider close lifecycle', () => {
     let concurrentConnect = Promise.resolve();
     act(() => {
       concurrentConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
     });
     expect(concurrentConnect).toBe(firstConnect);
@@ -1631,7 +1637,7 @@ describe('VoiceProvider close lifecycle', () => {
     let concurrentConnect = Promise.resolve();
     act(() => {
       concurrentConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
     });
     expect(concurrentConnect).toBe(firstConnect);
@@ -2329,7 +2335,7 @@ describe('VoiceProvider close lifecycle', () => {
     });
     connectAgain = () =>
       result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+        auth: { type: 'accessToken', value: 'first-token' },
       });
 
     await act(() =>
@@ -2424,10 +2430,19 @@ describe('VoiceProvider close lifecycle', () => {
     vi.useFakeTimers();
     try {
       const playerStopped = createDeferred<void>();
+      const events: VoiceDiagnosticEvent[] = [];
       mocks.playerStopForContext.mockReturnValue(playerStopped.promise);
       const { result } = renderHook(() => useVoice(), {
         wrapper: ({ children }) => (
-          <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+          <VoiceProvider
+            diagnostics={{
+              level: 'debug',
+              logger: false,
+              onEvent: (event) => events.push(event),
+            }}
+          >
+            {children}
+          </VoiceProvider>
         ),
       });
       await act(() =>
@@ -2447,6 +2462,22 @@ describe('VoiceProvider close lifecycle', () => {
       expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
       expect(mocks.contextClose).toHaveBeenCalledOnce();
       await act(() => disconnecting);
+      expect(
+        events.some((event) => {
+          const failures = event.details['failures'];
+          return (
+            event.name === 'resource.cleanup_failed' &&
+            Array.isArray(failures) &&
+            failures.some(
+              (failure) =>
+                typeof failure === 'string' &&
+                failure.includes(
+                  'cleanup did not settle before forced context closure',
+                ),
+            )
+          );
+        }),
+      ).toBe(true);
 
       await act(async () => {
         playerStopped.resolve();
