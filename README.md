@@ -59,15 +59,15 @@ flowchart TD
 
 ### At a glance
 
-| | `@humeai/voice-react` | `@humeai/voice-embed-react` | `@humeai/voice-embed` |
-| :-- | :-- | :-- | :-- |
-| **Who owns the UI** | You | Hume | Hume |
-| **Framework** | React `>=18.2` | React `>=18.2` | Any JS with a DOM |
-| **API shape** | Provider + hooks | `<EmbeddedVoice />` component | `create()` / `mount()` |
-| **Where it runs** | In your page | In an iframe | In an iframe |
-| **Visual customization** | Complete | Widget config only | Widget config only |
-| **Access to EVI messages** | Full (transcripts, tool calls, prosody) | Transcripts via `onMessage` | Transcripts via `onMessage` |
-| **Time to first call** | Longest | Shortest | Short |
+|                            | `@humeai/voice-react`                   | `@humeai/voice-embed-react`   | `@humeai/voice-embed`       |
+| :------------------------- | :-------------------------------------- | :---------------------------- | :-------------------------- |
+| **Who owns the UI**        | You                                     | Hume                          | Hume                        |
+| **Framework**              | React `>=18.2`                          | React `>=18.2`                | Any JS with a DOM           |
+| **API shape**              | Provider + hooks                        | `<EmbeddedVoice />` component | `create()` / `mount()`      |
+| **Where it runs**          | In your page                            | In an iframe                  | In an iframe                |
+| **Visual customization**   | Complete                                | Widget config only            | Widget config only          |
+| **Access to EVI messages** | Full (transcripts, tool calls, prosody) | Transcripts via `onMessage`   | Transcripts via `onMessage` |
+| **Time to first call**     | Longest                                 | Shortest                      | Short                       |
 
 Not using React? Check out our other SDKs:
 

@@ -12,7 +12,8 @@
     "utils/**/*.ts",
     "utils/**/*.tsx",
     "types/**/*.d.ts",
-    "*.config.ts"
+    "*.config.ts",
+    ".next/types/**/*.ts"
   ],
-  "exclude": [".next", "dist", "coverage", "node_modules"]
+  "exclude": ["dist", "coverage", "node_modules"]
 }

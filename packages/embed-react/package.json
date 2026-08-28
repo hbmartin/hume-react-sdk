@@ -52,10 +52,12 @@
   "devDependencies": {
     "@humeai/typescript-config": "workspace:*",
     "@humeai/vitest-config": "workspace:*",
+    "@testing-library/react": "^14.2.2",
     "@types/node": "22.20.1",
     "@types/react": "^18.2.70",
     "@types/react-dom": "^18.2.22",
     "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "tsup": "8.5.1",
     "typescript": "7.0.2",
     "vitest": "^3.2.6"

@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./base": "./base.mts"
+    "./base": {
+      "types": "./base.d.mts",
+      "default": "./base.mjs"
+    }
   },
   "scripts": {
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",

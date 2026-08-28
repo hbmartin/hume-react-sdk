@@ -1,6 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "@humeai/typescript-config/node-tooling.json",
-  "include": ["base.mts"],
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": ["base.d.mts", "base.mjs"],
   "exclude": ["dist", "node_modules"]
 }

@@ -33,10 +33,16 @@ export { ChatMetadataMessage }
 
 export { COLLAPSE_WIDGET_ACTION }
 
-// Warning: (ae-forgotten-export) The symbol "EmbeddedVoiceProps" needs to be exported by the entry point index.d.ts
-//
 // @public (undocumented)
 export const EmbeddedVoice: (props: EmbeddedVoiceProps) => null;
+
+// @public (undocumented)
+export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> & NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
+    onMessage?: TranscriptMessageHandler;
+    onClose?: CloseHandler;
+    isEmbedOpen: boolean;
+    openOnMount?: boolean;
+};
 
 export { EmotionScores }
 

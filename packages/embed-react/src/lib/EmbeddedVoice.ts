@@ -4,9 +4,9 @@ import {
   type EmbeddedVoiceConfig,
   type TranscriptMessageHandler,
 } from '@humeai/voice-embed';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
-type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
+export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
   NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
     onMessage?: TranscriptMessageHandler;
     onClose?: CloseHandler;
@@ -25,7 +25,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const embeddedVoice = useRef<EA | null>(null);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
-  const [stableConfig] = useState<
+  const latestConfig = useRef<
     Partial<EmbeddedVoiceConfig> &
       NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>>
   >(config);
@@ -33,20 +33,21 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   useEffect(() => {
     onMessageHandler.current = onMessage;
     onCloseHandler.current = onClose;
-  }, [onClose, onMessage]);
+    latestConfig.current = config;
+  }, [config, onClose, onMessage]);
 
   useEffect(() => {
     let unmount: (() => void) | undefined;
     if (!embeddedVoice.current) {
       embeddedVoice.current = EA.create({
-        ...(onMessageHandler.current === undefined
-          ? {}
-          : { onMessage: onMessageHandler.current }),
-        ...(onCloseHandler.current === undefined
-          ? {}
-          : { onClose: onCloseHandler.current }),
-        openOnMount: openOnMount,
-        ...stableConfig,
+        onMessage: (message) => {
+          onMessageHandler.current?.(message);
+        },
+        onClose: () => {
+          onCloseHandler.current?.();
+        },
+        openOnMount,
+        ...latestConfig.current,
       });
       unmount = embeddedVoice.current.mount();
     }
@@ -57,7 +58,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
       }
       embeddedVoice.current = null;
     };
-  }, [openOnMount, stableConfig]);
+  }, [openOnMount]);
 
   useEffect(() => {
     if (isEmbedOpen) {
