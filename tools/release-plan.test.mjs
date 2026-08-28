@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   createPublishArguments,
@@ -46,6 +55,88 @@ await test('invalid and unmatched release tags are rejected', () => {
     () => createReleasePlan('v0.3.0-', packages),
     /Invalid release tag/,
   );
+  assert.throws(
+    () => createReleasePlan('v01.0.0', packages),
+    /Invalid release tag/,
+  );
+  assert.throws(
+    () => createReleasePlan('v1.0.0-01', packages),
+    /Invalid release tag/,
+  );
+});
+
+async function runRelease(arguments_, releaseTag) {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), 'run-release-'));
+  const toolsDirectory = join(temporaryDirectory, 'tools');
+  const binaryDirectory = join(temporaryDirectory, 'bin');
+  const invocationLog = join(temporaryDirectory, 'pnpm-invocations.jsonl');
+
+  try {
+    await Promise.all([
+      symlink(fileURLToPath(new URL('.', import.meta.url)), toolsDirectory),
+      mkdir(binaryDirectory),
+      ...['embed', 'embed-react', 'react'].map(async (packageName) => {
+        const packageDirectory = join(
+          temporaryDirectory,
+          'packages',
+          packageName,
+        );
+        await mkdir(packageDirectory, { recursive: true });
+        await writeFile(
+          join(packageDirectory, 'package.json'),
+          JSON.stringify({ name: `@humeai/${packageName}`, version: '1.2.3' }),
+        );
+      }),
+    ]);
+    const fakePnpm = join(binaryDirectory, 'pnpm');
+    await writeFile(
+      fakePnpm,
+      `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs');\nappendFileSync(process.env.RELEASE_TEST_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');\n`,
+    );
+    await chmod(fakePnpm, 0o755);
+
+    const environment = { ...process.env };
+    delete environment.GITHUB_REPOSITORY;
+    delete environment.RELEASE_TAG;
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('./run-release.mjs', import.meta.url)),
+        ...arguments_,
+      ],
+      {
+        cwd: temporaryDirectory,
+        encoding: 'utf8',
+        env: {
+          ...environment,
+          PATH: `${binaryDirectory}:${environment.PATH ?? ''}`,
+          RELEASE_TEST_LOG: invocationLog,
+          ...(releaseTag === undefined ? {} : { RELEASE_TAG: releaseTag }),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return (await readFile(invocationLog, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+}
+
+await test('run-release accepts v1.2.3 followed by --dry-run', async () => {
+  const invocations = await runRelease(['v1.2.3', '--dry-run']);
+
+  assert.deepEqual(invocations[0], ['check']);
+  assert.equal(invocations[1]?.at(-1), '--dry-run');
+});
+
+await test('run-release accepts --dry-run with RELEASE_TAG', async () => {
+  const invocations = await runRelease(['--dry-run'], 'v1.2.3');
+
+  assert.deepEqual(invocations[0], ['check']);
+  assert.equal(invocations[1]?.at(-1), '--dry-run');
 });
 
 await test('private packages are not selected for publication', () => {

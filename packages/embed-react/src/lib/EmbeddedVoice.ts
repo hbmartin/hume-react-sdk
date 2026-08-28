@@ -3,6 +3,7 @@ import {
   EmbeddedVoice as EA,
   type EmbeddedVoiceConfig,
   type TranscriptMessageHandler,
+  WIDGET_IFRAME_IS_READY_ACTION,
 } from '@humeai/voice-embed';
 import { useEffect, useRef, useState } from 'react';
 
@@ -23,6 +24,8 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     ...config
   } = props;
   const embeddedVoice = useRef<EA | null>(null);
+  const iframeIsReady = useRef(false);
+  const openWhenReady = useRef(false);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
   const [initialConfig] = useState(config);
@@ -34,7 +37,31 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
 
   useEffect(() => {
     let unmount: (() => void) | undefined;
+    const rendererOrigin = new URL(
+      initialConfig.rendererUrl ?? 'https://voice-widget.hume.ai',
+    ).origin;
+    const handleMessage = (event: MessageEvent<unknown>) => {
+      if (
+        event.origin !== rendererOrigin ||
+        typeof event.data !== 'object' ||
+        event.data === null ||
+        !('type' in event.data) ||
+        event.data.type !== WIDGET_IFRAME_IS_READY_ACTION.type
+      ) {
+        return;
+      }
+
+      iframeIsReady.current = true;
+      if (openWhenReady.current) {
+        openWhenReady.current = false;
+        embeddedVoice.current?.openEmbed();
+      }
+    };
+
     if (!embeddedVoice.current) {
+      iframeIsReady.current = false;
+      openWhenReady.current = false;
+      window.addEventListener('message', handleMessage);
       embeddedVoice.current = EA.create({
         onMessage: (message) => {
           onMessageHandler.current?.(message);
@@ -49,6 +76,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     }
 
     return () => {
+      window.removeEventListener('message', handleMessage);
       if (unmount !== undefined) {
         unmount();
       }
@@ -58,7 +86,13 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
 
   useEffect(() => {
     if (isEmbedOpen && !openOnMount) {
-      embeddedVoice.current?.openEmbed();
+      if (iframeIsReady.current) {
+        embeddedVoice.current?.openEmbed();
+      } else {
+        openWhenReady.current = true;
+      }
+    } else {
+      openWhenReady.current = false;
     }
   }, [isEmbedOpen, openOnMount]);
 

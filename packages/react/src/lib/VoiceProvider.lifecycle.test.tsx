@@ -980,7 +980,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.stopStream).toHaveBeenCalledOnce();
   });
 
-  it('publishes a delayed socket close after clientConnect rejects', async () => {
+  it('suppresses a delayed socket close after clientConnect rejects', async () => {
     mocks.clientConnect.mockRejectedValueOnce(new Error('connect failed'));
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -1002,7 +1002,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledTimes(cleanupCalls);
     expect(result.current.status.value).toBe('disconnected');
   });
@@ -1033,7 +1033,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledOnce();
     expect(mocks.waitForDrain).not.toHaveBeenCalled();
 

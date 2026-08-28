@@ -6,9 +6,13 @@ import {
   validateProvenanceRepository,
 } from './release-plan.mjs';
 
-const releaseTags = process.argv.slice(2);
+const cliArguments = process.argv.slice(2);
+const dryRun = cliArguments.includes('--dry-run');
+const releaseTags = cliArguments.filter((argument) => argument !== '--dry-run');
 if (releaseTags.length > 1) {
-  throw new Error('Expected a single release tag.');
+  throw new Error(
+    'Expected a single release tag and an optional --dry-run flag.',
+  );
 }
 
 const releaseTag = releaseTags[0] ?? process.env.RELEASE_TAG;
@@ -22,7 +26,11 @@ if (check.status !== 0) process.exit(check.status ?? 1);
 
 const publish = spawnSync(
   process.execPath,
-  ['tools/publish-release.mjs', /** @type {string} */ (releaseTag)],
+  [
+    'tools/publish-release.mjs',
+    /** @type {string} */ (releaseTag),
+    ...(dryRun ? ['--dry-run'] : []),
+  ],
   { stdio: 'inherit' },
 );
 if (publish.error !== undefined) throw publish.error;

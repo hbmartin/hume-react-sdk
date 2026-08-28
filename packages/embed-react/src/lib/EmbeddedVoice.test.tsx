@@ -14,6 +14,9 @@ vi.mock('@humeai/voice-embed', () => ({
   EmbeddedVoice: {
     create: embeddedVoiceMocks.create,
   },
+  WIDGET_IFRAME_IS_READY_ACTION: {
+    type: 'widget_iframe_is_ready',
+  },
 }));
 
 type CreatedConfig = {
@@ -22,6 +25,15 @@ type CreatedConfig = {
   onClose?: () => void;
   openOnMount?: boolean;
   rendererUrl?: string;
+};
+
+const dispatchIframeReady = () => {
+  window.dispatchEvent(
+    new MessageEvent('message', {
+      data: { type: 'widget_iframe_is_ready' },
+      origin: 'https://voice-widget.hume.ai',
+    }),
+  );
 };
 
 describe('EmbeddedVoice', () => {
@@ -105,6 +117,7 @@ describe('EmbeddedVoice', () => {
     const { rerender } = render(
       <EmbeddedVoice auth={auth} isEmbedOpen={false} />,
     );
+    act(dispatchIframeReady);
 
     rerender(<EmbeddedVoice auth={auth} isEmbedOpen={true} />);
 
@@ -112,7 +125,7 @@ describe('EmbeddedVoice', () => {
     expect(embeddedVoiceMocks.openEmbed).toHaveBeenCalledOnce();
   });
 
-  it('reopens a controlled embed after openOnMount remounts it closed', () => {
+  it('reopens a controlled embed when its replacement iframe becomes ready', () => {
     const auth = { type: 'accessToken' as const, value: 'token' };
     const { rerender } = render(
       <EmbeddedVoice auth={auth} isEmbedOpen={true} openOnMount={true} />,
@@ -125,6 +138,10 @@ describe('EmbeddedVoice', () => {
     );
 
     expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
+    expect(embeddedVoiceMocks.openEmbed).not.toHaveBeenCalled();
+
+    act(dispatchIframeReady);
+
     expect(embeddedVoiceMocks.openEmbed).toHaveBeenCalledOnce();
   });
 });
