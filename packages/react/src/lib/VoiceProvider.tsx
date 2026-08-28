@@ -460,13 +460,13 @@ export type VoiceProviderProps = PropsWithChildren<{
   onStopRecording?: () => void;
   onInterruption?: (message: UserInterruptionMessage) => void;
   /**
+   * Clear messages when the voice is disconnected.
    * @default true
-   * @description Clear messages when the voice is disconnected.
    */
   clearMessagesOnDisconnect?: boolean;
   /**
+   * The maximum number of messages to keep in memory.
    * @default 100
-   * @description The maximum number of messages to keep in memory.
    */
   messageHistoryLimit?: number;
   enableAudioWorklet?: boolean;

@@ -93,8 +93,6 @@ export class SocketUnknownMessageError extends Error {
 }
 
 /**
- * @name isSocketUnknownMessageError
- * @description
  * Check if an error is a SocketUnknownMessageError.
  * @param err - The error to check.
  * @returns
@@ -122,8 +120,6 @@ export class SocketFailedToParseMessageError extends Error {
 }
 
 /**
- * @name isSocketFailedToParseMessageError
- * @description
  * Check if an error is a SocketFailedToParseMessageError.
  * @param err - The error to check.
  * @returns

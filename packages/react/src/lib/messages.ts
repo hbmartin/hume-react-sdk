@@ -39,8 +39,6 @@ export type ParsedMessageResult =
     };
 
 /**
- * @name parseMessageData
- * @description
  * Parse the data of a message from the socket.
  * @param data - The data to parse.
  * @returns
@@ -110,8 +108,6 @@ export const parseMessageData = async (
 };
 
 /**
- * @name parseMessageType
- * @description
  * Parse the type of a message from the socket.
  * @param event - The event to parse.
  * @returns

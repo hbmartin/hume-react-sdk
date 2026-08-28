@@ -8,7 +8,9 @@
     "reportTempFolder": "<projectFolder>/.api-extractor"
   },
   "docModel": {
-    "enabled": false
+    "enabled": true,
+    "apiJsonFilePath": "<projectFolder>/.api-extractor/<unscopedPackageName>.api.json",
+    "projectFolderUrl": "https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed-react"
   },
   "dtsRollup": {
     "enabled": false
