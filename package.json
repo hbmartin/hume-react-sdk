@@ -41,7 +41,7 @@
     "oxlint-tsgolint": "7.0.2001",
     "publint": "0.3.24",
     "syncpack": "15.3.3",
-    "turbo": "^2.9.14"
+    "turbo": "^2.10.12"
   },
   "browserslist": [
     "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
