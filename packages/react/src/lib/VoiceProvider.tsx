@@ -148,6 +148,8 @@ type ResourceStatus =
   | 'disconnecting'
   | 'disconnected';
 
+type DisconnectDiagnosticReason = 'consumer' | 'server' | 'error' | 'unmount';
+
 const getDeviceSwitchReason = (
   error: unknown,
 ): AudioDeviceSwitchErrorReason => {
@@ -2245,83 +2247,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     ],
   );
 
-  const connect = useCallback(
-    (options: ConnectOptions) => {
-      const activeConnect = activeConnectPromiseRef.current;
-      const alreadyConnecting =
-        activeConnect !== null || isConnectingRef.current;
-      const alreadyConnected = resourceStatusRef.current.socket === 'connected';
-      if (alreadyConnecting) {
-        if (
-          activeConnect !== null &&
-          !areAuthStrategiesEqual(activeConnectAuthRef.current, options.auth)
-        ) {
-          diagnostics.emit({
-            level: 'warn',
-            category: 'connection',
-            name: 'connection.attempt_ignored',
-            details: { reason: 'auth_conflict' },
-          });
-          return Promise.reject(new ConcurrentConnectAuthError());
-        }
-        diagnostics.emit({
-          level: 'warn',
-          category: 'connection',
-          name: 'connection.attempt_ignored',
-          details: { reason: 'already_connecting' },
-        });
-        if (activeConnect === null) {
-          return Promise.reject(
-            new Error(
-              'Voice connection state is inconsistent: an active attempt has no joinable promise.',
-            ),
-          );
-        }
-        return activeConnect;
-      }
-      if (alreadyConnected) {
-        diagnostics.emit({
-          level: 'warn',
-          category: 'connection',
-          name: 'connection.attempt_ignored',
-          details: { reason: 'already_connected' },
-        });
-        return Promise.resolve();
-      }
-
-      // Defer the attempt by one microtask so this ownership marker is installed
-      // before diagnostics or browser APIs can synchronously reenter connect().
-      const connectRequestGeneration = lifecycleGenerationRef.current;
-      const connecting = Promise.resolve().then(() =>
-        connectAttempt(options, connectRequestGeneration),
-      );
-      activeConnectPromiseRef.current = connecting;
-      activeConnectAuthRef.current = { ...options.auth };
-      const clearConnect = () => {
-        if (
-          activeConnectPromiseRef.current === connecting &&
-          !isConnectingRef.current
-        ) {
-          activeConnectPromiseRef.current = null;
-          activeConnectAuthRef.current = null;
-        }
-      };
-      void connecting.then(clearConnect, clearConnect);
-      return connecting;
-    },
-    [connectAttempt, diagnostics],
-  );
-
   // `disconnectAndCleanUpResources`: Internal function that is called to actually disconnect
   // from the socket, audio player, and microphone.
   const disconnectAndCleanUpResources = useCallback(
-    (
-      diagnosticReason:
-        | 'consumer'
-        | 'server'
-        | 'error'
-        | 'unmount' = 'consumer',
-    ) => {
+    (diagnosticReason: DisconnectDiagnosticReason = 'consumer') => {
       const invalidateLifecycle = () => {
         lifecycleGenerationRef.current += 1;
         isConnectingRef.current = false;
@@ -2595,6 +2524,76 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       toolStatusClearStore,
     ],
   );
+  const disconnectAndCleanUpResourcesRef = useLatestRef(
+    disconnectAndCleanUpResources,
+  );
+
+  const connect = useCallback(
+    (options: ConnectOptions) => {
+      const activeConnect = activeConnectPromiseRef.current;
+      const alreadyConnecting =
+        activeConnect !== null || isConnectingRef.current;
+      const alreadyConnected = resourceStatusRef.current.socket === 'connected';
+      if (alreadyConnecting) {
+        if (
+          activeConnect !== null &&
+          !areAuthStrategiesEqual(activeConnectAuthRef.current, options.auth)
+        ) {
+          diagnostics.emit({
+            level: 'warn',
+            category: 'connection',
+            name: 'connection.attempt_ignored',
+            details: { reason: 'auth_conflict' },
+          });
+          return Promise.reject(new ConcurrentConnectAuthError());
+        }
+        diagnostics.emit({
+          level: 'warn',
+          category: 'connection',
+          name: 'connection.attempt_ignored',
+          details: { reason: 'already_connecting' },
+        });
+        if (activeConnect === null) {
+          return Promise.reject(
+            new Error(
+              'Voice connection state is inconsistent: an active attempt has no joinable promise.',
+            ),
+          );
+        }
+        return activeConnect;
+      }
+      if (alreadyConnected) {
+        diagnostics.emit({
+          level: 'warn',
+          category: 'connection',
+          name: 'connection.attempt_ignored',
+          details: { reason: 'already_connected' },
+        });
+        return Promise.resolve();
+      }
+
+      // Defer the attempt by one microtask so this ownership marker is installed
+      // before diagnostics or browser APIs can synchronously reenter connect().
+      const connectRequestGeneration = lifecycleGenerationRef.current;
+      const connecting = Promise.resolve().then(() =>
+        connectAttempt(options, connectRequestGeneration),
+      );
+      activeConnectPromiseRef.current = connecting;
+      activeConnectAuthRef.current = { ...options.auth };
+      const clearConnect = () => {
+        if (activeConnectPromiseRef.current !== connecting) return;
+        if (isConnectingRef.current) {
+          void disconnectAndCleanUpResources('error');
+          return;
+        }
+        activeConnectPromiseRef.current = null;
+        activeConnectAuthRef.current = null;
+      };
+      void connecting.then(clearConnect, clearConnect);
+      return connecting;
+    },
+    [connectAttempt, diagnostics, disconnectAndCleanUpResources],
+  );
 
   // `disconnect` is the function that the end user calls to disconnect a call
   const disconnect = useCallback(async () => {
@@ -2622,10 +2621,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     setDisconnectedStatus,
     setErrorStatus,
   ]);
-
-  const disconnectAndCleanUpResourcesRef = useLatestRef(
-    disconnectAndCleanUpResources,
-  );
 
   useEffect(() => {
     if (error !== null) {

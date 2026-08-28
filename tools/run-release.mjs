@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
+import { getPnpmCommand } from './pnpm-command.mjs';
 import {
   createReleasePlan,
   readPublishablePackages,
@@ -20,7 +21,7 @@ const packages = await readPublishablePackages();
 validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
 createReleasePlan(releaseTag, packages);
 
-const check = spawnSync('pnpm', ['check'], { stdio: 'inherit' });
+const check = spawnSync(getPnpmCommand(), ['check'], { stdio: 'inherit' });
 if (check.error !== undefined) throw check.error;
 if (check.status !== 0) process.exit(check.status ?? 1);
 

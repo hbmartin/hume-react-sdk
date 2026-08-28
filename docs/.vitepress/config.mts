@@ -17,12 +17,15 @@ export default defineConfig({
   markdown: {
     config(markdown) {
       const renderCodeInline = markdown.renderer.rules.code_inline;
+      if (renderCodeInline === undefined) {
+        throw new Error('Markdown-It did not provide an inline-code renderer.');
+      }
 
       markdown.renderer.rules.code_inline = (...arguments_) => {
         const [tokens, index] = arguments_;
         tokens[index].attrSet('v-pre', '');
 
-        return renderCodeInline?.(...arguments_) ?? '';
+        return renderCodeInline(...arguments_);
       };
     },
     lineNumbers: true,

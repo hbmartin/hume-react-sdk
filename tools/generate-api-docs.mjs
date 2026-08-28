@@ -10,12 +10,15 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { getPnpmCommand } from './pnpm-command.mjs';
+import { makeReadmeVitePressSafe } from './readme-markdown.mjs';
+
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const generatedRoot = join(repositoryRoot, 'docs', '.generated');
 const apiModelDirectory = join(generatedRoot, 'api-model');
 const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
 const packageGuideDirectory = join(repositoryRoot, 'docs', 'packages');
-const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const pnpmCommand = getPnpmCommand();
 
 const packages = [
   {
@@ -99,23 +102,7 @@ async function writePackageGuides() {
         join(repositoryRoot, package_.directory, 'README.md'),
         'utf8',
       );
-      let insideCodeFence = false;
-      const vitePressSafeReadme = readme
-        .replaceAll('\r\n', '\n')
-        .split('\n')
-        .map((line) => {
-          if (/^\s*`{3,}/u.test(line)) {
-            insideCodeFence = !insideCodeFence;
-            return line;
-          }
-
-          if (!insideCodeFence && /[A-Za-z0-9_.)\]]</u.test(line)) {
-            return line.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-          }
-
-          return line;
-        })
-        .join('\n');
+      const vitePressSafeReadme = makeReadmeVitePressSafe(readme);
       const frontmatter = [
         '---',
         `description: ${JSON.stringify(package_.description)}`,

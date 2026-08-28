@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { getPnpmCommand } from './pnpm-command.mjs';
 import {
   createPublishArguments,
   createReleasePlan,
@@ -65,6 +66,11 @@ await test('invalid and unmatched release tags are rejected', () => {
   );
 });
 
+/**
+ * @param {string[]} arguments_
+ * @param {string} [releaseTag]
+ * @returns {Promise<string[][]>}
+ */
 async function runRelease(arguments_, releaseTag) {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), 'run-release-'));
   const toolsDirectory = join(temporaryDirectory, 'tools');
@@ -119,7 +125,20 @@ async function runRelease(arguments_, releaseTag) {
     return (await readFile(invocationLog, 'utf8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line));
+      .map((line) => {
+        const parsed = /** @type {unknown} */ (JSON.parse(line));
+        if (
+          !Array.isArray(parsed) ||
+          !(
+            /** @type {unknown[]} */ (parsed).every(
+              (argument) => typeof argument === 'string',
+            )
+          )
+        ) {
+          throw new Error('The pnpm invocation log was malformed.');
+        }
+        return /** @type {string[]} */ (parsed);
+      });
   } finally {
     await rm(temporaryDirectory, { force: true, recursive: true });
   }
@@ -149,7 +168,21 @@ await test('private packages are not selected for publication', () => {
   );
 });
 
-await test('runtime workspace dependencies are included in the publish closure', () => {
+await test('matching runtime workspace dependencies are included in the publish closure', () => {
+  assert.deepEqual(
+    createReleasePlan('v2.0.0', [
+      { name: '@humeai/dependency', version: '2.0.0' },
+      {
+        name: '@humeai/dependent',
+        version: '2.0.0',
+        dependencies: { '@humeai/dependency': 'workspace:*' },
+      },
+    ]).packageNames,
+    ['@humeai/dependency', '@humeai/dependent'],
+  );
+});
+
+await test('unrelated runtime workspace dependency versions are not republished', () => {
   assert.deepEqual(
     createReleasePlan('v2.0.0', [
       { name: '@humeai/dependency', version: '1.0.0' },
@@ -159,7 +192,21 @@ await test('runtime workspace dependencies are included in the publish closure',
         dependencies: { '@humeai/dependency': 'workspace:*' },
       },
     ]).packageNames,
-    ['@humeai/dependency', '@humeai/dependent'],
+    ['@humeai/dependent'],
+  );
+});
+
+await test('missing runtime workspace dependencies are identified by name', () => {
+  assert.throws(
+    () =>
+      createReleasePlan('v2.0.0', [
+        {
+          name: '@humeai/dependent',
+          version: '2.0.0',
+          dependencies: { '@humeai/missing': 'workspace:*' },
+        },
+      ]),
+    /Runtime workspace dependency @humeai\/missing is not publishable/,
   );
 });
 
@@ -238,4 +285,10 @@ await test('publish arguments filter packages and require provenance', () => {
     '@humeai/voice-react',
     '--dry-run',
   ]);
+});
+
+await test('pnpm command resolution uses the Windows command shim', () => {
+  assert.equal(getPnpmCommand('win32'), 'pnpm.cmd');
+  assert.equal(getPnpmCommand('linux'), 'pnpm');
+  assert.equal(getPnpmCommand('darwin'), 'pnpm');
 });
