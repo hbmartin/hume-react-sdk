@@ -213,6 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -229,36 +230,12 @@ jobs:
       - name: Validate release tag and package versions
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release tag: $RELEASE_TAG" >&2
-            exit 1
-          fi
-
-          expected_version="${RELEASE_TAG#v}"
-          matching_package=false
-          for package_file in packages/embed/package.json packages/embed-react/package.json packages/react/package.json; do
-            package_version=$(node --input-type=module --eval \
-              "import manifest from './$package_file' with { type: 'json' }; console.log(manifest.version)")
-            if [[ ! "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-              echo "$package_file has an invalid version: $package_version" >&2
-              exit 1
-            fi
-            if [[ "$package_version" == "$expected_version" ]]; then
-              matching_package=true
-            fi
-          done
-          if [[ "$matching_package" != true ]]; then
-            echo "No publishable package matches release tag $RELEASE_TAG" >&2
-            exit 1
-          fi
+        run: node tools/release-plan.mjs "$RELEASE_TAG"
       - name: Install dependencies without restoring a cache
         run: pnpm install --frozen-lockfile
       - name: Re-run the complete release gate
         run: pnpm check
       - name: Publish packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --recursive --access public --no-git-checks
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node tools/publish-release.mjs "$RELEASE_TAG"

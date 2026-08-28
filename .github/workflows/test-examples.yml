@@ -44,6 +44,8 @@ jobs:
         with:
           persist-credentials: false
           repository: humeai/hume-api-examples
+          # Keep the dependency-build policy below coupled to a reviewed lockfile.
+          ref: 769ead8efc133da599cfe813f445b2019eabb6b2
           path: examples
 
       - name: Set up node
@@ -93,7 +95,14 @@ jobs:
 
       - name: Configure example dependency build policy
         working-directory: ./examples/evi/evi-next-js-app-router-quickstart
-        run: cp ../../../sdk/.github/test-examples/pnpm-workspace.yaml pnpm-workspace.yaml
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e pnpm-workspace.yaml ]]; then
+            echo "The pinned example now supplies pnpm-workspace.yaml; review and merge its policy instead of overwriting it." >&2
+            exit 1
+          fi
+          cp ../../../sdk/.github/test-examples/pnpm-workspace.yaml pnpm-workspace.yaml
 
       - name: Install example deps and use packed SDK
         working-directory: ./examples/evi/evi-next-js-app-router-quickstart

@@ -11,7 +11,10 @@ import {
 
 import type { AudioOutputMessage } from '../models/messages';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
-import { useSoundPlayer } from './useSoundPlayer';
+import {
+  useSoundPlayer,
+  useSoundPlayerForVoiceProvider,
+} from './useSoundPlayer';
 
 vi.mock('./convertFrequencyScale', () => ({
   convertLinearFrequenciesToBark: (data: Uint8Array) => Array.from(data),
@@ -1186,11 +1189,42 @@ describe('useSoundPlayer', () => {
     expect(disconnectGainNode).toHaveBeenCalledOnce();
   });
 
-  it('rejects context-scoped cleanup failures for provider aggregation', async () => {
+  it('reports public context-scoped cleanup failures through onError', async () => {
     const context = new AudioContext();
     const onError = vi.fn();
     const { result } = renderHook(() =>
       useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    fakePort.postMessage.mockImplementationOnce(() => {
+      throw new Error('worklet post failed');
+    });
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAllForContext(context);
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+
+    await expect(stopping).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('worklet post failed'),
+      'audio_player_closure_failure',
+    );
+  });
+
+  it('rejects internal context-scoped cleanup failures for provider aggregation', async () => {
+    const context = new AudioContext();
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
         enableAudioWorklet: true,
         onError,
         onPlayAudio: vi.fn(),

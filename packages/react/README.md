@@ -60,7 +60,7 @@ function Page() {
 }
 ```
 
-### Configuring [VoiceProvider](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx)
+### Configuring [VoiceProvider](https://github.com/hbmartin/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx)
 
 See a complete list of props accepted by `VoiceProvider` below:
 
@@ -75,7 +75,7 @@ web socket. Locally sent ToolResponse and ToolError messages are also emitted
 after they are successfully passed to the socket so they stay in sync with
 `messages` and `toolStatusStore`.
 
-#### `onToolCall?`: [ToolCallHandler](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L28)
+#### `onToolCall?`: [ToolCallHandler](https://github.com/hbmartin/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L28)
 
 (_Optional_) Callback function to invoke upon receiving a ToolCallMessage through the web socket. It will send the string returned as a the content of a ToolResponseMessage. This is where you should add logic that handles your custom tool calls.
 
@@ -105,9 +105,9 @@ after they are successfully passed to the socket so they stay in sync with
 
 #### `onClose?`: (event: [CloseEvent](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/core/websocket/events.ts#L20)) => void
 
-(_Optional_) Callback function invoked when the provider's current web socket
-connection closes. Delayed close events from superseded connection attempts are
-not published because the callback does not expose a connection identifier.
+(_Optional_) Callback function invoked when a web socket connection closes.
+Delayed close events from superseded connection attempts are still published,
+but they do not change the provider's current connection state.
 
 #### `clearMessagesOnDisconnect?`: boolean
 
@@ -327,11 +327,11 @@ selection may also require HTTPS and browser-granted media permission.
 Opens a socket connection to the voice API and initializes the microphone.
 The promise resolves after that attempt settles; inspect `status` and `error`
 to determine whether it connected successfully. A call made while another
-connection attempt with the same authentication credentials is still running
-joins that attempt without starting a second set of resources; later non-auth
-options are ignored. A concurrent call with different credentials rejects with
-`ConcurrentConnectAuthError` so a refreshed token is never silently discarded.
-Calling `connect()` while already connected is a no-op that resolves.
+connection attempt is still running joins that attempt without starting a
+second set of resources; all options from the later call are ignored. Calling
+`connect()` while already connected is a no-op that resolves. These no-op and
+joined calls do not reject, so `connect()` remains safe to use from event
+handlers without attaching a rejection handler.
 
 | Parameter | Type             | Description                           |
 | --------- | ---------------- | ------------------------------------- |
@@ -439,7 +439,7 @@ Describes whether the assistant audio is currently playing.
 
 Boolean that describes whether the assistant is paused. When paused, the assistant will still be listening, but will not send a response until it is resumed.
 
-#### `messages`: [UserTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserMessage.ts) | [AssistantTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/AssistantMessage.ts) | [ConnectionMessage](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/connection-message.ts) | [UserInterruptionMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserInterruption.ts) | [JSONErrorMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/WebSocketError.ts)
+#### `messages`: [UserTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserMessage.ts) | [AssistantTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/AssistantMessage.ts) | [ConnectionMessage](https://github.com/hbmartin/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/connection-message.ts) | [UserInterruptionMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserInterruption.ts) | [JSONErrorMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/WebSocketError.ts)
 
 Message history of the current conversation. By default, `messages` does not include interim user messages when `verboseTranscription` is set to true on the `VoiceProvider` (`verboseTranscription` is true by default). To access interim messages, you can define a custom `onMessage` callback on your `VoiceProvider`.
 
@@ -451,15 +451,15 @@ The last transcript message received from the assistant.
 
 The last transcript message received from the user.
 
-#### `readyState`: [VoiceReadyState](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L21)
+#### `readyState`: [VoiceReadyState](https://github.com/hbmartin/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L21)
 
 The current readyState of the websocket connection.
 
-#### `status`: [VoiceStatus](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx#L41)
+#### `status`: [VoiceStatus](https://github.com/hbmartin/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx#L41)
 
 The current status of the voice connection. Informs you of whether the voice is connected, disconnected, connecting, or error. If the voice is in an error state, it will automatically disconnect from the websocket and microphone.
 
-#### `error`: [VoiceError](https://github.com/HumeAI/empathic-voice-api-js/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx#L36)
+#### `error`: [VoiceError](https://github.com/hbmartin/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx#L36)
 
 Provides more detailed error information if the voice is in an error state.
 

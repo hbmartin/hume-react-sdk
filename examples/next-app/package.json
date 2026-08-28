@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
-    "typecheck": "tsc --noEmit -p .",
+    "typecheck": "next typegen && tsc --noEmit -p .",
     "typecheck:deps": "tsc --noEmit -p tsconfig.deps.json"
   },
   "dependencies": {

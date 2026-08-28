@@ -53,13 +53,19 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  * settles, so the attempt must be bounded rather than awaited directly.
  */
 const RESUME_TIMEOUT_MS = 1_000;
-export const useSoundPlayer = (props: {
+
+type UseSoundPlayerProps = {
   diagnostics?: VoiceDiagnosticsReporter;
   enableAudioWorklet: boolean;
   onError: (message: string, reason: AudioPlayerErrorReason) => void;
   onPlayAudio: (id: string) => void;
   onStopAudio: (id: string) => void;
-}) => {
+};
+
+const useSoundPlayerImplementation = (
+  props: UseSoundPlayerProps,
+  propagateContextStopFailures: boolean,
+) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [volume, setVolumeState] = useState<number>(1.0);
@@ -1006,8 +1012,11 @@ export const useSoundPlayer = (props: {
   );
 
   const stopAllForContext = useCallback(
-    (context: AudioContext) => stopAllTracked(context),
-    [stopAllTracked],
+    (context: AudioContext) =>
+      propagateContextStopFailures
+        ? stopAllTracked(context)
+        : stopAllAndReport(context),
+    [propagateContextStopFailures, stopAllAndReport, stopAllTracked],
   );
 
   const clearQueue = useCallback(() => {
@@ -1182,3 +1191,16 @@ export const useSoundPlayer = (props: {
     ],
   );
 };
+
+/** Stops player resources and reports teardown failures through `onError`. */
+export const useSoundPlayer = (props: {
+  diagnostics?: VoiceDiagnosticsReporter;
+  enableAudioWorklet: boolean;
+  onError: (message: string, reason: AudioPlayerErrorReason) => void;
+  onPlayAudio: (id: string) => void;
+  onStopAudio: (id: string) => void;
+}) => useSoundPlayerImplementation(props, false);
+
+/** @internal Strict player cleanup used for provider-level failure aggregation. */
+export const useSoundPlayerForVoiceProvider = (props: UseSoundPlayerProps) =>
+  useSoundPlayerImplementation(props, true);

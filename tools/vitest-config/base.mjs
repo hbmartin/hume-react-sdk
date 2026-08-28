@@ -3,7 +3,7 @@ const sharedVitestConfig = {
     // Load-bearing for React packages: React Testing Library registers its
     // automatic cleanup against the global `afterEach` hook at import time.
     globals: true,
-    environment: 'jsdom' as const,
+    environment: 'jsdom',
     watch: false,
     // Mock state does not leak between tests: call history is cleared and
     // implementations are restored before each test, so a mock declared at

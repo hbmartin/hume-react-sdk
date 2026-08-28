@@ -32,7 +32,7 @@ export const Voice = ({
           }
 
           const location: unknown = await fetch(
-            `https://geocode.maps.co/search?q=${String(args.data.location)}&api_key=${process.env['NEXT_PUBLIC_GEOCODE_API_KEY']}`,
+            `https://geocode.maps.co/search?q=${String(args.data.location)}&api_key=${process.env.NEXT_PUBLIC_GEOCODE_API_KEY}`,
           ).then((res) => res.json());
 
           const locationResults = z

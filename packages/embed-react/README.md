@@ -73,7 +73,7 @@ function App({ accessToken }: { accessToken: string }) {
 
 ### Component Props
 
-`EmbeddedVoice` accepts all props that are accepted by the VoiceProvider in the [@humeai/voice-react package](https://github.com/HumeAI/empathic-voice-api-js/blob/main/packages/react).
+`EmbeddedVoice` accepts all props that are accepted by the VoiceProvider in the [@humeai/voice-react package](https://github.com/hbmartin/hume-react-sdk/blob/main/packages/react).
 
 In addition, it accepts a few other props specific to creating a widget:
 

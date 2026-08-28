@@ -14,7 +14,7 @@ export * from './lib/useAudioDevices';
 export * from './lib/useCallDuration';
 export * from './lib/useMicrophoneStream';
 export * from './lib/useMicrophone';
-export * from './lib/useSoundPlayer';
+export { useSoundPlayer } from './lib/useSoundPlayer';
 export * from './lib/useVoiceClient';
 export * from './lib/VoiceProvider';
 export * from './lib/errors';

@@ -122,16 +122,16 @@ export const ExampleComponent = ({
     }
   };
 
+  const voiceHostname = process.env.NEXT_PUBLIC_HUME_VOICE_HOSTNAME;
   const connectArgs = {
     auth: {
       type: 'accessToken' as const,
       value: accessToken,
     },
     hostname:
-      process.env['NEXT_PUBLIC_HUME_VOICE_HOSTNAME'] === undefined ||
-      process.env['NEXT_PUBLIC_HUME_VOICE_HOSTNAME'] === ''
+      voiceHostname === undefined || voiceHostname === ''
         ? 'api.hume.ai'
-        : process.env['NEXT_PUBLIC_HUME_VOICE_HOSTNAME'],
+        : voiceHostname,
     ...(configId !== undefined && configId !== ''
       ? {
           configId,

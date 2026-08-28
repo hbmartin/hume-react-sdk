@@ -7,11 +7,12 @@
     "build:packages": "turbo build --filter='./packages/**'",
     "dev": "turbo dev",
     "dev:iframe": "turbo run dev --filter='./packages/**' --filter=example-vite-app-embed",
-    "lint": "oxlint --disable-nested-config --type-aware --deny-warnings --report-unused-disable-directives . && pnpm lint:contracts",
+    "lint": "pnpm build:packages && oxlint --disable-nested-config --type-aware --deny-warnings --report-unused-disable-directives . && pnpm lint:contracts",
     "lint:contracts": "node --test tools/lint-contract/config.test.mjs",
     "typecheck": "turbo typecheck",
     "typecheck:deps": "turbo typecheck:deps",
-    "test": "turbo test",
+    "test": "pnpm test:tools && turbo test",
+    "test:tools": "node --test tools/release-plan.test.mjs",
     "test-watch": "turbo test-watch",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
@@ -27,7 +28,7 @@
     "api-report:check": "pnpm build:packages && pnpm --recursive --filter='./packages/**' api-report:check",
     "api-report:update": "pnpm build:packages && pnpm --recursive --filter='./packages/**' api-report:update",
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm typecheck:deps && pnpm format:check && pnpm check:deps && pnpm check:docs && pnpm check:fallow && pnpm check:packages && pnpm api-report:check && pnpm test",
-    "release": "pnpm build:packages && pnpm check:packages && pnpm publish -r --access public --no-git-checks"
+    "release": "pnpm check && node tools/publish-release.mjs"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
@@ -41,13 +42,13 @@
     "oxlint-tsgolint": "7.0.2001",
     "publint": "0.3.24",
     "syncpack": "15.3.3",
-    "turbo": "^2.9.14"
+    "turbo": "^2.10.12"
   },
   "browserslist": [
     "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
   ],
   "engines": {
-    "node": ">=22.13",
+    "node": ">=22.18",
     "pnpm": "11.24.0"
   },
   "packageManager": "pnpm@11.24.0"
