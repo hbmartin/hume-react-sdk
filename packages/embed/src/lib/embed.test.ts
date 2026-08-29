@@ -8,7 +8,6 @@ afterEach(() => {
   for (const unmount of unmounts.splice(0)) {
     unmount();
   }
-  vi.restoreAllMocks();
 });
 
 const createMountedEmbed = (options?: {
@@ -95,6 +94,36 @@ describe('EmbeddedVoice', () => {
     expect(getPostedActionTypes(postMessage.mock.calls as unknown[][])).toEqual(
       ['update_config', 'send_window_size'],
     );
+  });
+
+  it('waits for fresh readiness after remounting the same instance', () => {
+    const { embeddedVoice, iframe } = createMountedEmbed();
+    dispatchReady(iframe);
+    const firstUnmount = unmounts.at(-1);
+    firstUnmount?.();
+
+    unmounts.push(embeddedVoice.mount());
+    const remountedIframe = document.querySelector<HTMLIFrameElement>(
+      '#hume-embedded-voice',
+    );
+    if (!remountedIframe?.contentWindow) {
+      throw new Error('Remounted embed did not create an iframe window.');
+    }
+    const remountedPostMessage = vi
+      .spyOn(remountedIframe.contentWindow, 'postMessage')
+      .mockImplementation(() => undefined);
+
+    embeddedVoice.openEmbed();
+    expect(remountedPostMessage).not.toHaveBeenCalled();
+
+    dispatchReady(remountedIframe);
+    expect(
+      getPostedActionTypes(remountedPostMessage.mock.calls as unknown[][]),
+    ).toEqual([
+      'update_config',
+      'send_window_size',
+      'expand_widget_from_client',
+    ]);
   });
 
   it('resolves relative renderer URLs through the iframe', () => {

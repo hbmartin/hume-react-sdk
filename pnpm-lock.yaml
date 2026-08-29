@@ -5,9 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  js-yaml@4: 4.3.1
-  rollup: 4.63.1
-  vite: 6.4.3
+  js-yaml@>=4.0.0 <4.3.1: 4.3.1
+  rollup@>=4.0.0 <4.63.1: 4.63.1
+  vite@>=5.0.0 <6.4.3: 6.4.3
 
 pnpmfileChecksum: sha256-C2q0iyLJSGSh9A4ldqVDN3GHLzsEs9XAKYMS3dp7Up0=
 
@@ -142,7 +142,7 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
       vite:
-        specifier: 6.4.3
+        specifier: ^6.4.3
         version: 6.4.3(@types/node@22.20.1)(jiti@1.21.6)(terser@5.43.1)(yaml@2.9.0)
 
   examples/vite-app-embed:
@@ -176,7 +176,7 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
       vite:
-        specifier: 6.4.3
+        specifier: ^6.4.3
         version: 6.4.3(@types/node@22.20.1)(jiti@1.21.6)(terser@5.43.1)(yaml@2.9.0)
 
   packages/embed:

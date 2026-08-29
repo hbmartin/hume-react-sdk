@@ -825,7 +825,7 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
-  it('publishes a delayed consumer close without mutating a superseded connection', async () => {
+  it('suppresses a delayed consumer close from a superseded connection', async () => {
     const secondStream = createDeferred<MediaStream>();
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -857,9 +857,7 @@ describe('VoiceProvider close lifecycle', () => {
     act(() => {
       void firstConnectionClose?.({ code: 1000 } as CloseEvent, true);
     });
-    expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 1000 }),
-    );
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.clearMessageStore).toHaveBeenCalledTimes(messageClearCount);
     expect(result.current.status.value).toBe('connecting');
 
@@ -982,7 +980,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.stopStream).toHaveBeenCalledOnce();
   });
 
-  it('publishes a delayed socket close after clientConnect rejects', async () => {
+  it('suppresses a delayed socket close after clientConnect rejects', async () => {
     mocks.clientConnect.mockRejectedValueOnce(new Error('connect failed'));
     const onClose = vi.fn();
     const { result } = renderHook(() => useVoice(), {
@@ -1004,9 +1002,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 1006 }),
-    );
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledTimes(cleanupCalls);
     expect(result.current.status.value).toBe('disconnected');
   });
@@ -1037,9 +1033,7 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
 
-    expect(onClose).toHaveBeenCalledWith(
-      expect.objectContaining({ code: 1006 }),
-    );
+    expect(onClose).not.toHaveBeenCalled();
     expect(mocks.stopStream).toHaveBeenCalledOnce();
     expect(mocks.waitForDrain).not.toHaveBeenCalled();
 

@@ -1286,16 +1286,14 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           currentConnectionGeneration === null ||
           connectionGeneration !== currentConnectionGeneration
         ) {
-          // Preserve the public callback contract without allowing a stale
-          // socket to mutate the provider's current connection lifecycle.
-          publishCloseCallback();
+          // A superseded socket cannot publish lifecycle callbacks for the
+          // provider's current connection.
           return;
         }
         currentConnectionGenerationRef.current = null;
 
         if (!isCurrentLifecycleGeneration(connectionGeneration)) {
           if (isConnectingRef.current) {
-            publishCloseCallback();
             return;
           }
           publishDisconnectMessage();

@@ -35,8 +35,15 @@ function transformReadmeLine(line, state) {
     return line;
   }
   if (line.trimStart().startsWith('<')) return line;
-  if (!/[A-Za-z0-9_.)\]]</u.test(removeInlineCode(line))) return line;
-  return escapeAnglesOutsideInlineCode(line);
+  const inlineCodeSegments = getInlineCodeSegments(line);
+  if (
+    !inlineCodeSegments.some(
+      (segment) => !segment.code && /[A-Za-z0-9_.)\]]</u.test(segment.value),
+    )
+  ) {
+    return line;
+  }
+  return escapeAnglesOutsideInlineCode(inlineCodeSegments);
 }
 
 /**
@@ -68,7 +75,10 @@ function isClosingFence(activeFence, candidate) {
  * @param {string} line
  */
 function getCodeFence(line) {
-  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+  // Accept arbitrary indentation because this line-oriented sanitizer does not
+  // parse the surrounding list container that makes a four-space-indented
+  // fence valid CommonMark.
+  const match = /^[\t ]*(`{3,}|~{3,})(.*)$/u.exec(line);
   if (match === null) return null;
 
   const marker = /** @type {string} */ (match[1]);
@@ -99,6 +109,7 @@ function getInlineCodeSegments(line) {
     while (line[openingEnd] === '`') openingEnd += 1;
     const delimiterLength = openingEnd - openingStart;
     let closingStart = openingEnd;
+    let matchedClosingDelimiter = false;
 
     while (closingStart < line.length) {
       closingStart = line.indexOf('`', closingStart);
@@ -119,12 +130,18 @@ function getInlineCodeSegments(line) {
         });
         cursor = closingEnd;
         textStart = closingEnd;
+        matchedClosingDelimiter = true;
         break;
       }
       closingStart = closingEnd;
     }
 
-    if (closingStart === -1) break;
+    if (!matchedClosingDelimiter) {
+      // The opening run is ordinary text when no equal-length closing run
+      // exists. Advance past it so an unmatched delimiter at end-of-line (or
+      // after a differently sized run) cannot stall the outer scan.
+      cursor = openingEnd;
+    }
   }
 
   if (textStart < line.length) {
@@ -134,17 +151,9 @@ function getInlineCodeSegments(line) {
   return segments;
 }
 
-/** @param {string} line */
-function removeInlineCode(line) {
-  return getInlineCodeSegments(line)
-    .filter((segment) => !segment.code)
-    .map((segment) => segment.value)
-    .join('');
-}
-
-/** @param {string} line */
-function escapeAnglesOutsideInlineCode(line) {
-  return getInlineCodeSegments(line)
+/** @param {{ code: boolean, value: string }[]} segments */
+function escapeAnglesOutsideInlineCode(segments) {
+  return segments
     .map((segment) =>
       segment.code
         ? segment.value

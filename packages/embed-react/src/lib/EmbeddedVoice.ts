@@ -4,7 +4,7 @@ import {
   type EmbeddedVoiceConfig,
   type TranscriptMessageHandler,
 } from '@humeai/voice-embed';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
   NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
@@ -13,11 +13,24 @@ export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
     /**
      * Opens the widget when true. Changing this to false cancels an open that
      * is still waiting for iframe readiness, but does not collapse an open
-     * widget.
+     * widget. Keep this controlled state synchronized by setting it to false
+     * from `onClose` when the user collapses the widget.
      */
     isEmbedOpen: boolean;
     openOnMount?: boolean;
   };
+
+const getConfigSignature = (config: EmbeddedVoiceConfig): string =>
+  JSON.stringify(config, (_key, value: unknown) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return value;
+    }
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+  });
 
 export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const {
@@ -31,8 +44,10 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const previousIsEmbedOpen = useRef(isEmbedOpen);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
-  const initialConfig = useRef(config);
   const initialOpenOnMount = useRef(openOnMount);
+  const configSignature = getConfigSignature(config);
+  // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares the serializable embed configuration
+  const stableConfig = useMemo(() => config, [configSignature]);
 
   useEffect(() => {
     onMessageHandler.current = onMessage;
@@ -48,7 +63,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
         onCloseHandler.current?.();
       },
       openOnMount: initialOpenOnMount.current,
-      ...initialConfig.current,
+      ...stableConfig,
     });
     const unmount = embeddedVoice.current.mount();
 
@@ -56,7 +71,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
       unmount();
       embeddedVoice.current = null;
     };
-  }, []);
+  }, [stableConfig]);
 
   useEffect(() => {
     const wasEmbedOpen = previousIsEmbedOpen.current;
@@ -66,7 +81,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     } else if (wasEmbedOpen) {
       embeddedVoice.current?.cancelPendingOpen();
     }
-  }, [isEmbedOpen]);
+  }, [isEmbedOpen, stableConfig]);
 
   return null;
 };

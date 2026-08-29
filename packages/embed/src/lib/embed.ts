@@ -77,6 +77,9 @@ export class EmbeddedVoice {
   }
 
   mount(container?: HTMLElement) {
+    // Reattaching an iframe creates a fresh renderer lifecycle, even when the
+    // same element and EmbeddedVoice instance are reused.
+    this.isReady = false;
     const messageHandler = (event: MessageEvent<unknown>) => {
       this.messageHandler(event);
     };
@@ -99,6 +102,7 @@ export class EmbeddedVoice {
     }
 
     const unmount = () => {
+      this.isReady = false;
       try {
         window.removeEventListener('message', messageHandler);
         window.removeEventListener('resize', resizeHandler);
