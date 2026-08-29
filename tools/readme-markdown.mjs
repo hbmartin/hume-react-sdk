@@ -32,8 +32,10 @@ export function makeReadmeVitePressSafe(readme) {
   const state = {
     /** @type {{ character: '`' | '~', length: number } | null} */
     codeFence: null,
+    /** @type {number | null} */
+    listContinuationIndent: null,
   };
-  return rewriteSiblingDocumentLinks(readme)
+  return readme
     .replaceAll('\r\n', '\n')
     .split('\n')
     .map((line) => transformReadmeLine(line, state))
@@ -42,11 +44,17 @@ export function makeReadmeVitePressSafe(readme) {
 
 /**
  * @param {string} line
- * @param {{ codeFence: { character: '`' | '~', length: number } | null }} state
+ * @param {{ codeFence: { character: '`' | '~', length: number } | null, listContinuationIndent: number | null }} state
  */
 // fallow-ignore-next-line complexity -- explicit branches model CommonMark fence state and escaping
 function transformReadmeLine(line, state) {
-  const fence = getCodeFence(line);
+  const listItemContentStart =
+    state.codeFence === null ? updateListContainer(line, state) : null;
+  const fence = getCodeFence(
+    line,
+    state.listContinuationIndent,
+    listItemContentStart,
+  );
   if (isOpeningFence(state.codeFence, fence)) {
     state.codeFence = {
       character: fence.character,
@@ -60,14 +68,57 @@ function transformReadmeLine(line, state) {
   }
   if (line.trimStart().startsWith('<')) return line;
   const inlineCodeSegments = getInlineCodeSegments(line);
+  const rewrittenSegments = inlineCodeSegments.map((segment) =>
+    segment.code
+      ? segment
+      : { ...segment, value: rewriteSiblingDocumentLinks(segment.value) },
+  );
   if (
-    !inlineCodeSegments.some(
+    !rewrittenSegments.some(
       (segment) => !segment.code && /[A-Za-z0-9_.)\]]</u.test(segment.value),
     )
   ) {
-    return line;
+    return rewrittenSegments.map((segment) => segment.value).join('');
   }
-  return escapeAnglesOutsideInlineCode(inlineCodeSegments);
+  return escapeAnglesOutsideInlineCode(rewrittenSegments);
+}
+
+/**
+ * Tracks the indentation that belongs to the current list item. CommonMark
+ * measures fence indentation inside the list container, so a marker indented
+ * four spaces may be a valid fence after a three-space ordered-list prefix,
+ * while the same marker at the document root is an indented code block.
+ *
+ * @param {string} line
+ * @param {{ listContinuationIndent: number | null }} state
+ * @returns {number | null}
+ */
+function updateListContainer(line, state) {
+  const listItem = /^( *)(?:[-+*]|\d{1,9}[.)])([ \t]+)/u.exec(line);
+  const listItemIndent = listItem?.[1].length;
+  const isDocumentListItem =
+    listItemIndent !== undefined && listItemIndent <= 3;
+  const isNestedListItem =
+    listItemIndent !== undefined &&
+    state.listContinuationIndent !== null &&
+    listItemIndent >= state.listContinuationIndent &&
+    listItemIndent - state.listContinuationIndent <= 3;
+  if (listItem !== null && (isDocumentListItem || isNestedListItem)) {
+    const contentStart = listItem[0].length;
+    state.listContinuationIndent = contentStart;
+    return contentStart;
+  }
+
+  if (line.trim().length === 0) return null;
+  const leadingSpaces = /^( *)/u.exec(line)?.[0].length ?? 0;
+  if (
+    state.listContinuationIndent !== null &&
+    leadingSpaces >= state.listContinuationIndent
+  ) {
+    return null;
+  }
+  state.listContinuationIndent = null;
+  return null;
 }
 
 /**
@@ -97,12 +148,22 @@ function isClosingFence(activeFence, candidate) {
  * info strings cannot themselves contain a backtick.
  *
  * @param {string} line
+ * @param {number | null} listContinuationIndent
+ * @param {number | null} listItemContentStart
  */
-function getCodeFence(line) {
-  // Accept arbitrary indentation because this line-oriented sanitizer does not
-  // parse the surrounding list container that makes a four-space-indented
-  // fence valid CommonMark.
-  const match = /^[\t ]*(`{3,}|~{3,})(.*)$/u.exec(line);
+function getCodeFence(line, listContinuationIndent, listItemContentStart) {
+  const leadingSpaces = /^( *)/u.exec(line)?.[0].length ?? 0;
+  let candidate = line;
+  if (listItemContentStart !== null) {
+    candidate = line.slice(listItemContentStart);
+  } else if (
+    listContinuationIndent !== null &&
+    leadingSpaces >= listContinuationIndent
+  ) {
+    candidate = line.slice(listContinuationIndent);
+  }
+
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(candidate);
   if (match === null) return null;
 
   const marker = /** @type {string} */ (match[1]);

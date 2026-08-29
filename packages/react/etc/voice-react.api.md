@@ -509,51 +509,51 @@ export const useVoiceClient: (props: {
 };
 
 // @public
-export interface VoiceAudioDeviceState {
-    activeInputDeviceId: string | null;
-    activeOutputDeviceId: string | null;
+export type VoiceAudioDeviceState = {
     requestedInputDeviceId: string | null;
+    activeInputDeviceId: string | null;
     requestedOutputDeviceId: string | null;
-}
+    activeOutputDeviceId: string | null;
+};
 
 // @public
-export interface VoiceContextType extends VoiceAudioDeviceState {
-    chatMetadata: ChatMetadataMessage | null;
-    clearMessages: () => void;
+export type VoiceContextType = VoiceAudioDeviceState & {
     connect: (options: ConnectOptions) => Promise<void>;
     disconnect: () => Promise<void>;
-    error: VoiceError | null;
-    isAudioError: boolean;
-    isAudioMuted: boolean;
-    isError: boolean;
-    isMicrophoneError: boolean;
+    setInputDevice: (deviceId: string | null) => Promise<void>;
+    setOutputDevice: (deviceId: string | null) => Promise<void>;
     isMuted: boolean;
-    isPaused: boolean;
+    isAudioMuted: boolean;
     isPlaying: boolean;
-    isSocketError: boolean;
-    lastAssistantProsodyMessage: AssistantProsodyMessage | null;
-    lastUserMessage: UserTranscriptMessage | null;
-    lastVoiceMessage: AssistantTranscriptMessage | null;
     messages: (JSONMessage | ConnectionMessage)[];
+    lastVoiceMessage: AssistantTranscriptMessage | null;
+    lastUserMessage: UserTranscriptMessage | null;
+    lastAssistantProsodyMessage: AssistantProsodyMessage | null;
+    clearMessages: () => void;
     mute: () => void;
+    unmute: () => void;
     muteAudio: () => void;
-    pauseAssistant: () => void;
-    playerQueueLength: number;
+    unmuteAudio: () => void;
     readyState: VoiceReadyState;
-    resumeAssistant: () => void;
+    sendUserInput: (text: string) => void;
     sendAssistantInput: (text: string) => void;
     sendSessionSettings: (sessionSettings: SessionSettingsUpdate) => void;
     sendToolMessage: (type: Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage) => void;
-    sendUserInput: (text: string) => void;
-    setInputDevice: (deviceId: string | null) => Promise<void>;
-    setOutputDevice: (deviceId: string | null) => Promise<void>;
-    setVolume: (level: number) => void;
+    pauseAssistant: () => void;
+    resumeAssistant: () => void;
     status: VoiceStatus;
+    error: VoiceError | null;
+    isAudioError: boolean;
+    isError: boolean;
+    isMicrophoneError: boolean;
+    isSocketError: boolean;
     toolStatusStore: ToolStatusStore;
-    unmute: () => void;
-    unmuteAudio: () => void;
+    chatMetadata: ChatMetadataMessage | null;
+    playerQueueLength: number;
+    isPaused: boolean;
     volume: number;
-}
+    setVolume: (level: number) => void;
+};
 
 // @public
 export type VoiceDiagnosticCategory = 'connection' | 'socket' | 'microphone' | 'audio_player' | 'audio_device' | 'message' | 'tool' | 'consumer';
@@ -628,23 +628,23 @@ export interface VoiceLogger {
 export const VoiceProvider: FC<VoiceProviderProps>;
 
 // @public
-export interface VoiceProviderProps extends PropsWithChildren {
-    clearMessagesOnDisconnect?: boolean;
-    diagnostics?: false | VoiceDiagnosticsOptions;
-    enableAudioWorklet?: boolean;
-    messageHistoryLimit?: number;
-    onAudioEnd?: (clipId: string) => void;
+export type VoiceProviderProps = PropsWithChildren<{
+    onMessage?: (message: JSONMessage) => void;
+    onError?: (err: VoiceError) => void;
+    onOpen?: () => void;
+    onClose?: Hume.empathicVoice.chat.ChatSocket.EventHandlers['close'];
+    onToolCall?: ToolCallHandler;
     onAudioReceived?: (audioOutputMessage: AudioOutputMessage) => void;
     onAudioStart?: (clipId: string) => void;
-    onClose?: Hume.empathicVoice.chat.ChatSocket.EventHandlers['close'];
-    onError?: (err: VoiceError) => void;
-    onInterruption?: (message: UserInterruptionMessage) => void;
-    onMessage?: (message: JSONMessage) => void;
-    onOpen?: () => void;
+    onAudioEnd?: (clipId: string) => void;
     onStartRecording?: () => void;
     onStopRecording?: () => void;
-    onToolCall?: ToolCallHandler;
-}
+    onInterruption?: (message: UserInterruptionMessage) => void;
+    clearMessagesOnDisconnect?: boolean;
+    messageHistoryLimit?: number;
+    enableAudioWorklet?: boolean;
+    diagnostics?: false | VoiceDiagnosticsOptions;
+}>;
 
 // @public
 export enum VoiceReadyState {

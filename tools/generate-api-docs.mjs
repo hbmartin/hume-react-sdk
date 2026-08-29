@@ -19,6 +19,7 @@ const apiModelDirectory = join(generatedRoot, 'api-model');
 const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
 const packageGuideDirectory = join(repositoryRoot, 'docs', 'packages');
 const guideDirectory = join(repositoryRoot, 'docs', 'guide');
+const migrationGuidePath = join(guideDirectory, 'migration.md');
 
 const packages = [
   {
@@ -115,7 +116,7 @@ async function writeMigrationGuide() {
   ].join('\n');
 
   await writeFile(
-    join(guideDirectory, 'migration.md'),
+    migrationGuidePath,
     `${frontmatter}${makeReadmeVitePressSafe(migration)}`,
   );
 }
@@ -148,6 +149,7 @@ async function writePackageGuides() {
 
 await rm(generatedRoot, { force: true, recursive: true });
 await rm(packageGuideDirectory, { force: true, recursive: true });
+await rm(migrationGuidePath, { force: true });
 await mkdir(apiModelDirectory, { recursive: true });
 await writePackageGuides();
 await writeMigrationGuide();

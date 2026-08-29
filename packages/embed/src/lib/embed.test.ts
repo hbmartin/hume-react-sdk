@@ -96,6 +96,33 @@ describe('EmbeddedVoice', () => {
     );
   });
 
+  it('does not cancel the configured open-on-mount behavior', () => {
+    const { embeddedVoice, iframe, postMessage } = createMountedEmbed({
+      openOnMount: true,
+    });
+
+    embeddedVoice.openEmbed();
+    embeddedVoice.cancelPendingOpen();
+    dispatchReady(iframe);
+
+    expect(getPostedActionTypes(postMessage.mock.calls as unknown[][])).toEqual(
+      ['update_config', 'send_window_size', 'expand_widget_from_client'],
+    );
+  });
+
+  it('rejects a second mount until the first mount is unmounted', () => {
+    const { embeddedVoice, iframe, postMessage } = createMountedEmbed();
+
+    expect(() => embeddedVoice.mount()).toThrow(
+      'EmbeddedVoice is already mounted.',
+    );
+    dispatchReady(iframe);
+
+    expect(getPostedActionTypes(postMessage.mock.calls as unknown[][])).toEqual(
+      ['update_config', 'send_window_size'],
+    );
+  });
+
   it('waits for fresh readiness after remounting the same instance', () => {
     const { embeddedVoice, iframe } = createMountedEmbed();
     dispatchReady(iframe);
@@ -115,6 +142,38 @@ describe('EmbeddedVoice', () => {
 
     embeddedVoice.openEmbed();
     expect(remountedPostMessage).not.toHaveBeenCalled();
+
+    dispatchReady(remountedIframe);
+    expect(
+      getPostedActionTypes(remountedPostMessage.mock.calls as unknown[][]),
+    ).toEqual([
+      'update_config',
+      'send_window_size',
+      'expand_widget_from_client',
+    ]);
+  });
+
+  it('opens on every mount when openOnMount is configured', () => {
+    const { embeddedVoice, iframe, postMessage } = createMountedEmbed({
+      openOnMount: true,
+    });
+    dispatchReady(iframe);
+    expect(getPostedActionTypes(postMessage.mock.calls as unknown[][])).toEqual(
+      ['update_config', 'send_window_size', 'expand_widget_from_client'],
+    );
+
+    const firstUnmount = unmounts.at(-1);
+    firstUnmount?.();
+    unmounts.push(embeddedVoice.mount());
+    const remountedIframe = document.querySelector<HTMLIFrameElement>(
+      '#hume-embedded-voice',
+    );
+    if (!remountedIframe?.contentWindow) {
+      throw new Error('Remounted embed did not create an iframe window.');
+    }
+    const remountedPostMessage = vi
+      .spyOn(remountedIframe.contentWindow, 'postMessage')
+      .mockImplementation(() => undefined);
 
     dispatchReady(remountedIframe);
     expect(

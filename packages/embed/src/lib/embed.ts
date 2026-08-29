@@ -64,7 +64,9 @@ export class EmbeddedVoice {
 
   private isReady: boolean = false;
 
-  private shouldOpenWhenReady: boolean;
+  private readonly openOnMount: boolean;
+
+  private shouldOpenWhenReady: boolean = false;
 
   private constructor({
     onMessage = () => {},
@@ -80,7 +82,7 @@ export class EmbeddedVoice {
     this.iframe = this.createIframe(config);
     this.onMessage = onMessage;
     this.onClose = onClose;
-    this.shouldOpenWhenReady = openOnMount ?? false;
+    this.openOnMount = openOnMount ?? false;
     this.messageHandler = this.messageHandler.bind(this);
   }
 
@@ -117,8 +119,13 @@ export class EmbeddedVoice {
    * @param container - Element to mount into. When omitted, a fixed-position
    * container is appended to `document.body` and removed again on unmount.
    * @returns A function that unmounts the widget and removes its listeners.
+   * @throws If this instance is already mounted.
    */
   mount(container?: HTMLElement) {
+    if (this.isMounted) {
+      throw new Error('EmbeddedVoice is already mounted.');
+    }
+
     // Reattaching an iframe creates a fresh renderer lifecycle, even when the
     // same element and EmbeddedVoice instance are reused.
     this.isReady = false;
@@ -140,10 +147,23 @@ export class EmbeddedVoice {
       el.appendChild(this.iframe);
       this.isMounted = true;
     } catch {
+      window.removeEventListener('message', messageHandler);
+      window.removeEventListener('resize', resizeHandler);
+      if (!container) {
+        el.remove();
+      }
+      if (this.managedContainer === el) {
+        this.managedContainer = null;
+      }
       this.isMounted = false;
     }
 
+    let isActive = this.isMounted;
     const unmount = () => {
+      if (!isActive) {
+        return;
+      }
+      isActive = false;
       this.isReady = false;
       try {
         window.removeEventListener('message', messageHandler);
@@ -156,6 +176,9 @@ export class EmbeddedVoice {
 
       if (!container) {
         el.remove();
+      }
+      if (this.managedContainer === el) {
+        this.managedContainer = null;
       }
     };
 
@@ -233,7 +256,7 @@ export class EmbeddedVoice {
         this.showIframe();
         this.sendConfigObject();
         this.sendWindowSize();
-        if (this.shouldOpenWhenReady) {
+        if (this.openOnMount || this.shouldOpenWhenReady) {
           this.openEmbed();
         }
         break;
@@ -260,9 +283,9 @@ export class EmbeddedVoice {
   /**
    * Opens the widget.
    *
-   * Called before the iframe signals readiness, the request is deferred and
-   * applied as soon as the widget is ready; {@link
-   * EmbeddedVoice.cancelPendingOpen} withdraws a deferred request.
+   * When called before the iframe signals readiness, the request is deferred
+   * and applied as soon as the widget is ready. {@link
+   * EmbeddedVoice.cancelPendingOpen} withdraws an imperative deferred request.
    */
   openEmbed() {
     if (!this.isReady) {
@@ -277,7 +300,10 @@ export class EmbeddedVoice {
     this.sendMessageToFrame(action);
   }
 
-  /** Cancels an open request that is waiting for iframe readiness. */
+  /**
+   * Cancels an imperative open request that is waiting for iframe readiness.
+   * This does not disable the configured `openOnMount` behavior.
+   */
   cancelPendingOpen() {
     if (!this.isReady) {
       this.shouldOpenWhenReady = false;

@@ -26,6 +26,8 @@
     "directory": "packages/react"
   },
   "files": [
+    "LICENSE",
+    "MIGRATION.md",
     "package.json",
     "dist"
   ],

@@ -72,6 +72,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     ...config
   } = props;
   const embeddedVoice = useRef<EA | null>(null);
+  const controlledOpenInstance = useRef<EA | null>(null);
   const previousIsEmbedOpen = useRef(isEmbedOpen);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
@@ -79,6 +80,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const configSignature = getConfigSignature(config);
   // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares the serializable embed configuration
   const stableConfig = useMemo(() => config, [configSignature]);
+  const initialStableConfig = useRef(stableConfig);
 
   useEffect(() => {
     onMessageHandler.current = onMessage;
@@ -86,21 +88,30 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   }, [onClose, onMessage]);
 
   useEffect(() => {
-    embeddedVoice.current = EA.create({
+    const instance = EA.create({
       onMessage: (message) => {
         onMessageHandler.current?.(message);
       },
       onClose: () => {
         onCloseHandler.current?.();
       },
-      openOnMount: initialOpenOnMount.current,
+      openOnMount:
+        stableConfig === initialStableConfig.current
+          ? initialOpenOnMount.current
+          : false,
       ...stableConfig,
     });
-    const unmount = embeddedVoice.current.mount();
+    embeddedVoice.current = instance;
+    const unmount = instance.mount();
 
     return () => {
       unmount();
-      embeddedVoice.current = null;
+      if (embeddedVoice.current === instance) {
+        embeddedVoice.current = null;
+      }
+      if (controlledOpenInstance.current === instance) {
+        controlledOpenInstance.current = null;
+      }
     };
   }, [stableConfig]);
 
@@ -108,9 +119,12 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     const wasEmbedOpen = previousIsEmbedOpen.current;
     previousIsEmbedOpen.current = isEmbedOpen;
     if (isEmbedOpen) {
-      embeddedVoice.current?.openEmbed();
+      const instance = embeddedVoice.current;
+      instance?.openEmbed();
+      controlledOpenInstance.current = instance;
     } else if (wasEmbedOpen) {
-      embeddedVoice.current?.cancelPendingOpen();
+      controlledOpenInstance.current?.cancelPendingOpen();
+      controlledOpenInstance.current = null;
     }
   }, [isEmbedOpen, stableConfig]);
 

@@ -329,7 +329,7 @@ const enqueueDeviceSwitch = <T,>({
 };
 
 /** Requested and active audio devices for the current voice connection. */
-export interface VoiceAudioDeviceState {
+export type VoiceAudioDeviceState = {
   /** Requested microphone device ID, or `null` for the browser default. */
   requestedInputDeviceId: string | null;
   /** Microphone device ID actually granted by the browser. */
@@ -338,7 +338,7 @@ export interface VoiceAudioDeviceState {
   requestedOutputDeviceId: string | null;
   /** Speaker device ID currently used for assistant audio. */
   activeOutputDeviceId: string | null;
-}
+};
 
 const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
   requestedInputDeviceId: null,
@@ -353,7 +353,7 @@ const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
  * High-frequency FFT and call-duration values are available through the
  * granular subscription hooks instead of this context.
  */
-export interface VoiceContextType extends VoiceAudioDeviceState {
+export type VoiceContextType = VoiceAudioDeviceState & {
   /**
    * Opens a voice connection and initializes its microphone and audio player.
    *
@@ -496,12 +496,12 @@ export interface VoiceContextType extends VoiceAudioDeviceState {
    * @param level - Desired level; values are clamped to the range `0` to `1`.
    */
   setVolume: (level: number) => void;
-}
+};
 
 const VoiceContext = createContext<VoiceContextType | null>(null);
 
 /** Configuration and lifecycle callbacks accepted by {@link VoiceProvider}. */
-export interface VoiceProviderProps extends PropsWithChildren {
+export type VoiceProviderProps = PropsWithChildren<{
   /**
    * Called for every message received over the socket.
    *
@@ -573,7 +573,7 @@ export interface VoiceProviderProps extends PropsWithChildren {
    * errors are written to the browser console. Pass `false` to disable them.
    */
   diagnostics?: false | VoiceDiagnosticsOptions;
-}
+}>;
 
 /**
  * Returns voice state and controls from the nearest {@link VoiceProvider}.
