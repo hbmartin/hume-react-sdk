@@ -50,11 +50,21 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 /** A transcript of what the user said. */
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
-/** @internal */
+/**
+ * Runtime schema for a transcript time range.
+ *
+ * @deprecated Prefer the timestamp fields exposed by the transcript message
+ * types.
+ */
 export const TimeSliceSchema = z.object({
   begin: z.number(),
   end: z.number(),
 });
 
-/** @internal */
+/**
+ * Start and end offsets for a transcript segment.
+ *
+ * @deprecated Prefer the timestamp fields exposed by the transcript message
+ * types.
+ */
 export type TimeSlice = z.infer<typeof TimeSliceSchema>;

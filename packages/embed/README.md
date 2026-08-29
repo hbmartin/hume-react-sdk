@@ -88,10 +88,8 @@ within a client component. For more information checkout the
 
 ### Configuration options
 
-`EmbeddedVoice.create()` accepts the same authentication and session options as
-the `VoiceProvider` in the
-[@humeai/voice-react package](https://github.com/HumeAI/hume-react-sdk/blob/main/packages/react),
-plus these widget-specific options:
+`EmbeddedVoice.create()` accepts Hume authentication and session options through
+`EmbeddedVoiceConfig`, plus these widget-specific options:
 
 | Option        | Required | Description                                                                                                                                                                                          |
 | ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -109,8 +107,8 @@ own UI, which invokes `onClose`.
 
 ### API reference
 
-Full generated signatures for every export live in the
-[SDK API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-embed).
+The complete public signatures and TSDoc live in the
+[`@humeai/voice-embed` source](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed/src).
 
 ## Support
 

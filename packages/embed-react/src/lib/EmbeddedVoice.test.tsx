@@ -1,4 +1,5 @@
 import { act, render } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EmbeddedVoice } from './EmbeddedVoice';
@@ -119,6 +120,71 @@ describe('EmbeddedVoice', () => {
 
     expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
     expect(embeddedVoiceMocks.openEmbed).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reapply openOnMount when configuration recreates the embed', () => {
+    const { rerender } = render(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'first-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'latest-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+
+    expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
+    expect(embeddedVoiceMocks.create.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ openOnMount: true }),
+    );
+    expect(embeddedVoiceMocks.create.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ openOnMount: false }),
+    );
+  });
+
+  it('preserves openOnMount through Strict Mode effect replay', () => {
+    render(
+      <StrictMode>
+        <EmbeddedVoice
+          auth={{ type: 'accessToken', value: 'token' }}
+          isEmbedOpen={false}
+          openOnMount={true}
+        />
+      </StrictMode>,
+    );
+
+    expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
+    expect(embeddedVoiceMocks.create.mock.calls).toEqual([
+      [expect.objectContaining({ openOnMount: true })],
+      [expect.objectContaining({ openOnMount: true })],
+    ]);
+  });
+
+  it('does not cancel openOnMount on a replacement embed', () => {
+    const { rerender } = render(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'first-token' }}
+        isEmbedOpen={true}
+        openOnMount={true}
+      />,
+    );
+
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'latest-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+
+    expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
+    expect(embeddedVoiceMocks.cancelPendingOpen).not.toHaveBeenCalled();
   });
 
   it('does not recreate for semantically unchanged configuration objects', () => {

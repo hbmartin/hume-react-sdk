@@ -26,27 +26,27 @@ export type AssistantProsodyMessage = WithReceivedAt<AssistantProsody>;
 export type AssistantTranscriptMessage = WithReceivedAt<AssistantMessage>;
 
 // @public
-export type AudioConstraints = {
+export interface AudioConstraints {
+    autoGainControl?: boolean;
     echoCancellation?: boolean;
     noiseSuppression?: boolean;
-    autoGainControl?: boolean;
-};
+}
 
 // @public
-export type AudioDevice = {
+export interface AudioDevice {
     deviceId: string;
-    label: string;
     kind: AudioDeviceKind;
-};
+    label: string;
+}
 
 // @public
 export type AudioDeviceKind = 'audioinput' | 'audiooutput';
 
 // @public
-export type AudioDevices = {
+export interface AudioDevices {
     inputDevices: AudioDevice[];
     outputDevices: AudioDevice[];
-};
+}
 
 // @public
 export class AudioDeviceSwitchError extends Error {
@@ -86,9 +86,7 @@ export type AudioPlayerErrorReason = 'audio_player_initialization_failure' | 'au
 // @public
 export type AuthStrategy = z.infer<typeof AuthStrategySchema>;
 
-// Warning: (ae-internal-missing-underscore) The name "CallDurationStore" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export class CallDurationStore {
     // (undocumented)
     getServerSnapshot: () => string | null;
@@ -126,9 +124,7 @@ export class ConcurrentConnectAuthError extends Error {
     readonly reason: 'auth_conflict';
 }
 
-// Warning: (ae-internal-missing-underscore) The name "ConnectionGenerationError" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export class ConnectionGenerationError extends Error {
     constructor(connectionGeneration: number, reason: ConnectionGenerationErrorReason, message: string);
     // (undocumented)
@@ -137,9 +133,7 @@ export class ConnectionGenerationError extends Error {
     readonly reason: ConnectionGenerationErrorReason;
 }
 
-// Warning: (ae-internal-missing-underscore) The name "ConnectionGenerationErrorReason" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export type ConnectionGenerationErrorReason = 'invalid' | 'not_strictly_increasing';
 
 // @public
@@ -158,24 +152,28 @@ export type ConnectionMessage = {
 };
 
 // @public
-export type ConnectOptions = Omit<SocketConfig, 'reconnectAttempts'> & {
+export interface ConnectOptions extends Omit<SocketConfig, 'reconnectAttempts'> {
     audioConstraints?: AudioConstraints;
-    sessionSettings?: Hume.empathicVoice.SessionSettings;
+    auth: SocketConfig['auth'];
+    configId?: string;
+    configVersion?: string | number;
     devices?: DeviceOptions;
-};
+    hostname?: string;
+    resumedChatGroupId?: string;
+    sessionSettings?: Hume.empathicVoice.SessionSettings;
+    verboseTranscription?: boolean;
+}
 
 // @public
-export type DeviceOptions = {
+export interface DeviceOptions {
     microphoneDeviceId?: string;
     speakerDeviceId?: string;
-};
+}
 
 // @public
 export type FftSnapshot = readonly number[];
 
-// Warning: (ae-internal-missing-underscore) The name "FftStore" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export class FftStore {
     // (undocumented)
     clear(): void;
@@ -209,9 +207,7 @@ export const isAudioDeviceSwitchError: (error: unknown) => error is AudioDeviceS
 // @public
 export const isConcurrentConnectAuthError: (error: unknown) => error is ConcurrentConnectAuthError;
 
-// Warning: (ae-internal-missing-underscore) The name "isConnectionGenerationError" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const isConnectionGenerationError: (error: unknown) => error is ConnectionGenerationError;
 
 // @public
@@ -249,9 +245,7 @@ export type LanguageModelOption = (typeof LanguageModelOption)[keyof typeof Lang
 // @public
 export type MicErrorReason = 'mic_permission_denied' | 'mic_initialization_failure' | 'mic_closure_failure' | 'mime_types_not_supported';
 
-// Warning: (ae-internal-missing-underscore) The name "MicrophoneProps" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export type MicrophoneProps = {
     diagnostics?: VoiceDiagnosticsReporter;
     onAudioCaptured: (b: ArrayBuffer) => void;
@@ -285,10 +279,10 @@ export type SessionSettingsUpdate = Omit<Hume.empathicVoice.SessionSettings, 'ty
 export type SocketCloseEvent = Parameters<NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>>[0];
 
 // @public
-export type SocketConfig = {
+export interface SocketConfig extends Hume.empathicVoice.chat.Chat.ConnectArgs {
     auth: AuthStrategy;
     hostname?: string;
-} & Hume.empathicVoice.chat.Chat.ConnectArgs;
+}
 
 // @public
 export type SocketErrorReason = 'socket_connection_failure' | 'failed_to_send_audio' | 'failed_to_send_message' | 'received_assistant_error_message' | 'received_tool_call_error';
@@ -303,14 +297,10 @@ export class SocketUnknownMessageError extends Error {
     constructor(message?: string);
 }
 
-// Warning: (ae-internal-missing-underscore) The name "TimeSlice" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export type TimeSlice = z.infer<typeof TimeSliceSchema>;
 
-// Warning: (ae-internal-missing-underscore) The name "TimeSliceSchema" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const TimeSliceSchema: z.ZodObject<{
     begin: z.ZodNumber;
     end: z.ZodNumber;
@@ -376,30 +366,28 @@ export type TTSService = (typeof TTSService)[keyof typeof TTSService];
 export const useAudioDevices: (input?: UseAudioDevicesOptions) => UseAudioDevicesReturn;
 
 // @public
-export type UseAudioDevicesOptions = {
+export interface UseAudioDevicesOptions {
     requestPermission?: boolean;
-};
+}
 
 // @public
-export type UseAudioDevicesReturn = {
+export interface UseAudioDevicesReturn {
+    error: Error | null;
     inputDevices: AudioDevice[];
+    isLoading: boolean;
+    isSupported: boolean;
     outputDevices: AudioDevice[];
+    permissionDenied: boolean;
+    permissionError: Error | null;
+    refetch: () => Promise<void>;
+    requestPermission: () => Promise<void>;
     selectedInputDeviceId: string | null;
     selectedOutputDeviceId: string | null;
     setSelectedInputDeviceId: (deviceId: string | null) => void;
     setSelectedOutputDeviceId: (deviceId: string | null) => void;
-    refetch: () => Promise<void>;
-    requestPermission: () => Promise<void>;
-    isLoading: boolean;
-    error: Error | null;
-    permissionError: Error | null;
-    isSupported: boolean;
-    permissionDenied: boolean;
-};
+}
 
-// Warning: (ae-internal-missing-underscore) The name "useCallDuration" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const useCallDuration: () => {
     store: CallDurationStore;
     start: () => void;
@@ -409,17 +397,13 @@ export const useCallDuration: () => {
 // @public
 export const useCallDurationTimestamp: () => string | null;
 
-// Warning: (ae-internal-missing-underscore) The name "useFftSubscription" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export function useFftSubscription(store: FftStore): FftSnapshot;
 
 // @public
 export const useMicFft: () => FftSnapshot;
 
-// Warning: (ae-internal-missing-underscore) The name "useMicrophone" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const useMicrophone: (props: MicrophoneProps) => {
     start: (stream: MediaStream, sharedAudioContext?: AudioContext) => void;
     replace: (stream: MediaStream, sharedAudioContext?: AudioContext) => Promise<void>;
@@ -430,9 +414,7 @@ export const useMicrophone: (props: MicrophoneProps) => {
     fftStore: FftStore;
 };
 
-// Warning: (ae-internal-missing-underscore) The name "useMicrophoneStream" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const useMicrophoneStream: () => {
     getStream: (audioConstraints: MediaTrackConstraints) => Promise<MediaStream>;
     stopStream: (stream?: MediaStream | null) => void;
@@ -452,9 +434,7 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 // @public
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
-// Warning: (ae-internal-missing-underscore) The name "useSoundPlayer" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const useSoundPlayer: (props: {
     diagnostics?: VoiceDiagnosticsReporter;
     enableAudioWorklet: boolean;
@@ -482,9 +462,7 @@ export const useSoundPlayer: (props: {
 // @public
 export const useVoice: () => VoiceContextType;
 
-// Warning: (ae-internal-missing-underscore) The name "useVoiceClient" should be prefixed with an underscore because the declaration is marked as @internal
-//
-// @internal (undocumented)
+// @public @deprecated
 export const useVoiceClient: (props: {
     diagnostics?: VoiceDiagnosticsReporter;
     onAudioMessage?: (message: AudioOutputMessage) => void;
@@ -670,8 +648,8 @@ export type WithReceivedAt<T> = T & {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:418:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:431:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:699:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:467:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:480:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:776:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
 
 ```

@@ -97,8 +97,8 @@ Or, integrate with the API directly
 
 ## Documentation
 
-Guides and a generated API reference for every package are published at
-<https://humeai.github.io/hume-react-sdk/>.
+Guides, API-generation sources, and local documentation instructions live in
+the repository's [`docs` directory](https://github.com/HumeAI/hume-react-sdk/tree/main/docs).
 
 ## Local development
 

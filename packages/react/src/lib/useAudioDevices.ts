@@ -8,7 +8,7 @@ import {
 } from '../utils';
 
 /** Options for {@link useAudioDevices}. */
-export type UseAudioDevicesOptions = {
+export interface UseAudioDevicesOptions {
   /**
    * Request microphone permission on mount so that real device labels are
    * available. When permission is refused the hook still enumerates devices,
@@ -17,10 +17,10 @@ export type UseAudioDevicesOptions = {
    * `requestPermission` function from a user gesture.
    */
   requestPermission?: boolean;
-};
+}
 
 /** Device lists, selection state, and controls returned by {@link useAudioDevices}. */
-export type UseAudioDevicesReturn = {
+export interface UseAudioDevicesReturn {
   /** Available microphones. */
   inputDevices: AudioDevice[];
   /** Available speakers. */
@@ -47,7 +47,7 @@ export type UseAudioDevicesReturn = {
   isSupported: boolean;
   /** `true` when microphone permission was refused, so labels are generated. */
   permissionDenied: boolean;
-};
+}
 
 /**
  * Keep a selection pointing at a device that still exists, defaulting to the

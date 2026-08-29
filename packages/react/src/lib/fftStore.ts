@@ -13,7 +13,12 @@ const EMPTY_FFT: FftSnapshot = Object.freeze(
   Array.from({ length: BARK_BAND_COUNT }, () => 0),
 );
 
-/** @internal */
+/**
+ * Mutable store backing the granular FFT subscription hooks.
+ *
+ * @deprecated Use {@link usePlayerFft} or {@link useMicFft} instead of managing
+ * an FFT store directly.
+ */
 export class FftStore {
   private _buffer: number[] = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
@@ -84,7 +89,11 @@ export class FftStore {
   }
 }
 
-/** @internal */
+/**
+ * Subscribe to an {@link FftStore} from React.
+ *
+ * @deprecated Use {@link usePlayerFft} or {@link useMicFft}.
+ */
 export function useFftSubscription(store: FftStore): FftSnapshot {
   return useSyncExternalStore(
     store.subscribe,

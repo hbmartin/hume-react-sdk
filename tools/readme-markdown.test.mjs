@@ -56,6 +56,16 @@ await test('fenced JSX remains unchanged', () => {
   assert.equal(makeReadmeVitePressSafe(example), example);
 });
 
+await test('sibling-document references inside code remain unchanged', () => {
+  const fenced = ['```md', './MIGRATION.md', '```'].join('\n');
+
+  assert.equal(makeReadmeVitePressSafe(fenced), fenced);
+  assert.equal(
+    makeReadmeVitePressSafe('Use `./MIGRATION.md` as the example path.'),
+    'Use `./MIGRATION.md` as the example path.',
+  );
+});
+
 await test('fences indented inside list items remain unchanged', () => {
   const example = [
     '1. Load the value:',
@@ -74,6 +84,17 @@ await test('fences indented inside list items remain unchanged', () => {
       '    ```',
       'Outside Promise&lt;Result&gt;.',
     ].join('\n'),
+  );
+});
+
+await test('indented code-block markers do not open fenced code', () => {
+  const example = ['    ```', '    - ```', 'Outside Promise<Result>.'].join(
+    '\n',
+  );
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    ['    ```', '    - ```', 'Outside Promise&lt;Result&gt;.'].join('\n'),
   );
 });
 

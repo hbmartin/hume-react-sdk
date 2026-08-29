@@ -4,7 +4,7 @@ import {
   type EmbeddedVoiceConfig,
   type TranscriptMessageHandler,
 } from '@humeai/voice-embed';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * Props for {@link EmbeddedVoice}.
@@ -72,13 +72,14 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     ...config
   } = props;
   const embeddedVoice = useRef<EA | null>(null);
+  const controlledOpenInstance = useRef<EA | null>(null);
   const previousIsEmbedOpen = useRef(isEmbedOpen);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
   const initialOpenOnMount = useRef(openOnMount);
   const configSignature = getConfigSignature(config);
-  // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares the serializable embed configuration
-  const stableConfig = useMemo(() => config, [configSignature]);
+  const previousConfigSignature = useRef(configSignature);
+  const shouldApplyOpenOnMount = useRef(true);
 
   useEffect(() => {
     onMessageHandler.current = onMessage;
@@ -86,33 +87,53 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   }, [onClose, onMessage]);
 
   useEffect(() => {
-    embeddedVoice.current = EA.create({
+    if (previousConfigSignature.current !== configSignature) {
+      previousConfigSignature.current = configSignature;
+      shouldApplyOpenOnMount.current = false;
+    }
+  }, [configSignature]);
+
+  useEffect(() => {
+    const instance = EA.create({
       onMessage: (message) => {
         onMessageHandler.current?.(message);
       },
       onClose: () => {
         onCloseHandler.current?.();
       },
-      openOnMount: initialOpenOnMount.current,
-      ...stableConfig,
+      openOnMount: shouldApplyOpenOnMount.current
+        ? initialOpenOnMount.current
+        : false,
+      ...config,
     });
-    const unmount = embeddedVoice.current.mount();
+    embeddedVoice.current = instance;
+    const unmount = instance.mount();
 
     return () => {
       unmount();
-      embeddedVoice.current = null;
+      if (embeddedVoice.current === instance) {
+        embeddedVoice.current = null;
+      }
+      if (controlledOpenInstance.current === instance) {
+        controlledOpenInstance.current = null;
+      }
     };
-  }, [stableConfig]);
+    // The signature is the semantic dependency for the serializable config.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configSignature]);
 
   useEffect(() => {
     const wasEmbedOpen = previousIsEmbedOpen.current;
     previousIsEmbedOpen.current = isEmbedOpen;
     if (isEmbedOpen) {
-      embeddedVoice.current?.openEmbed();
+      const instance = embeddedVoice.current;
+      instance?.openEmbed();
+      controlledOpenInstance.current = instance;
     } else if (wasEmbedOpen) {
-      embeddedVoice.current?.cancelPendingOpen();
+      controlledOpenInstance.current?.cancelPendingOpen();
+      controlledOpenInstance.current = null;
     }
-  }, [isEmbedOpen, stableConfig]);
+  }, [isEmbedOpen, configSignature]);
 
   return null;
 };

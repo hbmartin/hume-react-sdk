@@ -21,7 +21,11 @@ const getAudioStream = async (
   });
 };
 
-/** @internal */
+/**
+ * Acquire and release a browser microphone stream.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
 export const useMicrophoneStream = () => {
   const [permission, setPermission] = useState<PermissionStatus>('prompt');
   const currentStream = useRef<MediaStream | null>(null);

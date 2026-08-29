@@ -263,6 +263,28 @@ await test('published version-skewed workspace dependencies pass validation', as
   ]);
 });
 
+await test('registry validation forwards npm token authentication', async () => {
+  let authorization;
+  await validatePublishedWorkspaceDependencies(
+    {
+      workspaceDependenciesToVerify: [
+        { name: '@humeai/dependency', version: '1.0.0' },
+      ],
+    },
+    {
+      fetchImplementation: async (_url, init) => {
+        const headers = new Headers(init?.headers);
+        authorization = headers.get('authorization');
+        return /** @type {Response} */ ({ ok: true, status: 200 });
+      },
+      registryToken: 'test-token',
+      registryUrl: 'https://registry.example.test/npm/',
+    },
+  );
+
+  assert.equal(authorization, 'Bearer test-token');
+});
+
 await test('unpublished version-skewed workspace dependencies block publication', async () => {
   await assert.rejects(
     validatePublishedWorkspaceDependencies(

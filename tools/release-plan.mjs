@@ -15,6 +15,10 @@ const defaultRegistryRequestAttempts = 3;
 const defaultRegistryRequestTimeoutMs = 10_000;
 const defaultRegistryRetryDelayMs = 250;
 
+function getDefaultRegistryToken() {
+  return process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN;
+}
+
 /**
  * @typedef {{
  *   name: string,
@@ -243,8 +247,14 @@ function isRetryableRegistryStatus(status) {
  * @param {typeof globalThis.fetch} fetchImplementation
  * @param {URL} url
  * @param {number} timeoutMs
+ * @param {string | undefined} registryToken
  */
-async function fetchRegistryResponse(fetchImplementation, url, timeoutMs) {
+async function fetchRegistryResponse(
+  fetchImplementation,
+  url,
+  timeoutMs,
+  registryToken,
+) {
   const abortController = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timeout;
@@ -262,7 +272,12 @@ async function fetchRegistryResponse(fetchImplementation, url, timeoutMs) {
     return await /** @type {Promise<Response>} */ (
       Promise.race([
         fetchImplementation(url, {
-          headers: { accept: 'application/json' },
+          headers: {
+            accept: 'application/json',
+            ...(registryToken === undefined || registryToken === ''
+              ? {}
+              : { authorization: `Bearer ${registryToken}` }),
+          },
           signal: abortController.signal,
         }),
         timeoutPromise,
@@ -276,12 +291,12 @@ async function fetchRegistryResponse(fetchImplementation, url, timeoutMs) {
 /**
  * @param {{ name: string, version: string }} dependency
  * @param {URL} registry
- * @param {{ fetchImplementation: typeof globalThis.fetch, maxAttempts: number, retryDelayMs: number, timeoutMs: number }} options
+ * @param {{ fetchImplementation: typeof globalThis.fetch, maxAttempts: number, registryToken: string | undefined, retryDelayMs: number, timeoutMs: number }} options
  */
 async function validatePublishedWorkspaceDependency(
   dependency,
   registry,
-  { fetchImplementation, maxAttempts, retryDelayMs, timeoutMs },
+  { fetchImplementation, maxAttempts, registryToken, retryDelayMs, timeoutMs },
 ) {
   const packageVersionUrl = new URL(
     `${encodeURIComponent(dependency.name)}/${encodeURIComponent(dependency.version)}`,
@@ -295,6 +310,7 @@ async function validatePublishedWorkspaceDependency(
         fetchImplementation,
         packageVersionUrl,
         timeoutMs,
+        registryToken,
       );
     } catch (cause) {
       if (attempt < maxAttempts) {
@@ -328,13 +344,14 @@ async function validatePublishedWorkspaceDependency(
  * the configured npm registry before publishing a dependent package.
  *
  * @param {{ workspaceDependenciesToVerify: readonly { name: string, version: string }[] }} plan
- * @param {{ fetchImplementation?: typeof globalThis.fetch, maxAttempts?: number, registryUrl?: string, retryDelayMs?: number, timeoutMs?: number }} [options]
+ * @param {{ fetchImplementation?: typeof globalThis.fetch, maxAttempts?: number, registryToken?: string, registryUrl?: string, retryDelayMs?: number, timeoutMs?: number }} [options]
  */
 export async function validatePublishedWorkspaceDependencies(
   plan,
   {
     fetchImplementation = globalThis.fetch,
     maxAttempts = defaultRegistryRequestAttempts,
+    registryToken = getDefaultRegistryToken(),
     registryUrl = process.env.npm_config_registry ??
       process.env.NPM_CONFIG_REGISTRY ??
       'https://registry.npmjs.org/',
@@ -359,6 +376,7 @@ export async function validatePublishedWorkspaceDependencies(
       validatePublishedWorkspaceDependency(dependency, registry, {
         fetchImplementation,
         maxAttempts,
+        registryToken,
         retryDelayMs,
         timeoutMs,
       }),

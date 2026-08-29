@@ -389,6 +389,9 @@ export interface VoiceContextType extends VoiceAudioDeviceState {
    * state without rebuilding the recorder. Failures reject with an
    * {@link AudioDeviceSwitchError} and leave the call and current working
    * device intact.
+   * Passing `null` always reacquires whichever microphone is currently the
+   * browser or operating-system default, even when the requested state is
+   * already `null`.
    *
    * @param deviceId - A microphone device ID, or `null` for the browser default.
    */
