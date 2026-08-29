@@ -44,3 +44,45 @@ await test('fenced JSX remains unchanged', () => {
 
   assert.equal(makeReadmeVitePressSafe(example), example);
 });
+
+await test('tilde-fenced examples remain unchanged', () => {
+  const example = [
+    '~~~ts',
+    'const result: Promise<Result> = load();',
+    '~~~',
+    'Outside Promise<Result>.',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    [
+      '~~~ts',
+      'const result: Promise<Result> = load();',
+      '~~~',
+      'Outside Promise&lt;Result&gt;.',
+    ].join('\n'),
+  );
+});
+
+await test('shorter fence markers do not close a longer outer fence', () => {
+  const example = [
+    '````md',
+    '```ts',
+    'const result: Promise<Result> = load();',
+    '```',
+    '````',
+    'Outside Promise<Result>.',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    [
+      '````md',
+      '```ts',
+      'const result: Promise<Result> = load();',
+      '```',
+      '````',
+      'Outside Promise&lt;Result&gt;.',
+    ].join('\n'),
+  );
+});

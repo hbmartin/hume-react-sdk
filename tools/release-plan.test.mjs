@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -18,6 +18,7 @@ import { getPnpmInvocation } from './pnpm-command.mjs';
 import {
   createPublishArguments,
   createReleasePlan,
+  parseReleaseArguments,
   validatePublishedWorkspaceDependencies,
   validateProvenanceRepository,
 } from './release-plan.mjs';
@@ -27,6 +28,28 @@ const packages = [
   { name: '@humeai/voice-embed-react', version: '0.2.18' },
   { name: '@humeai/voice-react', version: '0.3.0-beta.7' },
 ];
+
+function getReleaseTestEnvironment() {
+  const environment = { ...process.env };
+  delete environment.GITHUB_REPOSITORY;
+  delete environment.RELEASE_TAG;
+  return environment;
+}
+
+await test('release CLI arguments are parsed consistently', () => {
+  assert.deepEqual(parseReleaseArguments(['v1.2.3', '--dry-run']), {
+    dryRun: true,
+    releaseTag: 'v1.2.3',
+  });
+  assert.deepEqual(parseReleaseArguments(['--dry-run'], 'v1.2.3'), {
+    dryRun: true,
+    releaseTag: 'v1.2.3',
+  });
+  assert.throws(
+    () => parseReleaseArguments(['v1.2.3', 'v1.2.4']),
+    /Expected a single release tag/,
+  );
+});
 
 await test('stable releases select only matching packages and use the latest dist-tag', () => {
   assert.deepEqual(createReleasePlan('v0.2.18', packages), {
@@ -74,6 +97,7 @@ await test('invalid and unmatched release tags are rejected', () => {
  * @param {string} [releaseTag]
  * @returns {Promise<string[][]>}
  */
+// fallow-ignore-next-line complexity -- cross-platform fixture setup and teardown are intentionally colocated
 async function runRelease(arguments_, releaseTag) {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), 'run-release-'));
   const toolsDirectory = join(temporaryDirectory, 'tools');
@@ -97,16 +121,31 @@ async function runRelease(arguments_, releaseTag) {
         );
       }),
     ]);
-    const fakePnpm = join(binaryDirectory, 'pnpm');
+    const fakePnpmScript = join(binaryDirectory, 'fake-pnpm.cjs');
     await writeFile(
-      fakePnpm,
+      fakePnpmScript,
       `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs');\nappendFileSync(process.env.RELEASE_TEST_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');\n`,
     );
-    await chmod(fakePnpm, 0o755);
+    if (process.platform === 'win32') {
+      await writeFile(
+        join(binaryDirectory, 'pnpm.cmd'),
+        `@echo off\r\n"${process.execPath}" "%~dp0\\fake-pnpm.cjs" %*\r\n`,
+      );
+    } else {
+      const fakePnpm = join(binaryDirectory, 'pnpm');
+      await writeFile(
+        fakePnpm,
+        `#!/usr/bin/env node\nrequire('./fake-pnpm.cjs');\n`,
+      );
+      await chmod(fakePnpm, 0o755);
+    }
 
-    const environment = { ...process.env };
-    delete environment.GITHUB_REPOSITORY;
-    delete environment.RELEASE_TAG;
+    const environment = getReleaseTestEnvironment();
+    const pathKey =
+      Object.keys(environment).find((key) => key.toLowerCase() === 'path') ??
+      'PATH';
+    environment[pathKey] =
+      `${binaryDirectory}${delimiter}${environment[pathKey] ?? ''}`;
     const result = spawnSync(
       process.execPath,
       [
@@ -118,7 +157,6 @@ async function runRelease(arguments_, releaseTag) {
         encoding: 'utf8',
         env: {
           ...environment,
-          PATH: `${binaryDirectory}:${environment.PATH ?? ''}`,
           RELEASE_TEST_LOG: invocationLog,
           ...(releaseTag === undefined ? {} : { RELEASE_TAG: releaseTag }),
         },
@@ -308,6 +346,7 @@ await test('release validation executes through a symlink', async () => {
     await symlink(new URL('./release-plan.mjs', import.meta.url), symlinkPath);
     const executed = spawnSync(process.execPath, [symlinkPath, 'invalid-tag'], {
       encoding: 'utf8',
+      env: getReleaseTestEnvironment(),
     });
     assert.notEqual(executed.status, 0);
     assert.match(executed.stderr, /Invalid release tag/);

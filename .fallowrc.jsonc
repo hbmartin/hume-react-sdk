@@ -47,6 +47,13 @@
     "boundary-violation": "error",
     "stale-suppressions": "error",
   },
+  "overrides": [
+    {
+      // VitePress emits these theme classes at runtime, outside source markup.
+      "files": ["docs/.vitepress/theme/style.css"],
+      "rules": { "css-dead-surface": "off" },
+    },
+  ],
   "boundaries": {
     "zones": [
       {

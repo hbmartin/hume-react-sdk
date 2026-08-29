@@ -23,6 +23,30 @@ const versionPattern =
  * }} PackageManifest
  */
 
+/**
+ * Parses the shared release command-line contract.
+ *
+ * @param {readonly string[]} arguments_
+ * @param {string} [environmentReleaseTag]
+ */
+export function parseReleaseArguments(
+  arguments_,
+  environmentReleaseTag = process.env.RELEASE_TAG,
+) {
+  const dryRun = arguments_.includes('--dry-run');
+  const releaseTags = arguments_.filter((argument) => argument !== '--dry-run');
+  if (releaseTags.length > 1) {
+    throw new Error(
+      'Expected a single release tag and an optional --dry-run flag.',
+    );
+  }
+
+  return {
+    dryRun,
+    releaseTag: releaseTags[0] ?? environmentReleaseTag,
+  };
+}
+
 /** @param {string | undefined} releaseTag */
 function requireReleaseTag(releaseTag) {
   if (releaseTag === undefined)
@@ -282,6 +306,20 @@ export async function readPublishablePackages(repositoryRoot = process.cwd()) {
 }
 
 /**
+ * Reads and validates the repository-backed release plan used by release
+ * commands before they run checks or publish packages.
+ *
+ * @param {string | undefined} releaseTag
+ */
+export async function createValidatedReleasePlan(releaseTag) {
+  const packages = await readPublishablePackages();
+  validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
+  const plan = createReleasePlan(releaseTag, packages);
+  await validatePublishedWorkspaceDependencies(plan);
+  return plan;
+}
+
+/**
  * @param {string | undefined} executablePath
  * @param {string} moduleUrl
  */
@@ -300,10 +338,7 @@ export async function isDirectExecution(executablePath, moduleUrl) {
 
 async function main() {
   const releaseTag = process.argv[2] ?? process.env.RELEASE_TAG;
-  const packages = await readPublishablePackages();
-  validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
-  const plan = createReleasePlan(releaseTag, packages);
-  await validatePublishedWorkspaceDependencies(plan);
+  const plan = await createValidatedReleasePlan(releaseTag);
 
   process.stdout.write(
     `Release ${plan.expectedVersion} will publish ${plan.packageNames.join(', ')} with the npm dist-tag ${plan.npmTag}.\n`,
