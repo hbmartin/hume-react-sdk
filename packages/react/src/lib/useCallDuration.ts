@@ -1,7 +1,11 @@
 import { intervalToDuration } from 'date-fns';
 import { useCallback, useEffect, useRef } from 'react';
 
-/** @internal */
+/**
+ * Store backing the granular call-duration subscription hook.
+ *
+ * @deprecated Use {@link useCallDurationTimestamp}.
+ */
 class CallDurationStore {
   private _snapshot: string | null = null;
 
@@ -31,7 +35,11 @@ class CallDurationStore {
   };
 }
 
-/** @internal */
+/**
+ * Create low-level controls for a call-duration timer.
+ *
+ * @deprecated Use {@link useCallDurationTimestamp} with {@link VoiceProvider}.
+ */
 export const useCallDuration = () => {
   const interval = useRef<number | null>(null);
   const startTime = useRef<number | null>(null);

@@ -8,7 +8,7 @@ import type { SocketConfig } from '../lib/useVoiceClient';
  *
  * Each constraint is a hint: browsers that do not implement one ignore it.
  */
-export type AudioConstraints = {
+export interface AudioConstraints {
   /**
    * Reduce echo from the input, if supported. Defaults to `true`.
    */
@@ -21,7 +21,7 @@ export type AudioConstraints = {
    * Automatically adjust microphone gain, if supported. Defaults to `true`.
    */
   autoGainControl?: boolean;
-};
+}
 
 /**
  * Microphone and speaker selection for a connection.
@@ -30,12 +30,12 @@ export type AudioConstraints = {
  * Omit either field to use the browser default. Devices can also be switched
  * during a call with `setInputDevice` and `setOutputDevice`.
  */
-export type DeviceOptions = {
+export interface DeviceOptions {
   /** Microphone to capture from. Uses the browser default if omitted. */
   microphoneDeviceId?: string;
   /** Speaker to play assistant audio through. Uses the default if omitted. */
   speakerDeviceId?: string;
-};
+}
 
 /** Whether a device captures audio or plays it back. */
 export type AudioDeviceKind = 'audioinput' | 'audiooutput';
@@ -50,19 +50,22 @@ export type AudioDeviceKind = 'audioinput' | 'audiooutput';
  * `deviceId` may still be empty for a privacy-redacted default device and must
  * not be passed to controls that reserve the empty string as a sentinel.
  */
-export type AudioDevice = {
+export interface AudioDevice {
+  /** Browser-assigned identifier, which can be empty before permission. */
   deviceId: string;
+  /** Browser label or the SDK's readable fallback label. */
   label: string;
+  /** Whether this device captures or plays audio. */
   kind: AudioDeviceKind;
-};
+}
 
 /** Available audio devices, split by direction. */
-export type AudioDevices = {
+export interface AudioDevices {
   /** Microphones and other capture devices. */
   inputDevices: AudioDevice[];
   /** Speakers and other playback devices. */
   outputDevices: AudioDevice[];
-};
+}
 
 /**
  * Options for a single EVI connection, passed to `connect`.
@@ -70,7 +73,28 @@ export type AudioDevices = {
  * These are per-session rather than per-component, which is why they belong on
  * `connect` and not on {@link VoiceProvider}.
  */
-export type ConnectOptions = Omit<SocketConfig, 'reconnectAttempts'> & {
+export interface ConnectOptions extends Omit<
+  SocketConfig,
+  'reconnectAttempts'
+> {
+  /**
+   * Credentials for the EVI socket. Use a short-lived access token in browser
+   * applications; reserve API keys for local prototyping.
+   */
+  auth: SocketConfig['auth'];
+  /** Hume API hostname. Defaults to `api.hume.ai`. */
+  hostname?: string;
+  /** ID of the server-side EVI configuration to use. */
+  configId?: string;
+  /** Specific version of the selected EVI configuration. */
+  configVersion?: string | number;
+  /** Chat group to resume instead of starting a new conversation. */
+  resumedChatGroupId?: string;
+  /**
+   * Emit interim user transcripts to `onMessage`. Defaults to `true` in the
+   * React SDK; interim transcripts are not added to `messages`.
+   */
+  verboseTranscription?: boolean;
   /** Microphone constraints for this connection. */
   audioConstraints?: AudioConstraints;
   /**
@@ -81,4 +105,4 @@ export type ConnectOptions = Omit<SocketConfig, 'reconnectAttempts'> & {
   sessionSettings?: Hume.empathicVoice.SessionSettings;
   /** Microphone and speaker to use for this connection. */
   devices?: DeviceOptions;
-};
+}

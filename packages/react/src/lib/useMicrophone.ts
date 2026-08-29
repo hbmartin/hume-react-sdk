@@ -34,7 +34,11 @@ type DisposeMicrophoneOptions = {
   restoreOnFailure?: boolean;
 };
 
-/** @internal */
+/**
+ * Configuration for the deprecated low-level microphone hook.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
 export type MicrophoneProps = {
   diagnostics?: VoiceDiagnosticsReporter;
   onAudioCaptured: (b: ArrayBuffer) => void;
@@ -43,7 +47,11 @@ export type MicrophoneProps = {
   onError: (message: string, reason: MicErrorReason) => void;
 };
 
-/** @internal */
+/**
+ * Manage microphone capture independently of the voice provider.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
 export const useMicrophone = (props: MicrophoneProps) => {
   const { onAudioCaptured } = props;
   const fallbackDiagnostics = useRef<VoiceDiagnosticsReporter | null>(null);

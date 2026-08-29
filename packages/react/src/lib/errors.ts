@@ -44,12 +44,22 @@ export const isAudioDeviceSwitchError = (
   error: unknown,
 ): error is AudioDeviceSwitchError => error instanceof AudioDeviceSwitchError;
 
-/** @internal */
+/**
+ * Why an explicit connection-generation identifier was rejected.
+ *
+ * @deprecated This belongs to the deprecated low-level `useVoiceClient` API.
+ * Prefer {@link VoiceProvider} and {@link useVoice}.
+ */
 export type ConnectionGenerationErrorReason =
   | 'invalid'
   | 'not_strictly_increasing';
 
-/** @internal */
+/**
+ * An explicit connection-generation identifier was invalid or stale.
+ *
+ * @deprecated This belongs to the deprecated low-level `useVoiceClient` API.
+ * Prefer {@link VoiceProvider} and {@link useVoice}.
+ */
 export class ConnectionGenerationError extends Error {
   readonly reason: ConnectionGenerationErrorReason;
 
@@ -67,8 +77,12 @@ export class ConnectionGenerationError extends Error {
   }
 }
 
-/** Check whether an unknown value is a connection-generation validation error. */
-/** @internal */
+/**
+ * Check whether an unknown value is a connection-generation validation error.
+ *
+ * @deprecated This belongs to the deprecated low-level `useVoiceClient` API.
+ * Prefer {@link VoiceProvider} and {@link useVoice}.
+ */
 export const isConnectionGenerationError = (
   error: unknown,
 ): error is ConnectionGenerationError =>

@@ -68,8 +68,8 @@ function Page() {
 `diagnostics`. Connection settings such as `auth` and `configId` belong on
 `connect` instead, because they describe a session rather than the component.
 
-Every prop is documented with its exact type in the
-[`VoiceProviderProps` reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react.voiceproviderprops).
+Every prop is documented with its exact type and behavior in the
+[`VoiceProviderProps` source declaration](https://github.com/HumeAI/hume-react-sdk/blob/main/packages/react/src/lib/VoiceProvider.tsx).
 
 ## Connecting to EVI
 
@@ -277,7 +277,7 @@ controls (`mute`, `unmute`, `muteAudio`, `unmuteAudio`, `setVolume`,
 `messages`, `chatMetadata`, `toolStatusStore`, `readyState`, and friends).
 
 Each one is documented with its exact signature and behavior in the
-[`VoiceContextType` reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react.voicecontexttype).
+[`VoiceContextType` source declaration](https://github.com/HumeAI/hume-react-sdk/blob/main/packages/react/src/lib/VoiceProvider.tsx).
 
 ### Granular Hooks
 
@@ -325,9 +325,8 @@ function CallTimer() {
 ## Types
 
 `ConnectOptions`, `AudioConstraints`, `DeviceOptions`, `VoiceError`,
-`VoiceStatus`, and every message type are documented in the
-[API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react),
-generated from the package's own type declarations.
+`VoiceStatus`, and every message type are documented in the package's
+[public source declarations](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/react/src).
 
 ## Support
 

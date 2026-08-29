@@ -10,7 +10,7 @@ each package. It describes the repository's latest `main` branch.
 - [`@humeai/voice-embed`](./api/voice-embed.md) — the framework-agnostic hosted
   widget API and message types.
 
-Internal plumbing is excluded: hooks and stores that exist only to wire
-`VoiceProvider` together are marked `@internal` and do not appear here, even
-though they remain importable at runtime. Treat anything absent from this
-reference as unsupported.
+The reference includes every supported public export. Low-level APIs retained
+for compatibility remain visible with `@deprecated` guidance; only
+implementation details that are not exported from a package entry point are
+marked `@internal` and omitted.

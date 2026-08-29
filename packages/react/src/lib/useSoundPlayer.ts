@@ -1192,8 +1192,11 @@ const useSoundPlayerImplementation = (
   );
 };
 
-/** Stops player resources and reports teardown failures through `onError`. */
-/** @internal */
+/**
+ * Stops player resources and reports teardown failures through `onError`.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
 export const useSoundPlayer = (props: {
   diagnostics?: VoiceDiagnosticsReporter;
   enableAudioWorklet: boolean;
@@ -1202,6 +1205,10 @@ export const useSoundPlayer = (props: {
   onStopAudio: (id: string) => void;
 }) => useSoundPlayerImplementation(props, false);
 
-/** @internal Strict player cleanup used for provider-level failure aggregation. */
+/**
+ * Strict player cleanup used for provider-level failure aggregation.
+ *
+ * @internal
+ */
 export const useSoundPlayerForVoiceProvider = (props: UseSoundPlayerProps) =>
   useSoundPlayerImplementation(props, true);

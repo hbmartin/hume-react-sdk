@@ -4,7 +4,7 @@ import {
   type EmbeddedVoiceConfig,
   type TranscriptMessageHandler,
 } from '@humeai/voice-embed';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * Props for {@link EmbeddedVoice}.
@@ -78,14 +78,20 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const onCloseHandler = useRef<CloseHandler | undefined>();
   const initialOpenOnMount = useRef(openOnMount);
   const configSignature = getConfigSignature(config);
-  // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares the serializable embed configuration
-  const stableConfig = useMemo(() => config, [configSignature]);
-  const initialStableConfig = useRef(stableConfig);
+  const previousConfigSignature = useRef(configSignature);
+  const shouldApplyOpenOnMount = useRef(true);
 
   useEffect(() => {
     onMessageHandler.current = onMessage;
     onCloseHandler.current = onClose;
   }, [onClose, onMessage]);
+
+  useEffect(() => {
+    if (previousConfigSignature.current !== configSignature) {
+      previousConfigSignature.current = configSignature;
+      shouldApplyOpenOnMount.current = false;
+    }
+  }, [configSignature]);
 
   useEffect(() => {
     const instance = EA.create({
@@ -95,11 +101,10 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
       onClose: () => {
         onCloseHandler.current?.();
       },
-      openOnMount:
-        stableConfig === initialStableConfig.current
-          ? initialOpenOnMount.current
-          : false,
-      ...stableConfig,
+      openOnMount: shouldApplyOpenOnMount.current
+        ? initialOpenOnMount.current
+        : false,
+      ...config,
     });
     embeddedVoice.current = instance;
     const unmount = instance.mount();
@@ -113,7 +118,9 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
         controlledOpenInstance.current = null;
       }
     };
-  }, [stableConfig]);
+    // The signature is the semantic dependency for the serializable config.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configSignature]);
 
   useEffect(() => {
     const wasEmbedOpen = previousIsEmbedOpen.current;
@@ -126,7 +133,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
       controlledOpenInstance.current?.cancelPendingOpen();
       controlledOpenInstance.current = null;
     }
-  }, [isEmbedOpen, stableConfig]);
+  }, [isEmbedOpen, configSignature]);
 
   return null;
 };

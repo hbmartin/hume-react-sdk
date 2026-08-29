@@ -62,10 +62,12 @@ const getMessageDiagnostics = (message: { type: string }) => {
  * {@link ConnectOptions} extends this with the SDK's own microphone, audio,
  * and device options.
  */
-export type SocketConfig = {
+export interface SocketConfig extends Hume.empathicVoice.chat.Chat.ConnectArgs {
+  /** Credentials used for the socket handshake. */
   auth: AuthStrategy;
+  /** Hume API hostname. Defaults to `api.hume.ai`. */
   hostname?: string;
-} & Hume.empathicVoice.chat.Chat.ConnectArgs;
+}
 
 /**
  * The close event emitted by the underlying chat socket. Derived from the
@@ -157,7 +159,11 @@ export type ToolCallHandler = (
   Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage
 >;
 
-/** @internal */
+/**
+ * Connect directly to the EVI socket without provider-managed audio resources.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
 export const useVoiceClient = (props: {
   diagnostics?: VoiceDiagnosticsReporter;
   onAudioMessage?: (message: AudioOutputMessage) => void;

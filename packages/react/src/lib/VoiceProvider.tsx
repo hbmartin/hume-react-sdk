@@ -329,7 +329,7 @@ const enqueueDeviceSwitch = <T,>({
 };
 
 /** Requested and active audio devices for the current voice connection. */
-export type VoiceAudioDeviceState = {
+export interface VoiceAudioDeviceState {
   /** Requested microphone device ID, or `null` for the browser default. */
   requestedInputDeviceId: string | null;
   /** Microphone device ID actually granted by the browser. */
@@ -338,7 +338,7 @@ export type VoiceAudioDeviceState = {
   requestedOutputDeviceId: string | null;
   /** Speaker device ID currently used for assistant audio. */
   activeOutputDeviceId: string | null;
-};
+}
 
 const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
   requestedInputDeviceId: null,
@@ -353,7 +353,7 @@ const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
  * High-frequency FFT and call-duration values are available through the
  * granular subscription hooks instead of this context.
  */
-export type VoiceContextType = VoiceAudioDeviceState & {
+export interface VoiceContextType extends VoiceAudioDeviceState {
   /**
    * Opens a voice connection and initializes its microphone and audio player.
    *
@@ -389,6 +389,9 @@ export type VoiceContextType = VoiceAudioDeviceState & {
    * state without rebuilding the recorder. Failures reject with an
    * {@link AudioDeviceSwitchError} and leave the call and current working
    * device intact.
+   * Passing `null` always reacquires whichever microphone is currently the
+   * browser or operating-system default, even when the requested state is
+   * already `null`.
    *
    * @param deviceId - A microphone device ID, or `null` for the browser default.
    */
@@ -496,12 +499,12 @@ export type VoiceContextType = VoiceAudioDeviceState & {
    * @param level - Desired level; values are clamped to the range `0` to `1`.
    */
   setVolume: (level: number) => void;
-};
+}
 
 const VoiceContext = createContext<VoiceContextType | null>(null);
 
 /** Configuration and lifecycle callbacks accepted by {@link VoiceProvider}. */
-export type VoiceProviderProps = PropsWithChildren<{
+export interface VoiceProviderProps extends PropsWithChildren {
   /**
    * Called for every message received over the socket.
    *
@@ -573,7 +576,7 @@ export type VoiceProviderProps = PropsWithChildren<{
    * errors are written to the browser console. Pass `false` to disable them.
    */
   diagnostics?: false | VoiceDiagnosticsOptions;
-}>;
+}
 
 /**
  * Returns voice state and controls from the nearest {@link VoiceProvider}.
