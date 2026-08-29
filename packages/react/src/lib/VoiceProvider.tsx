@@ -56,7 +56,7 @@ import { useMessages } from './useMessages';
 import { useMicrophone } from './useMicrophone';
 import { useMicrophoneStream } from './useMicrophoneStream';
 import { useSoundPlayerForVoiceProvider } from './useSoundPlayer';
-import { useToolStatus } from './useToolStatus';
+import { type ToolStatusStore, useToolStatus } from './useToolStatus';
 import {
   type SessionSettingsUpdate,
   type SocketCloseEvent,
@@ -66,6 +66,7 @@ import {
   VoiceReadyState,
 } from './useVoiceClient';
 
+/** Why a socket-level failure occurred. */
 export type SocketErrorReason =
   | 'socket_connection_failure'
   | 'failed_to_send_audio'
@@ -73,6 +74,7 @@ export type SocketErrorReason =
   | 'received_assistant_error_message'
   | 'received_tool_call_error';
 
+/** Why assistant audio playback failed. */
 export type AudioPlayerErrorReason =
   | 'audio_player_initialization_failure'
   | 'audio_worklet_load_failure'
@@ -80,13 +82,20 @@ export type AudioPlayerErrorReason =
   | 'malformed_audio'
   | 'audio_player_closure_failure';
 
+/** Why microphone capture failed. */
 export type MicErrorReason =
   | 'mic_permission_denied'
   | 'mic_initialization_failure'
   | 'mic_closure_failure'
   | 'mime_types_not_supported';
 
-type VoiceError =
+/**
+ * An error that put the provider into its error state.
+ *
+ * `type` names the subsystem that failed and `reason` gives the specific cause
+ * within it, so handlers can branch on either level of detail.
+ */
+export type VoiceError =
   | {
       type: 'socket_error';
       reason: SocketErrorReason;
@@ -116,7 +125,13 @@ const getVoiceErrorCategory = (error: VoiceError) => {
   return 'audio_player' as const;
 };
 
-type VoiceStatus =
+/**
+ * Lifecycle state of the voice connection.
+ *
+ * Entering `error` disconnects the socket and releases the microphone, and
+ * carries a human-readable `reason`.
+ */
+export type VoiceStatus =
   | Readonly<{
       value: 'disconnected' | 'connecting' | 'connected';
       reason?: never;
@@ -314,7 +329,7 @@ const enqueueDeviceSwitch = <T,>({
 };
 
 /** Requested and active audio devices for the current voice connection. */
-export type VoiceAudioDeviceState = {
+export interface VoiceAudioDeviceState {
   /** Requested microphone device ID, or `null` for the browser default. */
   requestedInputDeviceId: string | null;
   /** Microphone device ID actually granted by the browser. */
@@ -323,7 +338,7 @@ export type VoiceAudioDeviceState = {
   requestedOutputDeviceId: string | null;
   /** Speaker device ID currently used for assistant audio. */
   activeOutputDeviceId: string | null;
-};
+}
 
 const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
   requestedInputDeviceId: null,
@@ -338,23 +353,53 @@ const DISCONNECTED_AUDIO_DEVICE_STATE: VoiceAudioDeviceState = {
  * High-frequency FFT and call-duration values are available through the
  * granular subscription hooks instead of this context.
  */
-export type VoiceContextType = VoiceAudioDeviceState & {
+export interface VoiceContextType extends VoiceAudioDeviceState {
   /**
    * Opens a voice connection and initializes its microphone and audio player.
+   *
+   * A call made while another attempt with the same credentials is still
+   * running joins that attempt instead of starting a second set of resources,
+   * and later non-auth options are ignored. A concurrent call with different
+   * credentials rejects with {@link ConcurrentConnectAuthError} so refreshed
+   * credentials are never silently discarded. Calling it while already
+   * connected is a no-op that resolves.
+   *
+   * The promise resolves once the attempt settles; inspect {@link
+   * VoiceContextType.status} and {@link VoiceContextType.error} to determine
+   * whether the connection succeeded.
    *
    * @param options - Required authentication, connection, and session options.
    */
   connect: (options: ConnectOptions) => Promise<void>;
-  /** Closes the connection and releases its socket, microphone, and player. */
+  /**
+   * Closes the connection and releases its socket, microphone, and player.
+   *
+   * After cleanup completes, an explicit call clears the provider error that
+   * was current when the call began and returns `status` to `disconnected`. If
+   * teardown raises a newer error, that error is preserved and `status` remains
+   * `error`. Calling it inside `onError` acknowledges the reported error once
+   * cleanup finishes.
+   */
   disconnect: () => Promise<void>;
   /**
    * Switches the microphone for an active connection.
+   *
+   * Requires a connected session, and may prompt for permission. Selecting an
+   * explicit device that is already capturing updates the requested-device
+   * state without rebuilding the recorder. Failures reject with an
+   * {@link AudioDeviceSwitchError} and leave the call and current working
+   * device intact.
    *
    * @param deviceId - A microphone device ID, or `null` for the browser default.
    */
   setInputDevice: (deviceId: string | null) => Promise<void>;
   /**
    * Switches the speaker for an active connection.
+   *
+   * Does not rebuild the playback graph or clear queued audio, and selecting
+   * the already-active device is a no-op. Output selection depends on the
+   * browser's `AudioContext.setSinkId` support; browsers without it reject
+   * non-default switches with the `unsupported` reason.
    *
    * @param deviceId - A speaker device ID, or `null` for the system default.
    */
@@ -365,7 +410,13 @@ export type VoiceContextType = VoiceAudioDeviceState & {
   isAudioMuted: boolean;
   /** Whether assistant audio is currently playing. */
   isPlaying: boolean;
-  /** Stored connection and JSON messages for the current conversation. */
+  /**
+   * Stored connection and JSON messages for the current conversation.
+   *
+   * Interim user transcripts are excluded even when `verboseTranscription` is
+   * enabled on the connection, which is the default. To observe interim
+   * messages, supply an `onMessage` callback to {@link VoiceProvider}.
+   */
   messages: (JSONMessage | ConnectionMessage)[];
   /** Most recent assistant transcript message, or `null` if none exists. */
   lastVoiceMessage: AssistantTranscriptMessage | null;
@@ -430,7 +481,7 @@ export type VoiceContextType = VoiceAudioDeviceState & {
   /** Whether the current error originated from the voice socket. */
   isSocketError: boolean;
   /** Tool calls and their resolved responses, keyed by tool-call ID. */
-  toolStatusStore: ReturnType<typeof useToolStatus>['store'];
+  toolStatusStore: ToolStatusStore;
   /** Metadata for the current chat, or `null` before metadata is received. */
   chatMetadata: ChatMetadataMessage | null;
   /** Number of queued assistant clips, including the currently playing clip. */
@@ -445,39 +496,84 @@ export type VoiceContextType = VoiceAudioDeviceState & {
    * @param level - Desired level; values are clamped to the range `0` to `1`.
    */
   setVolume: (level: number) => void;
-};
+}
 
 const VoiceContext = createContext<VoiceContextType | null>(null);
 
-export type VoiceProviderProps = PropsWithChildren<{
+/** Configuration and lifecycle callbacks accepted by {@link VoiceProvider}. */
+export interface VoiceProviderProps extends PropsWithChildren {
+  /**
+   * Called for every message received over the socket.
+   *
+   * Locally sent tool responses and tool errors are also emitted here once
+   * they reach the socket, so they stay in sync with `messages` and
+   * `toolStatusStore`.
+   */
   onMessage?: (message: JSONMessage) => void;
+  /**
+   * Called whenever the provider enters an error state.
+   *
+   * Inspect `err.type` to distinguish socket, microphone, and audio playback
+   * failures, and `err.reason` for the specific cause within that category.
+   */
   onError?: (err: VoiceError) => void;
+  /** Called when the voice socket opens. */
   onOpen?: () => void;
+  /**
+   * Called when the voice socket closes.
+   *
+   * Delayed close events from superseded connection attempts are ignored so
+   * they cannot be mistaken for the current connection closing.
+   */
   onClose?: Hume.empathicVoice.chat.ChatSocket.EventHandlers['close'];
+  /**
+   * Called when the assistant requests a tool call.
+   *
+   * The string it returns becomes the content of the tool response sent back
+   * to the assistant. Handle custom tools here.
+   */
   onToolCall?: ToolCallHandler;
+  /** Called when an audio output message arrives from the socket. */
   onAudioReceived?: (audioOutputMessage: AudioOutputMessage) => void;
+  /**
+   * Called when an assistant audio clip begins playing.
+   *
+   * @param clipId - Identifier of the clip that started.
+   */
   onAudioStart?: (clipId: string) => void;
+  /**
+   * Called when an assistant audio clip finishes playing.
+   *
+   * @param clipId - Identifier of the clip that ended.
+   */
   onAudioEnd?: (clipId: string) => void;
+  /** Called when microphone recording starts. */
   onStartRecording?: () => void;
+  /** Called when microphone recording stops. */
   onStopRecording?: () => void;
+  /** Called when the user interrupts the assistant. */
   onInterruption?: (message: UserInterruptionMessage) => void;
   /**
-   * Clear messages when the voice is disconnected.
-   * @default true
+   * Clear messages when the voice is disconnected. Defaults to `true`.
    */
   clearMessagesOnDisconnect?: boolean;
   /**
-   * The maximum number of messages to keep in memory.
-   * @default 100
+   * The maximum number of messages to keep in memory. Defaults to `100`.
    */
   messageHistoryLimit?: number;
+  /**
+   * Selects the audio player implementation. `AudioWorklet` gives the best
+   * playback quality on most browsers, but performs poorly on Safari 17; set
+   * this to `false` there to fall back to the `AudioBuffer` player.
+   * Defaults to `true`.
+   */
   enableAudioWorklet?: boolean;
   /**
    * Configure structured SDK diagnostics. By default, sanitized warnings and
    * errors are written to the browser console. Pass `false` to disable them.
    */
   diagnostics?: false | VoiceDiagnosticsOptions;
-}>;
+}
 
 /**
  * Returns voice state and controls from the nearest {@link VoiceProvider}.
@@ -543,6 +639,21 @@ export const useCallDurationTimestamp = (): string | null => {
   );
 };
 
+/**
+ * Provides the EVI socket, microphone, audio playback queue, and message
+ * history to descendant components, which read them through {@link useVoice}.
+ *
+ * The provider does not connect on mount. Browsers require a user gesture to
+ * start an `AudioContext`, so call `connect` from an event handler such as a
+ * button click rather than from an effect.
+ *
+ * @example
+ * ```tsx
+ * <VoiceProvider onError={(error) => console.error(error.reason)}>
+ *   <YourVoiceUI />
+ * </VoiceProvider>
+ * ```
+ */
 export const VoiceProvider: FC<VoiceProviderProps> = ({
   children,
   clearMessagesOnDisconnect = true,

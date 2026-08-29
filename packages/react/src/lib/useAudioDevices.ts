@@ -7,6 +7,7 @@ import {
   requestAudioDevicePermission,
 } from '../utils';
 
+/** Options for {@link useAudioDevices}. */
 export type UseAudioDevicesOptions = {
   /**
    * Request microphone permission on mount so that real device labels are
@@ -18,18 +19,27 @@ export type UseAudioDevicesOptions = {
   requestPermission?: boolean;
 };
 
+/** Device lists, selection state, and controls returned by {@link useAudioDevices}. */
 export type UseAudioDevicesReturn = {
+  /** Available microphones. */
   inputDevices: AudioDevice[];
+  /** Available speakers. */
   outputDevices: AudioDevice[];
+  /** Currently selected microphone, or `null` for the browser default. */
   selectedInputDeviceId: string | null;
+  /** Currently selected speaker, or `null` for the system default. */
   selectedOutputDeviceId: string | null;
+  /** Select a microphone. Pass `null` to use the browser default. */
   setSelectedInputDeviceId: (deviceId: string | null) => void;
+  /** Select a speaker. Pass `null` to use the system default. */
   setSelectedOutputDeviceId: (deviceId: string | null) => void;
   /** Re-enumerate devices. Called automatically on mount and on `devicechange`. */
   refetch: () => Promise<void>;
   /** Request microphone permission, release the stream, and refresh device labels. */
   requestPermission: () => Promise<void>;
+  /** Whether an enumeration pass is in flight. */
   isLoading: boolean;
+  /** Failure from the most recent enumeration, if any. */
   error: Error | null;
   /** Non-denial failure while acquiring microphone permission. */
   permissionError: Error | null;

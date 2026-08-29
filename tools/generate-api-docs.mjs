@@ -18,6 +18,7 @@ const generatedRoot = join(repositoryRoot, 'docs', '.generated');
 const apiModelDirectory = join(generatedRoot, 'api-model');
 const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
 const packageGuideDirectory = join(repositoryRoot, 'docs', 'packages');
+const guideDirectory = join(repositoryRoot, 'docs', 'guide');
 
 const packages = [
   {
@@ -98,6 +99,27 @@ async function makeMarkdownVitePressSafe() {
   );
 }
 
+async function writeMigrationGuide() {
+  await mkdir(guideDirectory, { recursive: true });
+
+  const migration = await readFile(
+    join(repositoryRoot, 'packages/react/MIGRATION.md'),
+    'utf8',
+  );
+  const frontmatter = [
+    '---',
+    'description: "Breaking changes and upgrade steps for @humeai/voice-react."',
+    'title: "Migrating versions"',
+    '---',
+    '',
+  ].join('\n');
+
+  await writeFile(
+    join(guideDirectory, 'migration.md'),
+    `${frontmatter}${makeReadmeVitePressSafe(migration)}`,
+  );
+}
+
 async function writePackageGuides() {
   await mkdir(packageGuideDirectory, { recursive: true });
 
@@ -128,6 +150,7 @@ await rm(generatedRoot, { force: true, recursive: true });
 await rm(packageGuideDirectory, { force: true, recursive: true });
 await mkdir(apiModelDirectory, { recursive: true });
 await writePackageGuides();
+await writeMigrationGuide();
 
 for (const package_ of packages) {
   const configuration = join(package_.directory, 'api-extractor.json');

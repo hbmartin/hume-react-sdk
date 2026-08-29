@@ -118,3 +118,15 @@ await test('shorter fence markers do not close a longer outer fence', () => {
     ].join('\n'),
   );
 });
+
+await test('relative sibling-document links point at their site routes', () => {
+  assert.equal(
+    makeReadmeVitePressSafe('See the [migration guide](./MIGRATION.md).'),
+    'See the [migration guide](/guide/migration).',
+  );
+});
+
+await test('links to other files are left alone', () => {
+  const unchanged = 'See [the renderer](https://example.com/MIGRATION.md).';
+  assert.equal(makeReadmeVitePressSafe(unchanged), unchanged);
+});

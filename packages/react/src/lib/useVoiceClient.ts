@@ -56,6 +56,12 @@ const getMessageDiagnostics = (message: { type: string }) => {
   };
 };
 
+/**
+ * Connection arguments for the EVI socket.
+ *
+ * {@link ConnectOptions} extends this with the SDK's own microphone, audio,
+ * and device options.
+ */
 export type SocketConfig = {
   auth: AuthStrategy;
   hostname?: string;
@@ -69,16 +75,24 @@ export type SocketCloseEvent = Parameters<
   NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>
 >[0];
 
+/** Ready state of the underlying EVI WebSocket. */
 export enum VoiceReadyState {
+  /** No connection has been attempted yet. */
   IDLE = 'idle',
+  /** A connection attempt is in flight. */
   CONNECTING = 'connecting',
+  /** The socket is open and exchanging messages. */
   OPEN = 'open',
+  /** The socket has closed. */
   CLOSED = 'closed',
 }
 type SessionSettingsOnConnect = Omit<
   Hume.empathicVoice.SessionSettings,
   'builtinTools' | 'tools' | 'metadata' | 'type'
 >;
+/**
+ * Session settings without the wire-level `type` field, which the SDK adds.
+ */
 export type SessionSettingsUpdate = Omit<
   Hume.empathicVoice.SessionSettings,
   'type'
@@ -89,6 +103,7 @@ type ActiveConnection = {
   socket: Hume.empathicVoice.chat.ChatSocket;
 };
 
+/** Stage at which a tool call failed. */
 export type ToolCallErrorSource =
   | 'handler_failure'
   | 'invalid_response'
@@ -112,6 +127,13 @@ const getSessionSettingsOnConnect = (
   return onConnect;
 };
 
+/**
+ * Handles a tool call from the assistant.
+ *
+ * Return `send.success(content)` with the tool result, or `send.error(...)` to
+ * report a failure. Either outcome is delivered to the assistant, appended to
+ * `messages`, and recorded in `toolStatusStore`.
+ */
 export type ToolCallHandler = (
   // message will always be a tool call message where toolType === 'function'
   message: Simplify<
@@ -135,6 +157,7 @@ export type ToolCallHandler = (
   Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage
 >;
 
+/** @internal */
 export const useVoiceClient = (props: {
   diagnostics?: VoiceDiagnosticsReporter;
   onAudioMessage?: (message: AudioOutputMessage) => void;

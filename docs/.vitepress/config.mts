@@ -54,6 +54,7 @@ export default defineConfig({
         {
           items: [
             { link: '/guide/getting-started', text: 'Getting started' },
+            { link: '/guide/migration', text: 'Migrating versions' },
             { link: '/guide/documentation-model', text: 'Documentation model' },
           ],
           text: 'Guides',

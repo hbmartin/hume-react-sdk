@@ -1,6 +1,30 @@
 /**
+ * Sibling Markdown files a package README links to relatively, mapped to the
+ * routes they occupy on the documentation site. Relative links resolve on
+ * GitHub and npm, where the README is read next to its siblings, but not on
+ * the site, where the README is published under `/packages/`.
+ *
+ * @type {ReadonlyArray<readonly [RegExp, string]>}
+ */
+const SIBLING_DOCUMENT_ROUTES = [[/\.\/MIGRATION\.md/gu, '/guide/migration']];
+
+/**
+ * Rewrites relative links to sibling Markdown files so they resolve on the
+ * documentation site.
+ *
+ * @param {string} readme
+ */
+export function rewriteSiblingDocumentLinks(readme) {
+  return SIBLING_DOCUMENT_ROUTES.reduce(
+    (result, [pattern, route]) => result.replace(pattern, route),
+    readme,
+  );
+}
+
+/**
  * Escapes type-like angle brackets that Vue could interpret as template tags
- * while preserving fenced examples and deliberate raw-HTML blocks.
+ * while preserving fenced examples and deliberate raw-HTML blocks, and points
+ * relative sibling-document links at their site routes.
  *
  * @param {string} readme
  */
@@ -9,7 +33,7 @@ export function makeReadmeVitePressSafe(readme) {
     /** @type {{ character: '`' | '~', length: number } | null} */
     codeFence: null,
   };
-  return readme
+  return rewriteSiblingDocumentLinks(readme)
     .replaceAll('\r\n', '\n')
     .split('\n')
     .map((line) => transformReadmeLine(line, state))

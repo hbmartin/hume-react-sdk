@@ -7,64 +7,66 @@
 import { Hume } from 'hume';
 import { z } from 'zod';
 
-// @public (undocumented)
+// @public
 export type AssistantMessage = Hume.empathicVoice.AssistantMessage;
 
-// @public (undocumented)
+// @public
 export type AssistantTranscriptMessage = Hume.empathicVoice.AssistantMessage;
 
-// @public (undocumented)
+// @public
 export type ChatMetadata = Hume.empathicVoice.ChatMetadata;
 
-// @public (undocumented)
+// @public
 export type ChatMetadataMessage = Hume.empathicVoice.ChatMetadata;
 
-// @public (undocumented)
+// Warning: (ae-forgotten-export) The symbol "ClientToFrameActionSchema" needs to be exported by the entry point index.d.ts
+//
+// @public
+export type ClientToFrameAction = z.infer<typeof ClientToFrameActionSchema>;
+
+// @public
 export type CloseHandler = () => void;
 
-// @public (undocumented)
+// @public
 export const COLLAPSE_WIDGET_ACTION: {
     type: 'collapse_widget';
 };
 
-// @public (undocumented)
+// @public
 export class EmbeddedVoice {
     cancelPendingOpen(): void;
-    // (undocumented)
     static create(input: EmbeddedVoiceConfig & {
         onMessage?: TranscriptMessageHandler;
         onClose?: CloseHandler;
         openOnMount?: boolean;
     }): EmbeddedVoice;
-    // (undocumented)
     mount(container?: HTMLElement): () => void;
-    // (undocumented)
     openEmbed(): void;
 }
 
-// @public (undocumented)
+// @public
 export type EmbeddedVoiceConfig = {
     rendererUrl?: string;
     iframeTitle?: string;
 } & SocketConfig;
 
-// @public (undocumented)
+// @public
 export type EmotionScores = Hume.empathicVoice.EmotionScores;
 
-// @public (undocumented)
+// @public
 export const EXPAND_WIDGET_ACTION: {
     type: "expand_widget";
 };
 
 // Warning: (ae-forgotten-export) The symbol "FrameToClientActionSchema" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type FrameToClientAction = z.infer<typeof FrameToClientActionSchema>;
 
-// @public (undocumented)
+// @public
 export type JSONMessage = Hume.empathicVoice.SubscribeEvent;
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 export const LanguageModelOption: {
     readonly CLAUDE_3_OPUS: 'CLAUDE_3_OPUS';
     readonly CLAUDE_3_SONNET: 'CLAUDE_3_SONNET';
@@ -77,20 +79,18 @@ export const LanguageModelOption: {
     readonly FIREWORKS_MIXTRAL_8X7B: 'FIREWORKS_MIXTRAL_8X7B';
 };
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 export type LanguageModelOption = (typeof LanguageModelOption)[keyof typeof LanguageModelOption];
 
-// @public (undocumented)
+// @public
 export const MINIMIZE_WIDGET_ACTION: {
     type: "minimize_widget";
 };
 
-// Warning: (ae-forgotten-export) The symbol "ClientToFrameAction" needs to be exported by the entry point index.d.ts
-//
-// @public (undocumented)
+// @public
 export const parseClientToFrameAction: (data: unknown) => Promise<ClientToFrameAction>;
 
-// @public (undocumented)
+// @public
 export const RESIZE_FRAME_ACTION: (dimensions: {
     width: number;
     height: number;
@@ -105,55 +105,53 @@ export const RESIZE_FRAME_ACTION: (dimensions: {
 // Warning: (ae-forgotten-export) The symbol "SocketAuthSchema" needs to be exported by the entry point index.d.ts
 // Warning: (ae-forgotten-export) The symbol "SocketConnectSchema" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type SocketConfig = SocketAuthSchema & SocketConnectSchema;
 
-// @public (undocumented)
+// @public
 export type SubscribeEvent = Hume.empathicVoice.SubscribeEvent;
 
-// @public (undocumented)
+// @public
 export type ToolCall = Hume.empathicVoice.ToolCallMessage;
 
-// @public (undocumented)
+// @public
 export type ToolCallMessage = Hume.empathicVoice.ToolCallMessage;
 
-// @public (undocumented)
+// @public
 export type ToolError = Hume.empathicVoice.ToolErrorMessage;
 
-// @public (undocumented)
+// @public
 export type ToolErrorMessage = Hume.empathicVoice.ToolErrorMessage;
 
-// @public (undocumented)
+// @public
 export type ToolResponse = Hume.empathicVoice.ToolResponseMessage;
 
-// @public (undocumented)
+// @public
 export type ToolResponseMessage = Hume.empathicVoice.ToolResponseMessage;
 
-// @public (undocumented)
+// @public
 export const TRANSCRIPT_MESSAGE_ACTION: (message: Hume.empathicVoice.UserMessage | Hume.empathicVoice.AssistantMessage) => {
     type: "transcript_message";
     payload: Hume.empathicVoice.AssistantMessage | Hume.empathicVoice.UserMessage;
 };
 
-// @public (undocumented)
+// @public
 export type TranscriptMessageHandler = (message: Hume.empathicVoice.UserMessage | Hume.empathicVoice.AssistantMessage) => void;
 
-// @public (undocumented)
+// @public
 export type UserMessage = Hume.empathicVoice.UserMessage;
 
-// @public (undocumented)
+// @public
 export type UserTranscriptMessage = Hume.empathicVoice.UserMessage;
 
-// @public (undocumented)
+// @public
 export const WIDGET_IFRAME_IS_READY_ACTION: {
     type: "widget_iframe_is_ready";
 };
 
 // Warning: (ae-forgotten-export) The symbol "WindowDimensionsSchema" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type WindowDimensions = z.infer<typeof WindowDimensionsSchema>;
-
-// (No @packageDocumentation comment for this package)
 
 ```

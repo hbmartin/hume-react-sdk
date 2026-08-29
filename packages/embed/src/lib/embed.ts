@@ -10,17 +10,45 @@ import {
   WIDGET_IFRAME_IS_READY_ACTION,
 } from './embed-messages';
 
+/** Widget options, combined with the socket credentials to forward to it. */
 export type EmbeddedVoiceConfig = {
+  /**
+   * Where the widget is hosted. Defaults to `https://voice-widget.hume.ai`.
+   */
   rendererUrl?: string;
+  /**
+   * Accessible title for the widget iframe. Defaults to
+   * `Hume Empathic Voice Widget`.
+   */
   iframeTitle?: string;
 } & SocketConfig;
 
+/** Receives user and assistant transcripts as the conversation proceeds. */
 export type TranscriptMessageHandler = (
   message: Hume.empathicVoice.UserMessage | Hume.empathicVoice.AssistantMessage,
 ) => void;
 
+/** Called when the user collapses the widget. */
 export type CloseHandler = () => void;
 
+/**
+ * Hume's hosted voice widget, embedded in an iframe.
+ *
+ * Create an instance with {@link EmbeddedVoice.create}, then call
+ * {@link EmbeddedVoice.mount} to attach it to the page. The iframe owns the
+ * EVI connection, the microphone, and audio playback.
+ *
+ * @example
+ * ```ts
+ * const widget = EmbeddedVoice.create({
+ *   auth: { type: 'accessToken', value: accessToken },
+ *   onMessage: (message) => console.log(message),
+ * });
+ *
+ * const unmount = widget.mount();
+ * widget.openEmbed();
+ * ```
+ */
 export class EmbeddedVoice {
   private iframe: HTMLIFrameElement;
 
@@ -56,6 +84,12 @@ export class EmbeddedVoice {
     this.messageHandler = this.messageHandler.bind(this);
   }
 
+  /**
+   * Creates a widget instance without attaching it to the page.
+   *
+   * @param config - Credentials, widget options, and event handlers.
+   * @returns An unmounted widget; call {@link EmbeddedVoice.mount} next.
+   */
   static create({
     rendererUrl,
     onMessage,
@@ -76,6 +110,14 @@ export class EmbeddedVoice {
     });
   }
 
+  /**
+   * Attaches the widget iframe to the page and starts listening for its
+   * messages.
+   *
+   * @param container - Element to mount into. When omitted, a fixed-position
+   * container is appended to `document.body` and removed again on unmount.
+   * @returns A function that unmounts the widget and removes its listeners.
+   */
   mount(container?: HTMLElement) {
     // Reattaching an iframe creates a fresh renderer lifecycle, even when the
     // same element and EmbeddedVoice instance are reused.
@@ -215,6 +257,13 @@ export class EmbeddedVoice {
     }
   }
 
+  /**
+   * Opens the widget.
+   *
+   * Called before the iframe signals readiness, the request is deferred and
+   * applied as soon as the widget is ready; {@link
+   * EmbeddedVoice.cancelPendingOpen} withdraws a deferred request.
+   */
   openEmbed() {
     if (!this.isReady) {
       this.shouldOpenWhenReady = true;

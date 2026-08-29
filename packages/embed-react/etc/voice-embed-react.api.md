@@ -33,10 +33,12 @@ export { ChatMetadataMessage }
 
 export { COLLAPSE_WIDGET_ACTION }
 
-// @public (undocumented)
+// @public
 export const EmbeddedVoice: (props: EmbeddedVoiceProps) => null;
 
-// @public (undocumented)
+export { EmbeddedVoiceConfig }
+
+// @public
 export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> & NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
     onMessage?: TranscriptMessageHandler;
     onClose?: CloseHandler;
@@ -75,7 +77,5 @@ export { UserTranscriptMessage }
 export { WIDGET_IFRAME_IS_READY_ACTION }
 
 export { WindowDimensions }
-
-// (No @packageDocumentation comment for this package)
 
 ```

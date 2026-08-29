@@ -2,12 +2,18 @@ import { useSyncExternalStore } from 'react';
 
 const BARK_BAND_COUNT = 24;
 
+/**
+ * Frequency-domain magnitudes for one animation frame.
+ *
+ * The array is shared between subscribers and must not be mutated.
+ */
 export type FftSnapshot = readonly number[];
 
 const EMPTY_FFT: FftSnapshot = Object.freeze(
   Array.from({ length: BARK_BAND_COUNT }, () => 0),
 );
 
+/** @internal */
 export class FftStore {
   private _buffer: number[] = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
@@ -78,6 +84,7 @@ export class FftStore {
   }
 }
 
+/** @internal */
 export function useFftSubscription(store: FftStore): FftSnapshot {
   return useSyncExternalStore(
     store.subscribe,

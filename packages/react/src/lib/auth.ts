@@ -11,6 +11,7 @@ const credentialSchema = (label: string) =>
       `${label} for the Hume API must not be empty`,
     );
 
+/** @internal */
 export const AuthStrategySchema = z.discriminatedUnion(
   'type',
   [
@@ -31,6 +32,14 @@ export const AuthStrategySchema = z.discriminatedUnion(
   },
 );
 
+/**
+ * Credentials used to authenticate the EVI socket handshake.
+ *
+ * The value is sent from the browser and is therefore visible to end users.
+ * Use `accessToken` with a short-lived token minted by your server in
+ * production, and reserve `apiKey` for local prototyping — an API key is a
+ * long-lived secret that can bill your account.
+ */
 export type AuthStrategy = z.infer<typeof AuthStrategySchema>;
 
 /**

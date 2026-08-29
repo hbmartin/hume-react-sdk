@@ -1,10 +1,25 @@
 {
   "name": "@humeai/voice-embed-react",
   "version": "0.2.18",
-  "description": "",
-  "keywords": [],
+  "description": "Embed Hume's hosted Empathic Voice Interface (EVI) widget in a React application.",
+  "keywords": [
+    "ai",
+    "conversational ai",
+    "embed",
+    "empathic voice interface",
+    "evi",
+    "hume",
+    "react",
+    "speech",
+    "voice",
+    "widget"
+  ],
+  "homepage": "https://github.com/HumeAI/hume-react-sdk",
+  "bugs": {
+    "url": "https://github.com/HumeAI/hume-react-sdk/issues"
+  },
   "license": "ISC",
-  "author": "",
+  "author": "Hume AI",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HumeAI/hume-react-sdk.git",

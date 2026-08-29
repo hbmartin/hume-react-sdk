@@ -1,3 +1,14 @@
+/**
+ * Headless React bindings for Hume's Empathic Voice Interface.
+ *
+ * Wrap your tree in `VoiceProvider`, then read connection state and
+ * controls with `useVoice`. The package ships no UI: it manages the EVI
+ * WebSocket, microphone capture, the audio playback queue, and message
+ * history, and leaves the interface to you.
+ *
+ * @packageDocumentation
+ */
+
 export type * from './lib/connection-message';
 export type {
   VoiceDiagnosticCategory,
@@ -34,3 +45,5 @@ export {
 } from './utils';
 
 export type { SocketConfig } from './lib/useVoiceClient';
+export type { AuthStrategy } from './lib/auth';
+export type { ToolStatusEntry, ToolStatusStore } from './lib/useToolStatus';

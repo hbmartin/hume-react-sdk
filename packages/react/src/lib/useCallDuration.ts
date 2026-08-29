@@ -1,6 +1,7 @@
 import { intervalToDuration } from 'date-fns';
 import { useCallback, useEffect, useRef } from 'react';
 
+/** @internal */
 class CallDurationStore {
   private _snapshot: string | null = null;
 
@@ -30,6 +31,7 @@ class CallDurationStore {
   };
 }
 
+/** @internal */
 export const useCallDuration = () => {
   const interval = useRef<number | null>(null);
   const startTime = useRef<number | null>(null);
