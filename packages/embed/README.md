@@ -46,36 +46,71 @@ import { EmbeddedVoice } from '@humeai/voice-embed';
 
 ### Quickstart
 
-Here's a simple example to get you started with the `EmbeddedVoice` component:
+`EmbeddedVoice.create()` builds the widget; `mount()` attaches it to the page
+and returns a function that tears it down again.
 
-```tsx
-import {
-  type CloseHandler,
-  EmbeddedVoice as EA,
-  type EmbeddedVoiceConfig,
-  type TranscriptMessageHandler,
-} from '@humeai/voice-embed';
+```ts
+import { EmbeddedVoice } from '@humeai/voice-embed';
 
-const embeddedVoice = EA.create({
-  // Configuration options
+const widget = EmbeddedVoice.create({
+  auth: { type: 'accessToken', value: accessToken },
+  onMessage: (message) => {
+    console.log(message);
+  },
+  onClose: () => {
+    console.log('The user closed the widget.');
+  },
 });
+
+// Attach the widget. Pass an element to mount into a container of your own.
+const unmount = widget.mount();
+
+// Open it from a click handler, or pass `openOnMount: true` above.
+document.querySelector('#talk')?.addEventListener('click', () => {
+  widget.openEmbed();
+});
+
+// Later, when tearing down the page:
+unmount();
 ```
 
-**Note:** For integration within server components, instantiate `EmbeddedVoice` within a client component. For more information checkout the [Next.js documentation on client components](https://nextjs.org/docs/app/building-your-application/rendering/client-components).
+**Keep your API key off the client.** The `auth` value is forwarded from the
+browser to the widget and used for the WebSocket handshake, so it is visible to
+your end users. Your Hume API key is a long-lived secret that can bill your
+account; for production apps use `{ type: 'accessToken', value: accessToken }`
+with a short-lived token minted by your server (see
+[token authentication](https://dev.hume.ai/docs/introduction/api-key#token-authentication)),
+and reserve `{ type: 'apiKey' }` for local prototyping.
+
+**Note:** For integration within server components, instantiate `EmbeddedVoice`
+within a client component. For more information checkout the
+[Next.js documentation on client components](https://nextjs.org/docs/app/building-your-application/rendering/client-components).
 
 ### Configuration options
 
-Configuration options for the embedded voice include all props that are accepted by the VoiceProvider in the [@humeai/voice-react package](https://github.com/HumeAI/hume-react-sdk/blob/main/packages/react).
+`EmbeddedVoice.create()` accepts the same authentication and session options as
+the `VoiceProvider` in the
+[@humeai/voice-react package](https://github.com/HumeAI/hume-react-sdk/blob/main/packages/react),
+plus these widget-specific options:
 
-In addition, it accepts a few other configurations specific to creating a widget:
+| Option        | Required | Description                                                                                                                                                                                          |
+| ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth`        | yes      | Credentials for the EVI handshake: `{ type: 'accessToken', value }` in production, or `{ type: 'apiKey', value }` for local prototyping.                                                             |
+| `openOnMount` | no       | Open the widget as soon as it is ready, rather than waiting for a call to `openEmbed()`. Defaults to `false`.                                                                                        |
+| `rendererUrl` | no       | URL where the widget itself is hosted. Defaults to the Hume AI widget at [voice-widget.hume.ai](https://voice-widget.hume.ai). An example of this widget can be found at [hume.ai](https://hume.ai). |
+| `iframeTitle` | no       | Accessible title for the widget iframe. Defaults to `Hume Empathic Voice Widget`.                                                                                                                    |
+| `onMessage`   | no       | Called with each user and assistant transcript as the conversation proceeds.                                                                                                                         |
+| `onClose`     | no       | Called when the user collapses the widget.                                                                                                                                                           |
 
-| Option        | Required | Description                                                                                                                                                                                                                                                                                                                         |
-| ------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isEmbedOpen` | yes      | Determines the initial visibility of the widget. Assign `true` to render the widget as open on initial load, and `false` to start with the widget closed. While the widget's UI provides a trigger to toggle its visibility, this prop also enables external control over the widget's visibility state through a parent component. |
-| rendererUrl   | no       | URL where the widget itself is hosted. If blank, this defaults to the Hume AI widget at [voice-widget.hume.ai](https://voice-widget.hume.ai). An example of this widget can be found at [hume.ai](https://hume.ai).                                                                                                                 |
-| `onMessage`   | no       | Callback function to invoke upon receiving a message through the web socket.                                                                                                                                                                                                                                                        |
-| `onClose`     | no       | Callback function to invoke upon the web socket connection being closed.                                                                                                                                                                                                                                                            |
-| `openOnMount` | no       | Boolean which indicates whether the widget should be initialized in an open or closed state. Set as `true` if you want it to be open. The default value is `false`.                                                                                                                                                                 |
+Visibility is controlled imperatively rather than through a prop: `openEmbed()`
+opens the widget, and `cancelPendingOpen()` withdraws an open request that is
+still waiting for the iframe to become ready. Users close the widget through its
+own UI, which invokes `onClose`.
+
+### API reference
+
+Full generated signatures for every export live in the
+[SDK API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-embed).
 
 ## Support
 

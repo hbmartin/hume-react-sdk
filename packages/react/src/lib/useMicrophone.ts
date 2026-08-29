@@ -34,6 +34,7 @@ type DisposeMicrophoneOptions = {
   restoreOnFailure?: boolean;
 };
 
+/** @internal */
 export type MicrophoneProps = {
   diagnostics?: VoiceDiagnosticsReporter;
   onAudioCaptured: (b: ArrayBuffer) => void;
@@ -42,6 +43,7 @@ export type MicrophoneProps = {
   onError: (message: string, reason: MicErrorReason) => void;
 };
 
+/** @internal */
 export const useMicrophone = (props: MicrophoneProps) => {
   const { onAudioCaptured } = props;
   const fallbackDiagnostics = useRef<VoiceDiagnosticsReporter | null>(null);

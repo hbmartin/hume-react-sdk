@@ -10,23 +10,22 @@ import { PropsWithChildren } from 'react';
 import { Simplify } from 'type-fest';
 import z from 'zod';
 
-// Warning: (ae-forgotten-export) The symbol "WithReceivedAt" needs to be exported by the entry point index.d.ts
 // Warning: (ae-forgotten-export) The symbol "AssistantEnd" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type AssistantEndMessage = WithReceivedAt<AssistantEnd>;
 
 // Warning: (ae-forgotten-export) The symbol "AssistantProsody" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type AssistantProsodyMessage = WithReceivedAt<AssistantProsody>;
 
 // Warning: (ae-forgotten-export) The symbol "AssistantMessage" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type AssistantTranscriptMessage = WithReceivedAt<AssistantMessage>;
 
-// @public (undocumented)
+// @public
 export type AudioConstraints = {
     echoCancellation?: boolean;
     noiseSuppression?: boolean;
@@ -40,52 +39,56 @@ export type AudioDevice = {
     kind: AudioDeviceKind;
 };
 
-// @public (undocumented)
+// @public
 export type AudioDeviceKind = 'audioinput' | 'audiooutput';
 
-// @public (undocumented)
+// @public
 export type AudioDevices = {
     inputDevices: AudioDevice[];
     outputDevices: AudioDevice[];
 };
 
-// @public (undocumented)
+// @public
 export class AudioDeviceSwitchError extends Error {
     constructor(kind: AudioDeviceKind, reason: AudioDeviceSwitchErrorReason, message: string, cause?: unknown);
-    // (undocumented)
     readonly cause: unknown;
-    // (undocumented)
     readonly kind: AudioDeviceKind;
-    // (undocumented)
     readonly reason: AudioDeviceSwitchErrorReason;
 }
 
-// @public (undocumented)
+// @public
 export type AudioDeviceSwitchErrorReason = 'not_connected' | 'unsupported' | 'permission_denied' | 'device_not_found' | 'switch_failed' | 'interrupted';
 
-// @public (undocumented)
+// @public
 export const AudioEncoding: {
     readonly LINEAR16: 'linear16';
     readonly OPUS: 'opus';
 };
 
-// @public (undocumented)
+// @public
 export type AudioEncoding = (typeof AudioEncoding)[keyof typeof AudioEncoding];
 
 // Warning: (ae-forgotten-export) The symbol "AudioInput" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type AudioMessage = WithReceivedAt<AudioInput>;
 
 // Warning: (ae-forgotten-export) The symbol "AudioOutput" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type AudioOutputMessage = WithReceivedAt<AudioOutput>;
 
-// @public (undocumented)
+// @public
 export type AudioPlayerErrorReason = 'audio_player_initialization_failure' | 'audio_worklet_load_failure' | 'audio_player_not_initialized' | 'malformed_audio' | 'audio_player_closure_failure';
 
-// @public (undocumented)
+// Warning: (ae-forgotten-export) The symbol "AuthStrategySchema" needs to be exported by the entry point index.d.ts
+//
+// @public
+export type AuthStrategy = z.infer<typeof AuthStrategySchema>;
+
+// Warning: (ae-internal-missing-underscore) The name "CallDurationStore" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export class CallDurationStore {
     // (undocumented)
     getServerSnapshot: () => string | null;
@@ -97,7 +100,7 @@ export class CallDurationStore {
     write(value: string | null): void;
 }
 
-// @public (undocumented)
+// @public
 export const Channels: {
     readonly 1: 'MONO';
     readonly 2: 'STEREO';
@@ -105,26 +108,27 @@ export const Channels: {
     readonly STEREO: 2;
 };
 
-// @public (undocumented)
+// @public
 export type Channels = typeof Channels.MONO | typeof Channels.STEREO;
 
 // Warning: (ae-forgotten-export) The symbol "ChatMetadata" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type ChatMetadataMessage = WithReceivedAt<ChatMetadata>;
 
-// @public (undocumented)
+// @public
 type CloseEvent_2 = Parameters<NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>>[0];
 export { CloseEvent_2 as CloseEvent }
 
 // @public
 export class ConcurrentConnectAuthError extends Error {
     constructor();
-    // (undocumented)
     readonly reason: 'auth_conflict';
 }
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "ConnectionGenerationError" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export class ConnectionGenerationError extends Error {
     constructor(connectionGeneration: number, reason: ConnectionGenerationErrorReason, message: string);
     // (undocumented)
@@ -133,10 +137,12 @@ export class ConnectionGenerationError extends Error {
     readonly reason: ConnectionGenerationErrorReason;
 }
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "ConnectionGenerationErrorReason" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export type ConnectionGenerationErrorReason = 'invalid' | 'not_strictly_increasing';
 
-// @public (undocumented)
+// @public
 export type ConnectionMessage = {
     type: 'socket_connected';
     receivedAt: Date;
@@ -151,23 +157,25 @@ export type ConnectionMessage = {
     receivedAt: Date;
 };
 
-// @public (undocumented)
+// @public
 export type ConnectOptions = Omit<SocketConfig, 'reconnectAttempts'> & {
     audioConstraints?: AudioConstraints;
     sessionSettings?: Hume.empathicVoice.SessionSettings;
     devices?: DeviceOptions;
 };
 
-// @public (undocumented)
+// @public
 export type DeviceOptions = {
     microphoneDeviceId?: string;
     speakerDeviceId?: string;
 };
 
-// @public (undocumented)
+// @public
 export type FftSnapshot = readonly number[];
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "FftStore" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export class FftStore {
     // (undocumented)
     clear(): void;
@@ -201,7 +209,9 @@ export const isAudioDeviceSwitchError: (error: unknown) => error is AudioDeviceS
 // @public
 export const isConcurrentConnectAuthError: (error: unknown) => error is ConcurrentConnectAuthError;
 
-// @public
+// Warning: (ae-internal-missing-underscore) The name "isConnectionGenerationError" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const isConnectionGenerationError: (error: unknown) => error is ConnectionGenerationError;
 
 // @public
@@ -212,15 +222,15 @@ export const isSocketUnknownMessageError: (err: unknown) => err is SocketUnknown
 
 // Warning: (ae-forgotten-export) The symbol "WebSocketError" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type JSONErrorMessage = WithReceivedAt<WebSocketError>;
 
 // Warning: (ae-forgotten-export) The symbol "JsonMessage" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type JSONMessage = WithReceivedAt<JsonMessage>;
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 export const LanguageModelOption: {
     readonly CLAUDE_3_OPUS: 'CLAUDE_3_OPUS';
     readonly CLAUDE_3_SONNET: 'CLAUDE_3_SONNET';
@@ -233,13 +243,15 @@ export const LanguageModelOption: {
     readonly FIREWORKS_MIXTRAL_8X7B: 'FIREWORKS_MIXTRAL_8X7B';
 };
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 export type LanguageModelOption = (typeof LanguageModelOption)[keyof typeof LanguageModelOption];
 
-// @public (undocumented)
+// @public
 export type MicErrorReason = 'mic_permission_denied' | 'mic_initialization_failure' | 'mic_closure_failure' | 'mime_types_not_supported';
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "MicrophoneProps" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export type MicrophoneProps = {
     diagnostics?: VoiceDiagnosticsReporter;
     onAudioCaptured: (b: ArrayBuffer) => void;
@@ -266,35 +278,39 @@ export const parseMessageType: (event: MessageEvent) => Promise<ParsedMessageRes
 // @public
 export const requestAudioDevicePermission: () => Promise<void>;
 
-// @public (undocumented)
+// @public
 export type SessionSettingsUpdate = Omit<Hume.empathicVoice.SessionSettings, 'type'>;
 
 // @public
 export type SocketCloseEvent = Parameters<NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>>[0];
 
-// @public (undocumented)
+// @public
 export type SocketConfig = {
     auth: AuthStrategy;
     hostname?: string;
 } & Hume.empathicVoice.chat.Chat.ConnectArgs;
 
-// @public (undocumented)
+// @public
 export type SocketErrorReason = 'socket_connection_failure' | 'failed_to_send_audio' | 'failed_to_send_message' | 'received_assistant_error_message' | 'received_tool_call_error';
 
-// @public (undocumented)
+// @public
 export class SocketFailedToParseMessageError extends Error {
     constructor(message?: string);
 }
 
-// @public (undocumented)
+// @public
 export class SocketUnknownMessageError extends Error {
     constructor(message?: string);
 }
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "TimeSlice" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export type TimeSlice = z.infer<typeof TimeSliceSchema>;
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "TimeSliceSchema" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const TimeSliceSchema: z.ZodObject<{
     begin: z.ZodNumber;
     end: z.ZodNumber;
@@ -308,13 +324,13 @@ export const TimeSliceSchema: z.ZodObject<{
 
 // Warning: (ae-forgotten-export) The symbol "ToolCallMessage" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type ToolCall = WithReceivedAt<ToolCallMessage>;
 
-// @public (undocumented)
+// @public
 export type ToolCallErrorSource = 'handler_failure' | 'invalid_response' | 'send_failure';
 
-// @public (undocumented)
+// @public
 export type ToolCallHandler = (message: Simplify<ToolCall & {
     toolType: typeof Hume.empathicVoice.ToolType.Function;
 }>, send: {
@@ -329,33 +345,42 @@ export type ToolCallHandler = (message: Simplify<ToolCall & {
 
 // Warning: (ae-forgotten-export) The symbol "ToolErrorMessage" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type ToolError = WithReceivedAt<ToolErrorMessage>;
 
 // Warning: (ae-forgotten-export) The symbol "ToolResponseMessage" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type ToolResponse = WithReceivedAt<ToolResponseMessage>;
 
-// @public (undocumented)
+// @public
+export interface ToolStatusEntry {
+    call?: ToolCall;
+    resolved?: ToolResponse | ToolError;
+}
+
+// @public
+export type ToolStatusStore = Record<string, ToolStatusEntry>;
+
+// @public
 export const TTSService: {
     readonly DEFAULT: 'hume_ai';
     readonly ELEVEN_LABS: 'eleven_labs';
     readonly PLAY_HT: 'play_ht';
 };
 
-// @public (undocumented)
+// @public
 export type TTSService = (typeof TTSService)[keyof typeof TTSService];
 
 // @public
 export const useAudioDevices: (input?: UseAudioDevicesOptions) => UseAudioDevicesReturn;
 
-// @public (undocumented)
+// @public
 export type UseAudioDevicesOptions = {
     requestPermission?: boolean;
 };
 
-// @public (undocumented)
+// @public
 export type UseAudioDevicesReturn = {
     inputDevices: AudioDevice[];
     outputDevices: AudioDevice[];
@@ -372,7 +397,9 @@ export type UseAudioDevicesReturn = {
     permissionDenied: boolean;
 };
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "useCallDuration" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const useCallDuration: () => {
     store: CallDurationStore;
     start: () => void;
@@ -382,13 +409,17 @@ export const useCallDuration: () => {
 // @public
 export const useCallDurationTimestamp: () => string | null;
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "useFftSubscription" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export function useFftSubscription(store: FftStore): FftSnapshot;
 
 // @public
 export const useMicFft: () => FftSnapshot;
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "useMicrophone" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const useMicrophone: (props: MicrophoneProps) => {
     start: (stream: MediaStream, sharedAudioContext?: AudioContext) => void;
     replace: (stream: MediaStream, sharedAudioContext?: AudioContext) => Promise<void>;
@@ -399,7 +430,9 @@ export const useMicrophone: (props: MicrophoneProps) => {
     fftStore: FftStore;
 };
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "useMicrophoneStream" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const useMicrophoneStream: () => {
     getStream: (audioConstraints: MediaTrackConstraints) => Promise<MediaStream>;
     stopStream: (stream?: MediaStream | null) => void;
@@ -411,15 +444,17 @@ export const usePlayerFft: () => FftSnapshot;
 
 // Warning: (ae-forgotten-export) The symbol "UserInterruption" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 
 // Warning: (ae-forgotten-export) The symbol "UserMessage" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
-// @public
+// Warning: (ae-internal-missing-underscore) The name "useSoundPlayer" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const useSoundPlayer: (props: {
     diagnostics?: VoiceDiagnosticsReporter;
     enableAudioWorklet: boolean;
@@ -447,7 +482,9 @@ export const useSoundPlayer: (props: {
 // @public
 export const useVoice: () => VoiceContextType;
 
-// @public (undocumented)
+// Warning: (ae-internal-missing-underscore) The name "useVoiceClient" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal (undocumented)
 export const useVoiceClient: (props: {
     diagnostics?: VoiceDiagnosticsReporter;
     onAudioMessage?: (message: AudioOutputMessage) => void;
@@ -472,59 +509,59 @@ export const useVoiceClient: (props: {
 };
 
 // @public
-export type VoiceAudioDeviceState = {
-    requestedInputDeviceId: string | null;
+export interface VoiceAudioDeviceState {
     activeInputDeviceId: string | null;
-    requestedOutputDeviceId: string | null;
     activeOutputDeviceId: string | null;
-};
+    requestedInputDeviceId: string | null;
+    requestedOutputDeviceId: string | null;
+}
 
 // @public
-export type VoiceContextType = VoiceAudioDeviceState & {
+export interface VoiceContextType extends VoiceAudioDeviceState {
+    chatMetadata: ChatMetadataMessage | null;
+    clearMessages: () => void;
     connect: (options: ConnectOptions) => Promise<void>;
     disconnect: () => Promise<void>;
-    setInputDevice: (deviceId: string | null) => Promise<void>;
-    setOutputDevice: (deviceId: string | null) => Promise<void>;
-    isMuted: boolean;
+    error: VoiceError | null;
+    isAudioError: boolean;
     isAudioMuted: boolean;
+    isError: boolean;
+    isMicrophoneError: boolean;
+    isMuted: boolean;
+    isPaused: boolean;
     isPlaying: boolean;
-    messages: (JSONMessage | ConnectionMessage)[];
-    lastVoiceMessage: AssistantTranscriptMessage | null;
-    lastUserMessage: UserTranscriptMessage | null;
+    isSocketError: boolean;
     lastAssistantProsodyMessage: AssistantProsodyMessage | null;
-    clearMessages: () => void;
+    lastUserMessage: UserTranscriptMessage | null;
+    lastVoiceMessage: AssistantTranscriptMessage | null;
+    messages: (JSONMessage | ConnectionMessage)[];
     mute: () => void;
-    unmute: () => void;
     muteAudio: () => void;
-    unmuteAudio: () => void;
+    pauseAssistant: () => void;
+    playerQueueLength: number;
     readyState: VoiceReadyState;
-    sendUserInput: (text: string) => void;
+    resumeAssistant: () => void;
     sendAssistantInput: (text: string) => void;
     sendSessionSettings: (sessionSettings: SessionSettingsUpdate) => void;
     sendToolMessage: (type: Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage) => void;
-    pauseAssistant: () => void;
-    resumeAssistant: () => void;
-    status: VoiceStatus;
-    error: VoiceError | null;
-    isAudioError: boolean;
-    isError: boolean;
-    isMicrophoneError: boolean;
-    isSocketError: boolean;
-    toolStatusStore: ReturnType<typeof useToolStatus>['store'];
-    chatMetadata: ChatMetadataMessage | null;
-    playerQueueLength: number;
-    isPaused: boolean;
-    volume: number;
+    sendUserInput: (text: string) => void;
+    setInputDevice: (deviceId: string | null) => Promise<void>;
+    setOutputDevice: (deviceId: string | null) => Promise<void>;
     setVolume: (level: number) => void;
-};
+    status: VoiceStatus;
+    toolStatusStore: ToolStatusStore;
+    unmute: () => void;
+    unmuteAudio: () => void;
+    volume: number;
+}
 
-// @public (undocumented)
+// @public
 export type VoiceDiagnosticCategory = 'connection' | 'socket' | 'microphone' | 'audio_player' | 'audio_device' | 'message' | 'tool' | 'consumer';
 
-// @public (undocumented)
+// @public
 export type VoiceDiagnosticDetails = Readonly<Record<string, VoiceDiagnosticValue>>;
 
-// @public (undocumented)
+// @public
 export type VoiceDiagnosticEvent = Readonly<{
     schemaVersion: 1;
     sdkVersion: string;
@@ -540,87 +577,101 @@ export type VoiceDiagnosticEvent = Readonly<{
     details: VoiceDiagnosticDetails;
 }>;
 
-// @public (undocumented)
+// @public
 export type VoiceDiagnosticEventName = 'connection.attempt_started' | 'connection.attempt_ignored' | 'connection.attempt_cancelled' | 'connection.connected' | 'connection.disconnect_started' | 'connection.disconnected' | 'socket.opened' | 'socket.closed' | 'resource.initialization_started' | 'resource.initialized' | 'resource.stop_started' | 'resource.stopped' | 'resource.cleanup_failed' | 'microphone.permission_requested' | 'microphone.permission_resolved' | 'microphone.mime_type_selected' | 'microphone.recording_started' | 'microphone.recording_stopped' | 'microphone.audio_chunk_captured' | 'microphone.flush_completed' | 'microphone.analyzer_failed' | 'audio.chunk_received' | 'audio.queue_changed' | 'audio.playback_started' | 'audio.playback_ended' | 'audio.drain_completed' | 'audio_device.switch_started' | 'audio_device.switch_completed' | 'audio_device.switch_failed' | 'audio_device.switch_ignored' | 'message.sent' | 'message.received' | 'message.skipped' | 'tool.handler_started' | 'tool.handler_completed' | 'tool.handler_failed' | 'tool.handler_skipped' | 'control.changed' | 'consumer.callback_failed' | 'sdk.error' | 'sdk.error_cleared';
 
-// @public (undocumented)
+// @public
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
-// @public (undocumented)
+// @public
 export interface VoiceDiagnosticsOptions {
-    // (undocumented)
     includeContent?: boolean;
-    // (undocumented)
     level?: VoiceDiagnosticLevel;
-    // (undocumented)
     logger?: VoiceLogger | false;
-    // (undocumented)
     onEvent?: (event: VoiceDiagnosticEvent) => void;
 }
 
 // Warning: (ae-forgotten-export) The symbol "VoiceDiagnosticPrimitive" needs to be exported by the entry point index.d.ts
 //
-// @public (undocumented)
+// @public
 export type VoiceDiagnosticValue = VoiceDiagnosticPrimitive | readonly VoiceDiagnosticValue[] | {
     readonly [key: string]: VoiceDiagnosticValue;
 };
 
-// @public (undocumented)
+// @public
+export type VoiceError = {
+    type: 'socket_error';
+    reason: SocketErrorReason;
+    message: string;
+    error?: Error;
+} | {
+    type: 'audio_error';
+    reason: AudioPlayerErrorReason;
+    message: string;
+    error?: Error;
+} | {
+    type: 'mic_error';
+    reason: MicErrorReason;
+    message: string;
+    error?: Error;
+};
+
+// @public
 export interface VoiceLogger {
-    // (undocumented)
     debug(message: string, event: VoiceDiagnosticEvent): void;
-    // (undocumented)
     error(message: string, event: VoiceDiagnosticEvent): void;
-    // (undocumented)
     info(message: string, event: VoiceDiagnosticEvent): void;
-    // (undocumented)
     warn(message: string, event: VoiceDiagnosticEvent): void;
 }
 
-// @public (undocumented)
+// @public
 export const VoiceProvider: FC<VoiceProviderProps>;
 
-// @public (undocumented)
-export type VoiceProviderProps = PropsWithChildren<{
-    onMessage?: (message: JSONMessage) => void;
-    onError?: (err: VoiceError) => void;
-    onOpen?: () => void;
-    onClose?: Hume.empathicVoice.chat.ChatSocket.EventHandlers['close'];
-    onToolCall?: ToolCallHandler;
+// @public
+export interface VoiceProviderProps extends PropsWithChildren {
+    clearMessagesOnDisconnect?: boolean;
+    diagnostics?: false | VoiceDiagnosticsOptions;
+    enableAudioWorklet?: boolean;
+    messageHistoryLimit?: number;
+    onAudioEnd?: (clipId: string) => void;
     onAudioReceived?: (audioOutputMessage: AudioOutputMessage) => void;
     onAudioStart?: (clipId: string) => void;
-    onAudioEnd?: (clipId: string) => void;
+    onClose?: Hume.empathicVoice.chat.ChatSocket.EventHandlers['close'];
+    onError?: (err: VoiceError) => void;
+    onInterruption?: (message: UserInterruptionMessage) => void;
+    onMessage?: (message: JSONMessage) => void;
+    onOpen?: () => void;
     onStartRecording?: () => void;
     onStopRecording?: () => void;
-    onInterruption?: (message: UserInterruptionMessage) => void;
-    clearMessagesOnDisconnect?: boolean;
-    messageHistoryLimit?: number;
-    enableAudioWorklet?: boolean;
-    diagnostics?: false | VoiceDiagnosticsOptions;
-}>;
+    onToolCall?: ToolCallHandler;
+}
 
-// @public (undocumented)
+// @public
 export enum VoiceReadyState {
-    // (undocumented)
     CLOSED = "closed",
-    // (undocumented)
     CONNECTING = "connecting",
-    // (undocumented)
     IDLE = "idle",
-    // (undocumented)
     OPEN = "open"
 }
 
+// @public
+export type VoiceStatus = Readonly<{
+    value: 'disconnected' | 'connecting' | 'connected';
+    reason?: never;
+}> | Readonly<{
+    value: 'error';
+    reason: string;
+}>;
+
+// @public
+export type WithReceivedAt<T> = T & {
+    receivedAt: Date;
+};
+
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:302:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:315:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:369:5 - (ae-forgotten-export) The symbol "AuthStrategy" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:528:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:704:5 - (ae-forgotten-export) The symbol "VoiceStatus" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:706:5 - (ae-forgotten-export) The symbol "VoiceError" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:716:5 - (ae-forgotten-export) The symbol "useToolStatus" needs to be exported by the entry point index.d.ts
-
-// (No @packageDocumentation comment for this package)
+// dist/index.d.ts:418:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:431:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:699:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
 
 ```

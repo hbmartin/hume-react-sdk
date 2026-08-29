@@ -1193,6 +1193,7 @@ const useSoundPlayerImplementation = (
 };
 
 /** Stops player resources and reports teardown failures through `onError`. */
+/** @internal */
 export const useSoundPlayer = (props: {
   diagnostics?: VoiceDiagnosticsReporter;
   enableAudioWorklet: boolean;

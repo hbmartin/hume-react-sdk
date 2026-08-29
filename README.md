@@ -95,16 +95,38 @@ Or, integrate with the API directly
   </tr>
 </table>
 
+## Documentation
+
+Guides and a generated API reference for every package are published at
+<https://humeai.github.io/hume-react-sdk/>.
+
 ## Local development
 
-This SDK is developed on Turborepo. To get started with local development, run:
+This SDK is developed on Turborepo. Development requires Node `22.18` (see
+`.nvmrc`) and pnpm `11.24`; the published packages themselves support Node
+`>=18`.
 
 ```sh
 pnpm install
 pnpm dev
 ```
 
-This will start the development server for each SDK package, as well as each of the example applications.
+This starts the development server for each SDK package and each example
+application. Copy the `.env.example` file in an example directory to
+`.env.local` and fill in your Hume credentials before running it.
+
+Useful commands:
+
+| Command                  | What it does                                                                                                           |
+| :----------------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`               | Watch-build every package and example                                                                                  |
+| `pnpm dev:iframe`        | Watch-build the packages and the embed example only                                                                    |
+| `pnpm test`              | Run the unit tests                                                                                                     |
+| `pnpm docs:dev`          | Serve the documentation site locally                                                                                   |
+| `pnpm api-report:update` | Regenerate the committed API reports after changing a public API                                                       |
+| `pnpm check`             | Run the full gate: build, lint, typecheck, format, dependency, docs, dead-code, packaging, API-report, and test checks |
+
+Run `pnpm check` before opening a pull request — CI runs the same set.
 
 ## Support
 

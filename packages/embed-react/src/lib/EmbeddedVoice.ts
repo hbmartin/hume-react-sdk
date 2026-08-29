@@ -6,9 +6,17 @@ import {
 } from '@humeai/voice-embed';
 import { useEffect, useMemo, useRef } from 'react';
 
+/**
+ * Props for {@link EmbeddedVoice}.
+ *
+ * Everything `EmbeddedVoiceConfig` from `@humeai/voice-embed` accepts is
+ * available here, with `auth` required.
+ */
 export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
   NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
+    /** Receives user and assistant transcripts as the conversation proceeds. */
     onMessage?: TranscriptMessageHandler;
+    /** Called when the user collapses the widget. */
     onClose?: CloseHandler;
     /**
      * Opens the widget when true. Changing this to false cancels an open that
@@ -17,6 +25,10 @@ export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
      * from `onClose` when the user collapses the widget.
      */
     isEmbedOpen: boolean;
+    /**
+     * Opens the widget as soon as it is ready, without waiting for
+     * `isEmbedOpen`. Read once on mount. Defaults to `false`.
+     */
     openOnMount?: boolean;
   };
 
@@ -32,6 +44,25 @@ const getConfigSignature = (config: EmbeddedVoiceConfig): string =>
     );
   });
 
+/**
+ * Mounts Hume's hosted voice widget into a React application.
+ *
+ * The component renders no markup of its own: it manages an iframe appended to
+ * `document.body`, which owns the EVI connection, the microphone, and audio
+ * playback. Render it from a client component.
+ *
+ * @example
+ * ```tsx
+ * const [isEmbedOpen, setIsEmbedOpen] = useState(false);
+ *
+ * <button onClick={() => setIsEmbedOpen(true)}>Talk to us</button>
+ * <EmbeddedVoice
+ *   auth={{ type: 'accessToken', value: accessToken }}
+ *   isEmbedOpen={isEmbedOpen}
+ *   onClose={() => setIsEmbedOpen(false)}
+ * />
+ * ```
+ */
 export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const {
     onMessage,

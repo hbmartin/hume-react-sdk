@@ -60,69 +60,16 @@ function Page() {
 }
 ```
 
-### Configuring [VoiceProvider](https://github.com/HumeAI/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx)
+### Configuring `VoiceProvider`
 
-See a complete list of props accepted by `VoiceProvider` below:
+`VoiceProvider` takes lifecycle callbacks (`onMessage`, `onError`, `onOpen`,
+`onClose`, `onToolCall`, and the audio and recording callbacks), plus
+`clearMessagesOnDisconnect`, `messageHistoryLimit`, `enableAudioWorklet`, and
+`diagnostics`. Connection settings such as `auth` and `configId` belong on
+`connect` instead, because they describe a session rather than the component.
 
-#### `enableAudioWorklet?`: boolean
-
-(_Optional_) A flag to toggle the audio player implementation between AudioWorklet and AudioBuffer. AudioWorklet is recommended for best audio quality results on most browsers, but has degraded performance on Safari 17. Defaults to `true`.
-
-#### `onMessage?`: (message: [JsonMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/JsonMessage.ts) & { receivedAt: Date;}) => void
-
-(_Optional_) Callback function to invoke upon receiving a message through the
-web socket. Locally sent ToolResponse and ToolError messages are also emitted
-after they are successfully passed to the socket so they stay in sync with
-`messages` and `toolStatusStore`.
-
-#### `onToolCall?`: [ToolCallHandler](https://github.com/HumeAI/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L28)
-
-(_Optional_) Callback function to invoke upon receiving a ToolCallMessage through the web socket. It will send the string returned as a the content of a ToolResponseMessage. This is where you should add logic that handles your custom tool calls.
-
-#### `onAudioReceived?`: (message: AudioOutputMessage) => void
-
-(_Optional_) Callback function to invoke when an audio output message is received from the websocket.
-
-#### `onAudioStart?`: (clipId: string) => void
-
-(_Optional_) Callback function to invoke when an audio clip from the assistant starts playing.
-
-#### `onAudioEnd?`: (clipId: string) => void
-
-(_Optional_) Callback function to invoke when an audio clip from the assistant stops playing.
-
-#### `onStartRecording?`: () => void
-
-(_Optional_) Callback function to invoke when microphone recording starts.
-
-#### `onStopRecording?`: () => void
-
-(_Optional_) Callback function to invoke when microphone recording stops.
-
-#### `onInterruption?`: (clipId: string) => void
-
-(_Optional_) Callback function to invoke when the assistant is interrupted.
-
-#### `onClose?`: (event: [CloseEvent](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/core/websocket/events.ts#L20)) => void
-
-(_Optional_) Callback function invoked when the provider's current web socket
-connection closes. Delayed close events from superseded connection attempts are
-not published because the callback does not expose a connection identifier.
-
-#### `clearMessagesOnDisconnect?`: boolean
-
-(_Optional_) Boolean which indicates whether you want to clear message history when the call ends.
-
-#### `messageHistoryLimit?`: number
-
-(_Optional_) Set the number of messages that you wish to keep over the course of the conversation. The default value is 100.
-
-#### `diagnostics?`: false | VoiceDiagnosticsOptions
-
-(_Optional_) Configure structured diagnostic events. When omitted, sanitized
-`warn` and `error` events are written to the browser console. Pass `false` to
-disable all diagnostic output. See [Diagnostics and logging](#diagnostics-and-logging)
-for configuration and privacy details.
+Every prop is documented with its exact type in the
+[`VoiceProviderProps` reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react.voiceproviderprops).
 
 ## Connecting to EVI
 
@@ -320,180 +267,21 @@ output selection can still use their default output, but reject non-default
 output switches with the `unsupported` reason. Device enumeration and output
 selection may also require HTTPS and browser-granted media permission.
 
-### Methods
-
-#### `connect`: (options?: ConnectOptions) => Promise
-
-Opens a socket connection to the voice API and initializes the microphone.
-The promise resolves after that attempt settles; inspect `status` and `error`
-to determine whether it connected successfully. A call made while another
-connection attempt with the same authentication credentials is still running
-joins that attempt without starting a second set of resources; later non-auth
-options are ignored. A concurrent call with different credentials rejects with
-`ConcurrentConnectAuthError` so refreshed credentials are never silently
-discarded. Calling `connect()` while already connected is a no-op that resolves.
-
-| Parameter | Type             | Description                           |
-| --------- | ---------------- | ------------------------------------- |
-| `options` | `ConnectOptions` | Optional settings for the connection. |
-
-The lower-level `useVoiceClient().connect` method accepts an optional explicit
-connection generation as its third argument. Explicit generations identify
-attempts and must be non-negative and strictly increasing, including after a
-failed attempt; increment the generation before retrying. Reusing an identifier
-rejects with `ConnectionGenerationError`, preventing delayed close events from
-being attributed to a newer socket.
-
-#### `disconnect`: () => Promise<void>
-
-Disconnect from the voice API and microphone. After cleanup completes, an
-explicit call clears the provider error that was current when the call began
-and returns `status` to `disconnected`. If teardown raises a newer error, that
-error is preserved and `status` remains `error`. Calling `disconnect()` inside
-`onError` acknowledges that reported error after cleanup.
-
-#### `setInputDevice`: (deviceId: string | null) => Promise<void>
-
-Switches the microphone for an active connection. Pass `null` for the browser
-default; selecting it again reacquires the current browser/OS default. Selecting
-an explicit device that is already capturing updates the requested-device state
-without rebuilding the recorder.
-
-#### `setOutputDevice`: (deviceId: string | null) => Promise<void>
-
-Switches the speaker for an active connection without rebuilding the playback
-graph or clearing queued audio. Pass `null` for the browser/system default.
-Selecting the already-active device is a no-op.
-
-#### `clearMessages`: () => void
-
-Clear transcript messages from history.
-
-#### `mute`: () => void
-
-Mute the microphone
-
-#### `unmute`: () => void
-
-Unmute the microphone
-
-#### `muteAudio`: () => void
-
-Mute the assistant audio
-
-#### `unmuteAudio`: () => void
-
-Unmute the assistant audio
-
-#### `setVolume`: (level: number) => void
-
-Sets the playback volume for audio generated by the assistant. Input values are clamped between `0.0` (silent) and `1.0` (full volume).
-
-#### `sendSessionSettings`: (message: Omit<[SessionSettings](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/SessionSettings.ts), 'type'>) => void
-
-Send new session settings to the assistant. This overrides any session settings
-that were passed as props to the VoiceProvider. Do not provide the wire-level
-`type` field; the SDK adds `type: 'session_settings'` automatically.
-
-#### `sendUserInput`: (text: string) => void
-
-Send a user input message.
-
-#### `sendAssistantInput`: (text: string) => void
-
-Send a text string for the assistant to read out loud.
-
-#### `sendToolMessage`: (toolMessage: [ToolResponse](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ToolResponseMessage.ts) \| [ToolError](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ToolErrorMessage.ts)) => void
-
-Send a tool response or tool error message to the EVI backend. Successfully
-sent tool messages are emitted through `onMessage`, appended to `messages`, and
-recorded in `toolStatusStore`.
-
-#### `pauseAssistant`: () => void
-
-Pauses responses from EVI. Chat history is still saved and sent after resuming.
-
-#### `resumeAssistant`: () => void
-
-Resumes responses from EVI. Chat history sent while paused will now be sent.
-
-### Properties
-
-#### `isMuted`: boolean
-
-Boolean that describes whether the microphone is muted.
-
-#### `isAudioMuted`: boolean
-
-Boolean that describes whether the assistant audio is muted.
-
-#### `volume`: number
-
-The current playback volume level for the assistant's voice, ranging from `0.0` (silent) to `1.0` (full volume). Defaults to `1.0`.
-
-#### `isPlaying`: boolean
-
-Describes whether the assistant audio is currently playing.
-
-#### `isPaused`: boolean
-
-Boolean that describes whether the assistant is paused. When paused, the assistant will still be listening, but will not send a response until it is resumed.
-
-#### `messages`: [UserTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserMessage.ts) | [AssistantTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/AssistantMessage.ts) | [ConnectionMessage](https://github.com/HumeAI/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/connection-message.ts) | [UserInterruptionMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserInterruption.ts) | [JSONErrorMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/WebSocketError.ts)
-
-Message history of the current conversation. By default, `messages` does not include interim user messages when `verboseTranscription` is set to true on the `VoiceProvider` (`verboseTranscription` is true by default). To access interim messages, you can define a custom `onMessage` callback on your `VoiceProvider`.
-
-#### `lastVoiceMessage`: [AssistantTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/AssistantMessage.ts) | null
-
-The last transcript message received from the assistant.
-
-#### `lastUserMessage`: [UserTranscriptMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/UserMessage.ts) | null
-
-The last transcript message received from the user.
-
-#### `readyState`: [VoiceReadyState](https://github.com/HumeAI/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/useVoiceClient.ts#L21)
-
-The current readyState of the websocket connection.
-
-#### `status`: [VoiceStatus](https://github.com/HumeAI/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx#L41)
-
-The current status of the voice connection. Informs you of whether the voice is connected, disconnected, connecting, or error. If the voice is in an error state, it will automatically disconnect from the websocket and microphone.
-
-#### `error`: [VoiceError](https://github.com/HumeAI/hume-react-sdk/blob/8a4f9b87870c68650cde73a818edd093716c59fd/packages/react/src/lib/VoiceProvider.tsx#L36)
-
-Provides more detailed error information if the voice is in an error state.
-
-#### `isError`: boolean
-
-If true, the voice is in an error state.
-
-#### `isAudioError`: boolean
-
-If true, an audio playback error has occurred.
-
-#### `isMicrophoneError`: boolean
-
-If true, a microphone error has occurred.
-
-#### `isSocketError`: boolean
-
-If true, there was an error connecting to the websocket.
-
-#### `toolStatusStore`: Record<string, { call?: ToolCall; resolved?: ToolResponse | ToolError }>
-
-A map of tool call IDs to their associated tool messages.
-
-#### `chatMetadata`: [ChatMetadataMessage](https://github.com/HumeAI/hume-typescript-sdk/blob/ac89e41e45a925f9861eb6d5a1335ab51d5a1c94/src/api/resources/empathicVoice/types/ChatMetadata.ts) | null
-
-Metadata about the current chat, including chat ID, chat group ID, and request ID.
-
-#### `playerQueueLength`: number
-
-The number of assistant audio clips that are queued up, including the clip that is currently playing.
+### Methods and properties
+
+`useVoice()` returns the connection controls (`connect`, `disconnect`,
+`setInputDevice`, `setOutputDevice`), the message senders (`sendUserInput`,
+`sendAssistantInput`, `sendSessionSettings`, `sendToolMessage`), the audio
+controls (`mute`, `unmute`, `muteAudio`, `unmuteAudio`, `setVolume`,
+`pauseAssistant`, `resumeAssistant`), and the current state (`status`, `error`,
+`messages`, `chatMetadata`, `toolStatusStore`, `readyState`, and friends).
+
+Each one is documented with its exact signature and behavior in the
+[`VoiceContextType` reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react.voicecontexttype).
 
 ### Granular Hooks
 
-These hooks subscribe directly to high-frequency data via `useSyncExternalStore`, bypassing the main `VoiceContext`. Use them instead of the deprecated `useVoice()` properties for FFT and call duration data.
+These hooks subscribe directly to high-frequency data via `useSyncExternalStore`, bypassing the main `VoiceContext`, so only the components that read FFT or call-duration data rerender when it changes. They replace the `fft`, `micFft`, and `callDurationTimestamp` properties that `useVoice()` carried before 0.3.0 (see the [migration guide](./MIGRATION.md)).
 
 #### `usePlayerFft()`: readonly number[]
 
@@ -536,54 +324,10 @@ function CallTimer() {
 
 ## Types
 
-### `ConnectOptions`
-
-```ts
-export type ConnectOptions = {
-  /** Authentication strategy and corresponding value. Authentication is required to establish the web socket connection with Hume's Voice API. See our [documentation](https://dev.hume.ai/docs/quick-start#getting-your-api-key) on obtaining your `API key` or `access token`.
-   */
-  auth: AuthStrategy;
-  /** Hostname of the Hume API. If not provided this value will default to `"api.hume.ai"`. */
-  hostname?: string;
-  /** If you have a configuration ID with voice presets, pass the config ID here. */
-  configId?: string;
-  /** If you wish to use a specific version of your config, pass in the version ID here. */
-  configVersion?: string;
-  /** A flag to enable verbose transcription. When `true`, unfinalized user transcripts are sent to the client as interim UserMessage messages, which makes the assistant more sensitive to interruptions. Defaults to `true`. */
-  verboseTranscription?: boolean;
-  /** Include a chat group ID, which enables the chat to continue from a previous chat group. */
-  resumedChatGroupId?: string;
-  /** Custom audio constraints passed to navigator.getUserMedia to get the microphone stream */
-  audioConstraints?: AudioConstraints;
-  /** Session settings to be sent immediately once the connection to EVI is established. See documentation for details: https://dev.hume.ai/docs/empathic-voice-interface-evi/configuration/session-settings */
-  sessionSettings?: Hume.empathicVoice.SessionSettings;
-  /** Device IDs for microphone and speaker selection */
-  devices?: DeviceOptions;
-};
-```
-
-### `AudioConstraints`
-
-````ts
-export type AudioConstraints = {
-  /** Reduce echo from the input (if supported). Defaults to `true`. */
-  echoCancellation?: boolean;
-  /** Suppress background noise (if supported). Defaults to `true`.*/
-  noiseSuppression?: boolean;
-  /** Automatically adjust microphone gain (if supported). Defaults to `true`. */
-  autoGainControl?: boolean;
-};
-
-### `DeviceOptions`
-
-```ts
-export type DeviceOptions = {
-  /** Device ID of the microphone/audio input to use. Uses the default microphone if not specified. */
-  microphoneDeviceId?: string;
-  /** Device ID of the speaker/audio output to use for playback. Uses the default audio output if not specified. */
-  speakerDeviceId?: string;
-};
-````
+`ConnectOptions`, `AudioConstraints`, `DeviceOptions`, `VoiceError`,
+`VoiceStatus`, and every message type are documented in the
+[API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react),
+generated from the package's own type declarations.
 
 ## Support
 

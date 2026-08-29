@@ -21,6 +21,7 @@ const getAudioStream = async (
   });
 };
 
+/** @internal */
 export const useMicrophoneStream = () => {
   const [permission, setPermission] = useState<PermissionStatus>('prompt');
   const currentStream = useRef<MediaStream | null>(null);

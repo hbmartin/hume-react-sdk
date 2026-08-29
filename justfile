@@ -1,3 +1,7 @@
 # run the CI workflow locally
 local-ci:
-    act -W '.github/workflows/pr-check.yml' --container-architecture linux/amd64 -s GITHUB_TOKEN="$(gh auth token)"
+    act -W '.github/workflows/ci.yml' --container-architecture linux/amd64 -s GITHUB_TOKEN="$(gh auth token)"
+
+# run the docs build workflow locally
+local-docs:
+    act -W '.github/workflows/docs.yml' --container-architecture linux/amd64 -s GITHUB_TOKEN="$(gh auth token)"

@@ -1,3 +1,13 @@
+/**
+ * Hume's hosted Empathic Voice Interface widget as a React component.
+ *
+ * Render `EmbeddedVoice` with your credentials and control its
+ * visibility through `isEmbedOpen`. This is a thin wrapper over
+ * `@humeai/voice-embed`: same widget, same behavior.
+ *
+ * @packageDocumentation
+ */
+
 export * from './lib/EmbeddedVoice';
 
 export {
@@ -13,6 +23,7 @@ export {
 
 export type {
   AssistantTranscriptMessage,
+  EmbeddedVoiceConfig,
   SocketConfig,
   FrameToClientAction,
   JSONMessage,

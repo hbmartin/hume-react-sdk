@@ -1,7 +1,9 @@
 import packageJson from '../../package.json';
 
+/** Severity threshold for diagnostic events. */
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/** Subsystem a diagnostic event came from. */
 export type VoiceDiagnosticCategory =
   | 'connection'
   | 'socket'
@@ -12,6 +14,12 @@ export type VoiceDiagnosticCategory =
   | 'tool'
   | 'consumer';
 
+/**
+ * Name of a diagnostic event.
+ *
+ * Schema version 1 keeps existing event meanings and fields stable, but future
+ * minor releases may add names. Ignore names you do not recognize.
+ */
 export type VoiceDiagnosticEventName =
   | 'connection.attempt_started'
   | 'connection.attempt_ignored'
@@ -55,17 +63,27 @@ export type VoiceDiagnosticEventName =
   | 'sdk.error'
   | 'sdk.error_cleared';
 
+/** @internal */
 export type VoiceDiagnosticPrimitive = string | number | boolean | null;
 
+/** A JSON-serializable value carried in a diagnostic event's details. */
 export type VoiceDiagnosticValue =
   | VoiceDiagnosticPrimitive
   | readonly VoiceDiagnosticValue[]
   | { readonly [key: string]: VoiceDiagnosticValue };
 
+/** Structured, sanitized context attached to a diagnostic event. */
 export type VoiceDiagnosticDetails = Readonly<
   Record<string, VoiceDiagnosticValue>
 >;
 
+/**
+ * A single structured diagnostic event.
+ *
+ * Events are local only: the SDK never sends them to Hume or any other
+ * service. Each carries a monotonically increasing `sequence` plus connection
+ * and chat correlation when available.
+ */
 export type VoiceDiagnosticEvent = Readonly<{
   schemaVersion: 1;
   sdkVersion: string;
@@ -81,22 +99,50 @@ export type VoiceDiagnosticEvent = Readonly<{
   details: VoiceDiagnosticDetails;
 }>;
 
+/** Sink that receives diagnostic events as leveled log calls. */
 export interface VoiceLogger {
+  /** Receives verbose lifecycle events, including high-volume ones. */
   debug(message: string, event: VoiceDiagnosticEvent): void;
+  /** Receives notable lifecycle transitions. */
   info(message: string, event: VoiceDiagnosticEvent): void;
+  /** Receives recoverable problems. */
   warn(message: string, event: VoiceDiagnosticEvent): void;
+  /** Receives failures that put the provider into its error state. */
   error(message: string, event: VoiceDiagnosticEvent): void;
 }
 
+/** Configures how the provider reports diagnostic events. */
 export interface VoiceDiagnosticsOptions {
+  /**
+   * Minimum severity to report, filtering both `logger` and `onEvent`.
+   * Defaults to `'warn'`.
+   */
   level?: VoiceDiagnosticLevel;
+  /**
+   * Where to write events. Defaults to the browser console; pass `false` to
+   * write nowhere while still delivering events to `onEvent`.
+   */
   logger?: VoiceLogger | false;
+  /**
+   * Receives every event that passes `level`, for forwarding to an
+   * observability vendor. Failures here are isolated from the call.
+   */
   onEvent?: (event: VoiceDiagnosticEvent) => void;
+  /**
+   * Include transcript and tool content in event details.
+   *
+   * Off by default. Enable only where your data-handling policy permits
+   * forwarding user and assistant text, tool arguments, results, and errors.
+   * Even when enabled, events never carry authentication values, raw audio,
+   * PCM or base64 payloads, session-setting values such as prompts, or audio
+   * device IDs and labels. Defaults to `false`.
+   */
   includeContent?: boolean;
 }
 
 type DiagnosticConfiguration = false | VoiceDiagnosticsOptions | undefined;
 
+/** @internal */
 export type VoiceDiagnosticInput = {
   level: VoiceDiagnosticLevel;
   category: VoiceDiagnosticCategory;
@@ -116,6 +162,7 @@ export type VoiceDiagnosticInput = {
   sensitiveDetails?: Record<string, unknown>;
 };
 
+/** @internal */
 export interface VoiceDiagnosticsReporter {
   addRedactionValue(value?: string): void;
   beginConnection(secret?: string): string;
