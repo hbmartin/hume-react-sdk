@@ -282,6 +282,72 @@ await test('unpublished version-skewed workspace dependencies block publication'
   );
 });
 
+await test('transient registry failures are retried with a bounded attempt count', async () => {
+  let attempts = 0;
+  await validatePublishedWorkspaceDependencies(
+    {
+      workspaceDependenciesToVerify: [
+        { name: '@humeai/dependency', version: '1.0.0' },
+      ],
+    },
+    {
+      fetchImplementation: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('temporary network failure');
+        if (attempts === 2) {
+          return /** @type {Response} */ ({ ok: false, status: 503 });
+        }
+        return /** @type {Response} */ ({ ok: true, status: 200 });
+      },
+      maxAttempts: 3,
+      retryDelayMs: 0,
+    },
+  );
+
+  assert.equal(attempts, 3);
+});
+
+await test('non-retryable registry responses fail without extra requests', async () => {
+  let attempts = 0;
+  await assert.rejects(
+    validatePublishedWorkspaceDependencies(
+      {
+        workspaceDependenciesToVerify: [
+          { name: '@humeai/dependency', version: '1.0.0' },
+        ],
+      },
+      {
+        fetchImplementation: async () => {
+          attempts += 1;
+          return /** @type {Response} */ ({ ok: false, status: 401 });
+        },
+        maxAttempts: 3,
+        retryDelayMs: 0,
+      },
+    ),
+    /HTTP 401/,
+  );
+  assert.equal(attempts, 1);
+});
+
+await test('registry requests time out instead of hanging a release', async () => {
+  await assert.rejects(
+    validatePublishedWorkspaceDependencies(
+      {
+        workspaceDependenciesToVerify: [
+          { name: '@humeai/dependency', version: '1.0.0' },
+        ],
+      },
+      {
+        fetchImplementation: async () => new Promise(() => {}),
+        maxAttempts: 1,
+        timeoutMs: 10,
+      },
+    ),
+    /after 1 attempts/,
+  );
+});
+
 await test('missing runtime workspace dependencies are identified by name', () => {
   assert.throws(
     () =>

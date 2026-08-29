@@ -11,6 +11,9 @@ const publishablePackagePaths = [
 const packageNamePattern = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i;
 const versionPattern =
   /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const defaultRegistryRequestAttempts = 3;
+const defaultRegistryRequestTimeoutMs = 10_000;
+const defaultRegistryRetryDelayMs = 250;
 
 /**
  * @typedef {{
@@ -223,52 +226,143 @@ export function createReleasePlan(releaseTag, packages) {
   };
 }
 
+/** @param {number} delayMs */
+function wait(delayMs) {
+  if (delayMs === 0) return Promise.resolve();
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, delayMs);
+  });
+}
+
+/** @param {number} status */
+function isRetryableRegistryStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * @param {typeof globalThis.fetch} fetchImplementation
+ * @param {URL} url
+ * @param {number} timeoutMs
+ */
+async function fetchRegistryResponse(fetchImplementation, url, timeoutMs) {
+  const abortController = new AbortController();
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(
+        `npm registry request timed out after ${timeoutMs}ms.`,
+      );
+      abortController.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+
+  try {
+    return await /** @type {Promise<Response>} */ (
+      Promise.race([
+        fetchImplementation(url, {
+          headers: { accept: 'application/json' },
+          signal: abortController.signal,
+        }),
+        timeoutPromise,
+      ])
+    );
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+/**
+ * @param {{ name: string, version: string }} dependency
+ * @param {URL} registry
+ * @param {{ fetchImplementation: typeof globalThis.fetch, maxAttempts: number, retryDelayMs: number, timeoutMs: number }} options
+ */
+async function validatePublishedWorkspaceDependency(
+  dependency,
+  registry,
+  { fetchImplementation, maxAttempts, retryDelayMs, timeoutMs },
+) {
+  const packageVersionUrl = new URL(
+    `${encodeURIComponent(dependency.name)}/${encodeURIComponent(dependency.version)}`,
+    registry,
+  );
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetchRegistryResponse(
+        fetchImplementation,
+        packageVersionUrl,
+        timeoutMs,
+      );
+    } catch (cause) {
+      if (attempt < maxAttempts) {
+        await wait(retryDelayMs * 2 ** (attempt - 1));
+        continue;
+      }
+      throw new Error(
+        `Could not verify ${dependency.name}@${dependency.version} in ${registry.origin} after ${maxAttempts} attempts.`,
+        { cause },
+      );
+    }
+
+    if (response.ok) return;
+    if (response.status === 404) {
+      throw new Error(
+        `Runtime workspace dependency ${dependency.name}@${dependency.version} has not been published.`,
+      );
+    }
+    if (isRetryableRegistryStatus(response.status) && attempt < maxAttempts) {
+      await wait(retryDelayMs * 2 ** (attempt - 1));
+      continue;
+    }
+    throw new Error(
+      `Could not verify ${dependency.name}@${dependency.version}; the npm registry returned HTTP ${response.status}.`,
+    );
+  }
+}
+
 /**
  * Verifies that version-skewed runtime workspace dependencies already exist in
  * the configured npm registry before publishing a dependent package.
  *
  * @param {{ workspaceDependenciesToVerify: readonly { name: string, version: string }[] }} plan
- * @param {{ fetchImplementation?: typeof globalThis.fetch, registryUrl?: string }} [options]
+ * @param {{ fetchImplementation?: typeof globalThis.fetch, maxAttempts?: number, registryUrl?: string, retryDelayMs?: number, timeoutMs?: number }} [options]
  */
 export async function validatePublishedWorkspaceDependencies(
   plan,
   {
     fetchImplementation = globalThis.fetch,
+    maxAttempts = defaultRegistryRequestAttempts,
     registryUrl = process.env.npm_config_registry ??
       process.env.NPM_CONFIG_REGISTRY ??
       'https://registry.npmjs.org/',
+    retryDelayMs = defaultRegistryRetryDelayMs,
+    timeoutMs = defaultRegistryRequestTimeoutMs,
   } = {},
 ) {
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error('maxAttempts must be a positive safe integer.');
+  }
+  if (!Number.isFinite(retryDelayMs) || retryDelayMs < 0) {
+    throw new Error('retryDelayMs must be a non-negative finite number.');
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('timeoutMs must be a positive finite number.');
+  }
   const registry = new URL(registryUrl);
   if (!registry.pathname.endsWith('/')) registry.pathname += '/';
 
   await Promise.all(
-    plan.workspaceDependenciesToVerify.map(async (dependency) => {
-      const packageVersionUrl = new URL(
-        `${encodeURIComponent(dependency.name)}/${encodeURIComponent(dependency.version)}`,
-        registry,
-      );
-      let response;
-      try {
-        response = await fetchImplementation(packageVersionUrl, {
-          headers: { accept: 'application/json' },
-        });
-      } catch (cause) {
-        throw new Error(
-          `Could not verify ${dependency.name}@${dependency.version} in ${registry.origin}.`,
-          { cause },
-        );
-      }
-      if (response.ok) return;
-      if (response.status === 404) {
-        throw new Error(
-          `Runtime workspace dependency ${dependency.name}@${dependency.version} has not been published.`,
-        );
-      }
-      throw new Error(
-        `Could not verify ${dependency.name}@${dependency.version}; the npm registry returned HTTP ${response.status}.`,
-      );
-    }),
+    plan.workspaceDependenciesToVerify.map((dependency) =>
+      validatePublishedWorkspaceDependency(dependency, registry, {
+        fetchImplementation,
+        maxAttempts,
+        retryDelayMs,
+        timeoutMs,
+      }),
+    ),
   );
 }
 
@@ -337,7 +431,7 @@ export async function isDirectExecution(executablePath, moduleUrl) {
 }
 
 async function main() {
-  const releaseTag = process.argv[2] ?? process.env.RELEASE_TAG;
+  const { releaseTag } = parseReleaseArguments(process.argv.slice(2));
   const plan = await createValidatedReleasePlan(releaseTag);
 
   process.stdout.write(

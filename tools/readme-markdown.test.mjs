@@ -39,10 +39,42 @@ await test('inline code spans with matching multi-backtick delimiters remain unc
   );
 });
 
+await test('unmatched inline-code delimiters remain ordinary text without stalling', () => {
+  assert.equal(
+    makeReadmeVitePressSafe('Keep an unmatched ` at the end'),
+    'Keep an unmatched ` at the end',
+  );
+  assert.equal(
+    makeReadmeVitePressSafe('Keep unmatched ``ticks and `Promise<Result>`.'),
+    'Keep unmatched ``ticks and `Promise<Result>`.',
+  );
+});
+
 await test('fenced JSX remains unchanged', () => {
   const example = ['```tsx', '<Button>Open</Button>', '```'].join('\n');
 
   assert.equal(makeReadmeVitePressSafe(example), example);
+});
+
+await test('fences indented inside list items remain unchanged', () => {
+  const example = [
+    '1. Load the value:',
+    '    ```ts',
+    '    const result: Promise<Result> = load();',
+    '    ```',
+    'Outside Promise<Result>.',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    [
+      '1. Load the value:',
+      '    ```ts',
+      '    const result: Promise<Result> = load();',
+      '    ```',
+      'Outside Promise&lt;Result&gt;.',
+    ].join('\n'),
+  );
 });
 
 await test('tilde-fenced examples remain unchanged', () => {
