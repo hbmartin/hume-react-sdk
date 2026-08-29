@@ -68,6 +68,7 @@ function getRuntimeWorkspaceDependencies(packageManifest) {
 /**
  * @param {string} dependencyName
  * @param {PackageManifest | undefined} dependency
+ * @returns {PackageManifest}
  */
 function requirePublishableWorkspaceDependency(dependencyName, dependency) {
   if (dependency === undefined) {
@@ -80,7 +81,7 @@ function requirePublishableWorkspaceDependency(dependencyName, dependency) {
       `Runtime workspace dependency ${dependency.name} is private and cannot be published.`,
     );
   }
-  return dependency.name;
+  return dependency;
 }
 
 /**
@@ -97,21 +98,35 @@ function includeRuntimeWorkspaceDependencies(
     packages.map((packageManifest) => [packageManifest.name, packageManifest]),
   );
   const includedPackageNames = new Set(selectedPackageNames);
+  /** @type {Map<string, { name: string, version: string }>} */
+  const workspaceDependenciesToVerify = new Map();
   for (const packageName of includedPackageNames) {
     const packageManifest = packagesByName.get(packageName);
     for (const dependencyName of getRuntimeWorkspaceDependencies(
       /** @type {PackageManifest} */ (packageManifest),
     )) {
-      const dependency = packagesByName.get(dependencyName);
-      requirePublishableWorkspaceDependency(dependencyName, dependency);
+      const dependency = requirePublishableWorkspaceDependency(
+        dependencyName,
+        packagesByName.get(dependencyName),
+      );
       if (dependency.version === expectedVersion) {
         includedPackageNames.add(dependency.name);
+      } else {
+        workspaceDependenciesToVerify.set(
+          `${dependency.name}@${dependency.version}`,
+          { name: dependency.name, version: dependency.version },
+        );
       }
     }
   }
-  return packages
-    .filter((packageManifest) => includedPackageNames.has(packageManifest.name))
-    .map((packageManifest) => packageManifest.name);
+  return {
+    packageNames: packages
+      .filter((packageManifest) =>
+        includedPackageNames.has(packageManifest.name),
+      )
+      .map((packageManifest) => packageManifest.name),
+    workspaceDependenciesToVerify: [...workspaceDependenciesToVerify.values()],
+  };
 }
 
 /** @param {string | undefined} repositoryUrl */
@@ -169,17 +184,68 @@ export function createReleasePlan(releaseTag, packages) {
   if (releasePackageNames.length === 0) {
     throw new Error(`No publishable package matches release tag ${releaseTag}`);
   }
-  const packageNames = includeRuntimeWorkspaceDependencies(
-    releasePackageNames,
-    packages,
-    expectedVersion,
-  );
+  const { packageNames, workspaceDependenciesToVerify } =
+    includeRuntimeWorkspaceDependencies(
+      releasePackageNames,
+      packages,
+      expectedVersion,
+    );
 
   return {
     expectedVersion,
     npmTag: expectedVersion.includes('-') ? 'next' : 'latest',
     packageNames,
+    workspaceDependenciesToVerify,
   };
+}
+
+/**
+ * Verifies that version-skewed runtime workspace dependencies already exist in
+ * the configured npm registry before publishing a dependent package.
+ *
+ * @param {{ workspaceDependenciesToVerify: readonly { name: string, version: string }[] }} plan
+ * @param {{ fetchImplementation?: typeof globalThis.fetch, registryUrl?: string }} [options]
+ */
+export async function validatePublishedWorkspaceDependencies(
+  plan,
+  {
+    fetchImplementation = globalThis.fetch,
+    registryUrl = process.env.npm_config_registry ??
+      process.env.NPM_CONFIG_REGISTRY ??
+      'https://registry.npmjs.org/',
+  } = {},
+) {
+  const registry = new URL(registryUrl);
+  if (!registry.pathname.endsWith('/')) registry.pathname += '/';
+
+  await Promise.all(
+    plan.workspaceDependenciesToVerify.map(async (dependency) => {
+      const packageVersionUrl = new URL(
+        `${encodeURIComponent(dependency.name)}/${encodeURIComponent(dependency.version)}`,
+        registry,
+      );
+      let response;
+      try {
+        response = await fetchImplementation(packageVersionUrl, {
+          headers: { accept: 'application/json' },
+        });
+      } catch (cause) {
+        throw new Error(
+          `Could not verify ${dependency.name}@${dependency.version} in ${registry.origin}.`,
+          { cause },
+        );
+      }
+      if (response.ok) return;
+      if (response.status === 404) {
+        throw new Error(
+          `Runtime workspace dependency ${dependency.name}@${dependency.version} has not been published.`,
+        );
+      }
+      throw new Error(
+        `Could not verify ${dependency.name}@${dependency.version}; the npm registry returned HTTP ${response.status}.`,
+      );
+    }),
+  );
 }
 
 /**
@@ -237,6 +303,7 @@ async function main() {
   const packages = await readPublishablePackages();
   validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
   const plan = createReleasePlan(releaseTag, packages);
+  await validatePublishedWorkspaceDependencies(plan);
 
   process.stdout.write(
     `Release ${plan.expectedVersion} will publish ${plan.packageNames.join(', ')} with the npm dist-tag ${plan.npmTag}.\n`,

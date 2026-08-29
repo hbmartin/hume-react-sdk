@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
 
-import { getPnpmCommand } from './pnpm-command.mjs';
+import { getPnpmInvocation } from './pnpm-command.mjs';
 import {
   createReleasePlan,
   readPublishablePackages,
+  validatePublishedWorkspaceDependencies,
   validateProvenanceRepository,
 } from './release-plan.mjs';
 
@@ -19,9 +20,13 @@ if (releaseTags.length > 1) {
 const releaseTag = releaseTags[0] ?? process.env.RELEASE_TAG;
 const packages = await readPublishablePackages();
 validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
-createReleasePlan(releaseTag, packages);
+const plan = createReleasePlan(releaseTag, packages);
+await validatePublishedWorkspaceDependencies(plan);
 
-const check = spawnSync(getPnpmCommand(), ['check'], { stdio: 'inherit' });
+const pnpmCheck = getPnpmInvocation(['check']);
+const check = spawnSync(pnpmCheck.command, pnpmCheck.arguments, {
+  stdio: 'inherit',
+});
 if (check.error !== undefined) throw check.error;
 if (check.status !== 0) process.exit(check.status ?? 1);
 

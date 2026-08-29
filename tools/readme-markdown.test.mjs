@@ -23,6 +23,22 @@ await test('type-like angle brackets outside code fences remain escaped', () => 
   );
 });
 
+await test('inline code spans preserve angle brackets', () => {
+  assert.equal(
+    makeReadmeVitePressSafe(
+      'Use `Promise<Result>` when a factory returns Promise<Result>.',
+    ),
+    'Use `Promise<Result>` when a factory returns Promise&lt;Result&gt;.',
+  );
+});
+
+await test('inline code spans with matching multi-backtick delimiters remain unchanged', () => {
+  assert.equal(
+    makeReadmeVitePressSafe('Use ``Map<`key`, Value>`` with Map<Key, Value>.'),
+    'Use ``Map<`key`, Value>`` with Map&lt;Key, Value&gt;.',
+  );
+});
+
 await test('fenced JSX remains unchanged', () => {
   const example = ['```tsx', '<Button>Open</Button>', '```'].join('\n');
 

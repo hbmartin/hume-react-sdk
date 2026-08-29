@@ -1,11 +1,24 @@
 /**
- * Resolves the pnpm launcher installed by Corepack or pnpm itself.
+ * Builds a shell-free pnpm child-process invocation.
  *
- * Windows package-manager shims use the `.cmd` extension, so shell-free spawn
- * calls need to select that launcher explicitly.
+ * Windows package-manager shims are batch files and cannot be executed
+ * directly by Node. Invoke the shim through the system command interpreter;
+ * other platforms can execute the pnpm launcher directly.
  *
+ * @param {readonly string[]} arguments_
  * @param {NodeJS.Platform} [platform]
+ * @param {string} [commandInterpreter]
  */
-export function getPnpmCommand(platform = process.platform) {
-  return platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+export function getPnpmInvocation(
+  arguments_,
+  platform = process.platform,
+  commandInterpreter = process.env.ComSpec,
+) {
+  if (platform === 'win32') {
+    return {
+      command: commandInterpreter ?? 'cmd.exe',
+      arguments: ['/d', '/s', '/c', 'pnpm.cmd', ...arguments_],
+    };
+  }
+  return { command: 'pnpm', arguments: [...arguments_] };
 }

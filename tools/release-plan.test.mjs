@@ -14,10 +14,11 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { getPnpmCommand } from './pnpm-command.mjs';
+import { getPnpmInvocation } from './pnpm-command.mjs';
 import {
   createPublishArguments,
   createReleasePlan,
+  validatePublishedWorkspaceDependencies,
   validateProvenanceRepository,
 } from './release-plan.mjs';
 
@@ -32,6 +33,7 @@ await test('stable releases select only matching packages and use the latest dis
     expectedVersion: '0.2.18',
     npmTag: 'latest',
     packageNames: ['@humeai/voice-embed', '@humeai/voice-embed-react'],
+    workspaceDependenciesToVerify: [],
   });
 });
 
@@ -40,6 +42,7 @@ await test('prereleases select only matching packages and use the next dist-tag'
     expectedVersion: '0.3.0-beta.7',
     npmTag: 'next',
     packageNames: ['@humeai/voice-react'],
+    workspaceDependenciesToVerify: [],
   });
 });
 
@@ -182,17 +185,62 @@ await test('matching runtime workspace dependencies are included in the publish 
   );
 });
 
-await test('unrelated runtime workspace dependency versions are not republished', () => {
-  assert.deepEqual(
-    createReleasePlan('v2.0.0', [
-      { name: '@humeai/dependency', version: '1.0.0' },
-      {
-        name: '@humeai/dependent',
-        version: '2.0.0',
-        dependencies: { '@humeai/dependency': 'workspace:*' },
+await test('unrelated runtime workspace dependency versions are verified instead of republished', () => {
+  const plan = createReleasePlan('v2.0.0', [
+    { name: '@humeai/dependency', version: '1.0.0' },
+    {
+      name: '@humeai/dependent',
+      version: '2.0.0',
+      dependencies: { '@humeai/dependency': 'workspace:*' },
+    },
+  ]);
+
+  assert.deepEqual(plan.packageNames, ['@humeai/dependent']);
+  assert.deepEqual(plan.workspaceDependenciesToVerify, [
+    { name: '@humeai/dependency', version: '1.0.0' },
+  ]);
+});
+
+await test('published version-skewed workspace dependencies pass validation', async () => {
+  const requestedUrls = [];
+  await validatePublishedWorkspaceDependencies(
+    {
+      workspaceDependenciesToVerify: [
+        { name: '@humeai/dependency', version: '1.0.0' },
+      ],
+    },
+    {
+      fetchImplementation: async (url) => {
+        if (typeof url === 'string') requestedUrls.push(url);
+        else if (url instanceof URL) requestedUrls.push(url.href);
+        else requestedUrls.push(url.url);
+        return /** @type {Response} */ ({ ok: true, status: 200 });
       },
-    ]).packageNames,
-    ['@humeai/dependent'],
+      registryUrl: 'https://registry.example.test/npm/',
+    },
+  );
+
+  assert.deepEqual(requestedUrls, [
+    'https://registry.example.test/npm/%40humeai%2Fdependency/1.0.0',
+  ]);
+});
+
+await test('unpublished version-skewed workspace dependencies block publication', async () => {
+  await assert.rejects(
+    validatePublishedWorkspaceDependencies(
+      {
+        workspaceDependenciesToVerify: [
+          { name: '@humeai/dependency', version: '1.0.0' },
+        ],
+      },
+      {
+        fetchImplementation: async () => /** @type {Response} */ ({
+          ok: false,
+          status: 404,
+        }),
+      },
+    ),
+    /@humeai\/dependency@1\.0\.0 has not been published/,
   );
 });
 
@@ -287,8 +335,20 @@ await test('publish arguments filter packages and require provenance', () => {
   ]);
 });
 
-await test('pnpm command resolution uses the Windows command shim', () => {
-  assert.equal(getPnpmCommand('win32'), 'pnpm.cmd');
-  assert.equal(getPnpmCommand('linux'), 'pnpm');
-  assert.equal(getPnpmCommand('darwin'), 'pnpm');
+await test('pnpm invocation uses the Windows command interpreter', () => {
+  assert.deepEqual(
+    getPnpmInvocation(['check'], 'win32', 'C:\\Windows\\System32\\cmd.exe'),
+    {
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      arguments: ['/d', '/s', '/c', 'pnpm.cmd', 'check'],
+    },
+  );
+  assert.deepEqual(getPnpmInvocation(['check'], 'linux'), {
+    command: 'pnpm',
+    arguments: ['check'],
+  });
+  assert.deepEqual(getPnpmInvocation(['check'], 'darwin'), {
+    command: 'pnpm',
+    arguments: ['check'],
+  });
 });

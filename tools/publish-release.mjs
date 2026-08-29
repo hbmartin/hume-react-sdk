@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
 
-import { getPnpmCommand } from './pnpm-command.mjs';
+import { getPnpmInvocation } from './pnpm-command.mjs';
 import {
   createPublishArguments,
   createReleasePlan,
   readPublishablePackages,
+  validatePublishedWorkspaceDependencies,
   validateProvenanceRepository,
 } from './release-plan.mjs';
 
@@ -21,13 +22,15 @@ const releaseTag = releaseTags[0] ?? process.env.RELEASE_TAG;
 const packages = await readPublishablePackages();
 validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
 const plan = createReleasePlan(releaseTag, packages);
+await validatePublishedWorkspaceDependencies(plan);
 const publishArguments = createPublishArguments(plan, { dryRun });
 
 process.stdout.write(
   `${dryRun ? 'Dry-running' : 'Publishing'} ${plan.packageNames.join(', ')} with the npm dist-tag ${plan.npmTag}.\n`,
 );
 
-const result = spawnSync(getPnpmCommand(), publishArguments, {
+const pnpm = getPnpmInvocation(publishArguments);
+const result = spawnSync(pnpm.command, pnpm.arguments, {
   stdio: 'inherit',
 });
 
