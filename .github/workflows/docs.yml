@@ -22,17 +22,16 @@ on:
     types: [opened, reopened, ready_for_review, synchronize]
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
-  pages: read
+  pages: read # read the Pages configuration used by configure-pages
 
 jobs:
   build:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -62,9 +61,12 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     permissions:
-      id-token: write
-      pages: write
+      id-token: write # authenticate the Pages deployment with OIDC
+      pages: write # publish the previously built Pages artifact
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

@@ -1286,14 +1286,18 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           currentConnectionGeneration === null ||
           connectionGeneration !== currentConnectionGeneration
         ) {
-          // A superseded socket cannot publish lifecycle callbacks for the
-          // current connection.
+          // Preserve the public callback contract without allowing a stale
+          // socket to mutate the provider's current connection lifecycle.
+          publishCloseCallback();
           return;
         }
         currentConnectionGenerationRef.current = null;
 
         if (!isCurrentLifecycleGeneration(connectionGeneration)) {
-          if (isConnectingRef.current) return;
+          if (isConnectingRef.current) {
+            publishCloseCallback();
+            return;
+          }
           publishDisconnectMessage();
           publishCloseCallback();
           return;
@@ -2583,7 +2587,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const clearConnect = () => {
         if (activeConnectPromiseRef.current !== connecting) return;
         if (isConnectingRef.current) {
-          void disconnectAndCleanUpResources('error');
+          void disconnectAndCleanUpResourcesRef.current('error');
           return;
         }
         activeConnectPromiseRef.current = null;
@@ -2592,7 +2596,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       void connecting.then(clearConnect, clearConnect);
       return connecting;
     },
-    [connectAttempt, diagnostics, disconnectAndCleanUpResources],
+    [connectAttempt, diagnostics, disconnectAndCleanUpResourcesRef],
   );
 
   // `disconnect` is the function that the end user calls to disconnect a call

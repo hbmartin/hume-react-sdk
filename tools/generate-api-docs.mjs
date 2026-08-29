@@ -10,7 +10,7 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { getPnpmCommand } from './pnpm-command.mjs';
+import { getPnpmInvocation } from './pnpm-command.mjs';
 import { makeReadmeVitePressSafe } from './readme-markdown.mjs';
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -18,7 +18,6 @@ const generatedRoot = join(repositoryRoot, 'docs', '.generated');
 const apiModelDirectory = join(generatedRoot, 'api-model');
 const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
 const packageGuideDirectory = join(repositoryRoot, 'docs', 'packages');
-const pnpmCommand = getPnpmCommand();
 
 const packages = [
   {
@@ -73,6 +72,12 @@ function run(command, arguments_) {
   });
 }
 
+/** @param {readonly string[]} arguments_ */
+function runPnpm(arguments_) {
+  const invocation = getPnpmInvocation(arguments_);
+  return run(invocation.command, invocation.arguments);
+}
+
 async function makeMarkdownVitePressSafe() {
   const entries = await readdir(apiReferenceDirectory, { withFileTypes: true });
 
@@ -120,18 +125,13 @@ async function writePackageGuides() {
 }
 
 await rm(generatedRoot, { force: true, recursive: true });
+await rm(packageGuideDirectory, { force: true, recursive: true });
 await mkdir(apiModelDirectory, { recursive: true });
 await writePackageGuides();
 
 for (const package_ of packages) {
   const configuration = join(package_.directory, 'api-extractor.json');
-  await run(pnpmCommand, [
-    'exec',
-    'api-extractor',
-    'run',
-    '--config',
-    configuration,
-  ]);
+  await runPnpm(['exec', 'api-extractor', 'run', '--config', configuration]);
 
   await copyFile(
     join(repositoryRoot, package_.directory, '.api-extractor', package_.model),
@@ -139,7 +139,7 @@ for (const package_ of packages) {
   );
 }
 
-await run(pnpmCommand, [
+await runPnpm([
   'exec',
   'api-documenter',
   'markdown',

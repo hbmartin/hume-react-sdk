@@ -29,6 +29,7 @@ export const COLLAPSE_WIDGET_ACTION: {
 
 // @public (undocumented)
 export class EmbeddedVoice {
+    cancelPendingOpen(): void;
     // (undocumented)
     static create(input: EmbeddedVoiceConfig & {
         onMessage?: TranscriptMessageHandler;

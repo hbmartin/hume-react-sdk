@@ -34,7 +34,9 @@ export class EmbeddedVoice {
 
   private onClose: CloseHandler;
 
-  private openOnMount: boolean;
+  private isReady: boolean = false;
+
+  private shouldOpenWhenReady: boolean;
 
   private constructor({
     onMessage = () => {},
@@ -50,8 +52,7 @@ export class EmbeddedVoice {
     this.iframe = this.createIframe(config);
     this.onMessage = onMessage;
     this.onClose = onClose;
-    this.openOnMount = openOnMount ?? false;
-    this.messageHandler = this.messageHandler.bind(this);
+    this.shouldOpenWhenReady = openOnMount ?? false;
     this.messageHandler = this.messageHandler.bind(this);
   }
 
@@ -167,6 +168,9 @@ export class EmbeddedVoice {
   }
 
   private messageHandler(event: MessageEvent<unknown>) {
+    if (event.source !== this.iframe.contentWindow) {
+      return;
+    }
     if (event.origin !== new URL(this.iframe.src).origin) {
       return;
     }
@@ -179,10 +183,11 @@ export class EmbeddedVoice {
 
     switch (action.data.type) {
       case WIDGET_IFRAME_IS_READY_ACTION.type: {
+        this.isReady = true;
         this.showIframe();
         this.sendConfigObject();
         this.sendWindowSize();
-        if (this.openOnMount) {
+        if (this.shouldOpenWhenReady) {
           this.openEmbed();
         }
         break;
@@ -207,11 +212,23 @@ export class EmbeddedVoice {
   }
 
   openEmbed() {
+    if (!this.isReady) {
+      this.shouldOpenWhenReady = true;
+      return;
+    }
+    this.shouldOpenWhenReady = false;
     const action = EXPAND_FROM_CLIENT_ACTION({
       width: window.screen.availWidth,
       height: window.screen.availHeight,
     });
     this.sendMessageToFrame(action);
+  }
+
+  /** Cancels an open request that is waiting for iframe readiness. */
+  cancelPendingOpen() {
+    if (!this.isReady) {
+      this.shouldOpenWhenReady = false;
+    }
   }
 
   private sendConfigObject() {

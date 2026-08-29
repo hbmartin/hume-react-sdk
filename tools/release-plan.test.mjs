@@ -10,14 +10,16 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { getPnpmCommand } from './pnpm-command.mjs';
+import { getPnpmInvocation } from './pnpm-command.mjs';
 import {
   createPublishArguments,
   createReleasePlan,
+  parseReleaseArguments,
+  validatePublishedWorkspaceDependencies,
   validateProvenanceRepository,
 } from './release-plan.mjs';
 
@@ -27,11 +29,34 @@ const packages = [
   { name: '@humeai/voice-react', version: '0.3.0-beta.7' },
 ];
 
+function getReleaseTestEnvironment() {
+  const environment = { ...process.env };
+  delete environment.GITHUB_REPOSITORY;
+  delete environment.RELEASE_TAG;
+  return environment;
+}
+
+await test('release CLI arguments are parsed consistently', () => {
+  assert.deepEqual(parseReleaseArguments(['v1.2.3', '--dry-run']), {
+    dryRun: true,
+    releaseTag: 'v1.2.3',
+  });
+  assert.deepEqual(parseReleaseArguments(['--dry-run'], 'v1.2.3'), {
+    dryRun: true,
+    releaseTag: 'v1.2.3',
+  });
+  assert.throws(
+    () => parseReleaseArguments(['v1.2.3', 'v1.2.4']),
+    /Expected a single release tag/,
+  );
+});
+
 await test('stable releases select only matching packages and use the latest dist-tag', () => {
   assert.deepEqual(createReleasePlan('v0.2.18', packages), {
     expectedVersion: '0.2.18',
     npmTag: 'latest',
     packageNames: ['@humeai/voice-embed', '@humeai/voice-embed-react'],
+    workspaceDependenciesToVerify: [],
   });
 });
 
@@ -40,6 +65,7 @@ await test('prereleases select only matching packages and use the next dist-tag'
     expectedVersion: '0.3.0-beta.7',
     npmTag: 'next',
     packageNames: ['@humeai/voice-react'],
+    workspaceDependenciesToVerify: [],
   });
 });
 
@@ -71,6 +97,7 @@ await test('invalid and unmatched release tags are rejected', () => {
  * @param {string} [releaseTag]
  * @returns {Promise<string[][]>}
  */
+// fallow-ignore-next-line complexity -- cross-platform fixture setup and teardown are intentionally colocated
 async function runRelease(arguments_, releaseTag) {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), 'run-release-'));
   const toolsDirectory = join(temporaryDirectory, 'tools');
@@ -94,16 +121,31 @@ async function runRelease(arguments_, releaseTag) {
         );
       }),
     ]);
-    const fakePnpm = join(binaryDirectory, 'pnpm');
+    const fakePnpmScript = join(binaryDirectory, 'fake-pnpm.cjs');
     await writeFile(
-      fakePnpm,
+      fakePnpmScript,
       `#!/usr/bin/env node\nconst { appendFileSync } = require('node:fs');\nappendFileSync(process.env.RELEASE_TEST_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');\n`,
     );
-    await chmod(fakePnpm, 0o755);
+    if (process.platform === 'win32') {
+      await writeFile(
+        join(binaryDirectory, 'pnpm.cmd'),
+        `@echo off\r\n"${process.execPath}" "%~dp0\\fake-pnpm.cjs" %*\r\n`,
+      );
+    } else {
+      const fakePnpm = join(binaryDirectory, 'pnpm');
+      await writeFile(
+        fakePnpm,
+        `#!/usr/bin/env node\nrequire('./fake-pnpm.cjs');\n`,
+      );
+      await chmod(fakePnpm, 0o755);
+    }
 
-    const environment = { ...process.env };
-    delete environment.GITHUB_REPOSITORY;
-    delete environment.RELEASE_TAG;
+    const environment = getReleaseTestEnvironment();
+    const pathKey =
+      Object.keys(environment).find((key) => key.toLowerCase() === 'path') ??
+      'PATH';
+    environment[pathKey] =
+      `${binaryDirectory}${delimiter}${environment[pathKey] ?? ''}`;
     const result = spawnSync(
       process.execPath,
       [
@@ -115,7 +157,6 @@ async function runRelease(arguments_, releaseTag) {
         encoding: 'utf8',
         env: {
           ...environment,
-          PATH: `${binaryDirectory}:${environment.PATH ?? ''}`,
           RELEASE_TEST_LOG: invocationLog,
           ...(releaseTag === undefined ? {} : { RELEASE_TAG: releaseTag }),
         },
@@ -182,17 +223,62 @@ await test('matching runtime workspace dependencies are included in the publish 
   );
 });
 
-await test('unrelated runtime workspace dependency versions are not republished', () => {
-  assert.deepEqual(
-    createReleasePlan('v2.0.0', [
-      { name: '@humeai/dependency', version: '1.0.0' },
-      {
-        name: '@humeai/dependent',
-        version: '2.0.0',
-        dependencies: { '@humeai/dependency': 'workspace:*' },
+await test('unrelated runtime workspace dependency versions are verified instead of republished', () => {
+  const plan = createReleasePlan('v2.0.0', [
+    { name: '@humeai/dependency', version: '1.0.0' },
+    {
+      name: '@humeai/dependent',
+      version: '2.0.0',
+      dependencies: { '@humeai/dependency': 'workspace:*' },
+    },
+  ]);
+
+  assert.deepEqual(plan.packageNames, ['@humeai/dependent']);
+  assert.deepEqual(plan.workspaceDependenciesToVerify, [
+    { name: '@humeai/dependency', version: '1.0.0' },
+  ]);
+});
+
+await test('published version-skewed workspace dependencies pass validation', async () => {
+  const requestedUrls = [];
+  await validatePublishedWorkspaceDependencies(
+    {
+      workspaceDependenciesToVerify: [
+        { name: '@humeai/dependency', version: '1.0.0' },
+      ],
+    },
+    {
+      fetchImplementation: async (url) => {
+        if (typeof url === 'string') requestedUrls.push(url);
+        else if (url instanceof URL) requestedUrls.push(url.href);
+        else requestedUrls.push(url.url);
+        return /** @type {Response} */ ({ ok: true, status: 200 });
       },
-    ]).packageNames,
-    ['@humeai/dependent'],
+      registryUrl: 'https://registry.example.test/npm/',
+    },
+  );
+
+  assert.deepEqual(requestedUrls, [
+    'https://registry.example.test/npm/%40humeai%2Fdependency/1.0.0',
+  ]);
+});
+
+await test('unpublished version-skewed workspace dependencies block publication', async () => {
+  await assert.rejects(
+    validatePublishedWorkspaceDependencies(
+      {
+        workspaceDependenciesToVerify: [
+          { name: '@humeai/dependency', version: '1.0.0' },
+        ],
+      },
+      {
+        fetchImplementation: async () => /** @type {Response} */ ({
+          ok: false,
+          status: 404,
+        }),
+      },
+    ),
+    /@humeai\/dependency@1\.0\.0 has not been published/,
   );
 });
 
@@ -260,6 +346,7 @@ await test('release validation executes through a symlink', async () => {
     await symlink(new URL('./release-plan.mjs', import.meta.url), symlinkPath);
     const executed = spawnSync(process.execPath, [symlinkPath, 'invalid-tag'], {
       encoding: 'utf8',
+      env: getReleaseTestEnvironment(),
     });
     assert.notEqual(executed.status, 0);
     assert.match(executed.stderr, /Invalid release tag/);
@@ -287,8 +374,20 @@ await test('publish arguments filter packages and require provenance', () => {
   ]);
 });
 
-await test('pnpm command resolution uses the Windows command shim', () => {
-  assert.equal(getPnpmCommand('win32'), 'pnpm.cmd');
-  assert.equal(getPnpmCommand('linux'), 'pnpm');
-  assert.equal(getPnpmCommand('darwin'), 'pnpm');
+await test('pnpm invocation uses the Windows command interpreter', () => {
+  assert.deepEqual(
+    getPnpmInvocation(['check'], 'win32', 'C:\\Windows\\System32\\cmd.exe'),
+    {
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      arguments: ['/d', '/s', '/c', 'pnpm.cmd', 'check'],
+    },
+  );
+  assert.deepEqual(getPnpmInvocation(['check'], 'linux'), {
+    command: 'pnpm',
+    arguments: ['check'],
+  });
+  assert.deepEqual(getPnpmInvocation(['check'], 'darwin'), {
+    command: 'pnpm',
+    arguments: ['check'],
+  });
 });
