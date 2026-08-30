@@ -15,10 +15,6 @@ const defaultRegistryRequestAttempts = 3;
 const defaultRegistryRequestTimeoutMs = 10_000;
 const defaultRegistryRetryDelayMs = 250;
 
-function getDefaultRegistryToken() {
-  return process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN;
-}
-
 /**
  * @typedef {{
  *   name: string,
@@ -341,7 +337,8 @@ async function validatePublishedWorkspaceDependency(
 
 /**
  * Verifies that version-skewed runtime workspace dependencies already exist in
- * the configured npm registry before publishing a dependent package.
+ * the configured npm registry before publishing a dependent package. Registry
+ * authentication is sent only when `registryToken` is explicitly supplied.
  *
  * @param {{ workspaceDependenciesToVerify: readonly { name: string, version: string }[] }} plan
  * @param {{ fetchImplementation?: typeof globalThis.fetch, maxAttempts?: number, registryToken?: string, registryUrl?: string, retryDelayMs?: number, timeoutMs?: number }} [options]
@@ -351,7 +348,7 @@ export async function validatePublishedWorkspaceDependencies(
   {
     fetchImplementation = globalThis.fetch,
     maxAttempts = defaultRegistryRequestAttempts,
-    registryToken = getDefaultRegistryToken(),
+    registryToken,
     registryUrl = process.env.npm_config_registry ??
       process.env.NPM_CONFIG_REGISTRY ??
       'https://registry.npmjs.org/',

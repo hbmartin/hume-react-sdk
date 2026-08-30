@@ -1,21 +1,13 @@
-import z from 'zod';
-
-const AudioMessageSchema = z
-  .object({
-    type: z.literal('audio'),
-    data: z.instanceof(ArrayBuffer),
-  })
-  .transform((obj) => {
-    return Object.assign(obj, {
-      receivedAt: new Date(),
-    });
-  });
-
-export type AudioMessage = z.infer<typeof AudioMessageSchema>;
+/** A binary assistant-audio message decoded from a WebSocket blob. */
+export type ParsedAudioMessage = {
+  type: 'audio';
+  data: ArrayBuffer;
+  receivedAt: Date;
+};
 
 export const parseAudioMessage = async (
   blob: Blob,
-): Promise<AudioMessage | null> => {
+): Promise<ParsedAudioMessage | null> => {
   return blob
     .arrayBuffer()
     .then((buffer) => {

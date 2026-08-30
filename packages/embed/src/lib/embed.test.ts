@@ -11,6 +11,7 @@ afterEach(() => {
 });
 
 const createMountedEmbed = (options?: {
+  onReady?: () => void;
   openOnMount?: boolean;
   rendererUrl?: string;
 }) => {
@@ -84,6 +85,21 @@ describe('EmbeddedVoice', () => {
     );
   });
 
+  it('reports readiness after applying a queued open request', () => {
+    const onReady = vi.fn();
+    const { embeddedVoice, iframe, postMessage } = createMountedEmbed({
+      onReady,
+    });
+    embeddedVoice.openEmbed();
+
+    dispatchReady(iframe);
+
+    expect(getPostedActionTypes(postMessage.mock.calls as unknown[][])).toEqual(
+      ['update_config', 'send_window_size', 'expand_widget_from_client'],
+    );
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
   it('can cancel an open request queued before readiness', () => {
     const { embeddedVoice, iframe, postMessage } = createMountedEmbed();
     embeddedVoice.openEmbed();
@@ -148,6 +164,47 @@ describe('EmbeddedVoice', () => {
     expect(getPostedActionTypes(postMessage.mock.calls as unknown[][])).toEqual(
       ['update_config', 'send_window_size'],
     );
+  });
+
+  it('hides stale iframe content and restores a supplied container on unmount', () => {
+    const container = document.createElement('div');
+    container.style.pointerEvents = 'auto';
+    document.body.appendChild(container);
+    const embeddedVoice = EmbeddedVoice.create({
+      auth: { type: 'accessToken', value: 'test-token' },
+    });
+    const firstUnmount = embeddedVoice.mount(container);
+    unmounts.push(firstUnmount);
+    const iframe = container.querySelector<HTMLIFrameElement>(
+      '#hume-embedded-voice',
+    );
+    if (!iframe) throw new Error('Embed did not mount its iframe.');
+    dispatchReady(iframe);
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'resize_frame', payload: { width: 320, height: 480 } },
+        origin: new URL(iframe.src).origin,
+        source: iframe.contentWindow,
+      }),
+    );
+    expect(iframe.style.opacity).toBe('1');
+    expect(iframe.style.width).toBe('320px');
+    expect(iframe.style.height).toBe('480px');
+    expect(container.style.pointerEvents).toBe('all');
+
+    firstUnmount();
+
+    expect(iframe.style.opacity).toBe('0');
+    expect(iframe.style.width).toBe('0px');
+    expect(iframe.style.height).toBe('0px');
+    expect(container.style.pointerEvents).toBe('auto');
+
+    unmounts.push(embeddedVoice.mount(container));
+    expect(iframe.style.opacity).toBe('0');
+    expect(iframe.style.width).toBe('0px');
+    expect(iframe.style.height).toBe('0px');
+    expect(container.style.pointerEvents).toBe('none');
+    container.remove();
   });
 
   it('waits for fresh readiness after remounting the same instance', () => {

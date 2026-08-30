@@ -99,6 +99,7 @@ within a client component. For more information checkout the
 | `iframeTitle` | no       | Accessible title for the widget iframe. Defaults to `Hume Empathic Voice Widget`.                                                                                                                    |
 | `onMessage`   | no       | Called with each user and assistant transcript as the conversation proceeds.                                                                                                                         |
 | `onClose`     | no       | Called when the user collapses the widget.                                                                                                                                                           |
+| `onReady`     | no       | Called after the widget iframe reports readiness and any queued open request has been applied.                                                                                                       |
 
 Visibility is controlled imperatively rather than through a prop: `openEmbed()`
 opens the widget, and `cancelPendingOpen()` withdraws an open request that is
@@ -107,8 +108,8 @@ own UI, which invokes `onClose`.
 
 ### API reference
 
-The complete public signatures and TSDoc live in the
-[`@humeai/voice-embed` source](https://github.com/HumeAI/hume-react-sdk/tree/main/packages/embed/src).
+Full generated signatures for every export live in the
+[SDK API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-embed).
 
 ## Support
 

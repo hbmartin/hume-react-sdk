@@ -285,6 +285,39 @@ await test('registry validation forwards npm token authentication', async () => 
   assert.equal(authorization, 'Bearer test-token');
 });
 
+await test('registry validation does not forward ambient npm tokens', async () => {
+  const previousNodeAuthToken = process.env.NODE_AUTH_TOKEN;
+  const previousNpmToken = process.env.NPM_TOKEN;
+  process.env.NODE_AUTH_TOKEN = 'ambient-node-token';
+  process.env.NPM_TOKEN = 'ambient-npm-token';
+  let authorization;
+
+  try {
+    await validatePublishedWorkspaceDependencies(
+      {
+        workspaceDependenciesToVerify: [
+          { name: '@humeai/dependency', version: '1.0.0' },
+        ],
+      },
+      {
+        fetchImplementation: async (_url, init) => {
+          const headers = new Headers(init?.headers);
+          authorization = headers.get('authorization');
+          return /** @type {Response} */ ({ ok: true, status: 200 });
+        },
+        registryUrl: 'https://registry.example.test/npm/',
+      },
+    );
+  } finally {
+    if (previousNodeAuthToken === undefined) delete process.env.NODE_AUTH_TOKEN;
+    else process.env.NODE_AUTH_TOKEN = previousNodeAuthToken;
+    if (previousNpmToken === undefined) delete process.env.NPM_TOKEN;
+    else process.env.NPM_TOKEN = previousNpmToken;
+  }
+
+  assert.equal(authorization, null);
+});
+
 await test('unpublished version-skewed workspace dependencies block publication', async () => {
   await assert.rejects(
     validatePublishedWorkspaceDependencies(

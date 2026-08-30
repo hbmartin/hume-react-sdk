@@ -2,7 +2,12 @@
 import { checkForAudioTracks } from 'hume';
 import { useCallback, useRef, useState } from 'react';
 
-type PermissionStatus = 'prompt' | 'granted' | 'denied';
+/**
+ * Browser microphone permission state reported by {@link useMicrophoneStream}.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
+export type MicrophonePermissionStatus = 'prompt' | 'granted' | 'denied';
 
 const getAudioStream = async (
   audioConstraints: MediaTrackConstraints,
@@ -27,7 +32,8 @@ const getAudioStream = async (
  * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
  */
 export const useMicrophoneStream = () => {
-  const [permission, setPermission] = useState<PermissionStatus>('prompt');
+  const [permission, setPermission] =
+    useState<MicrophonePermissionStatus>('prompt');
   const currentStream = useRef<MediaStream | null>(null);
 
   const getStream = useCallback(

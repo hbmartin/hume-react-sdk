@@ -10,13 +10,16 @@
  */
 
 export type * from './lib/connection-message';
+export type { ParsedAudioMessage } from './lib/audio-message';
 export type {
   VoiceDiagnosticCategory,
   VoiceDiagnosticDetails,
   VoiceDiagnosticEvent,
   VoiceDiagnosticEventName,
   VoiceDiagnosticLevel,
+  VoiceDiagnosticInput,
   VoiceDiagnosticsOptions,
+  VoiceDiagnosticsReporter,
   VoiceDiagnosticValue,
   VoiceLogger,
 } from './lib/diagnostics';
