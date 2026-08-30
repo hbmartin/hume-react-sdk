@@ -32,6 +32,7 @@ import {
 } from '../utils/closeAudioContextWithTimeout';
 import { getAuthStrategyError } from './auth';
 import {
+  getBrowserErrorMessage,
   getBrowserErrorName,
   isMicrophonePermissionDeniedError,
 } from './browserErrors';
@@ -173,7 +174,7 @@ const getDeviceSwitchReason = (
   error: unknown,
 ): AudioDeviceSwitchErrorReason => {
   const name = getBrowserErrorName(error);
-  if (isMicrophonePermissionDeniedError(error)) {
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
     return 'permission_denied';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
@@ -194,7 +195,8 @@ const createDeviceSwitchError = (
   cause?: unknown,
 ) => {
   const device = kind === 'audioinput' ? 'input' : 'output';
-  const detail = cause instanceof Error ? ` ${cause.message}` : '';
+  const causeMessage = getBrowserErrorMessage(cause);
+  const detail = causeMessage === null ? '' : ` ${causeMessage}`;
   const messages: Record<AudioDeviceSwitchErrorReason, string> = {
     not_connected: `Cannot switch the audio ${device} without an active voice connection.`,
     unsupported: `This browser does not support switching the audio ${device}.${detail}`,
@@ -2003,9 +2005,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             ? 'mic_permission_denied'
             : 'mic_initialization_failure',
           message:
-            e instanceof Error
-              ? e.message
-              : 'The microphone could not be initialized.',
+            getBrowserErrorMessage(e) ??
+            'The microphone could not be initialized.',
         };
         diagnostics.emit({
           level: 'error',

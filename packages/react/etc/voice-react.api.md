@@ -300,6 +300,9 @@ export interface UseAudioDevicesReturn {
 // @public
 export const useCallDurationTimestamp: () => string | null;
 
+// @public @deprecated
+export function useFftSubscription(store: FftStore): FftSnapshot;
+
 // @public
 export const useMicFft: () => FftSnapshot;
 
@@ -317,13 +320,7 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
 // @public @deprecated
-export const useSoundPlayer: (props: {
-    diagnostics?: VoiceDiagnosticsReporter;
-    enableAudioWorklet: boolean;
-    onError: (message: string, reason: AudioPlayerErrorReason) => void;
-    onPlayAudio: (id: string) => void;
-    onStopAudio: (id: string) => void;
-}) => {
+export const useSoundPlayer: (props: UseSoundPlayerProps) => {
     addToQueue: (message: AudioOutputMessage) => Promise<void>;
     fftStore: FftStore;
     initPlayer: (speakerDeviceId?: string, sharedAudioContext?: AudioContext) => Promise<boolean>;
@@ -340,6 +337,15 @@ export const useSoundPlayer: (props: {
     setOutputDevice: (deviceId: string | null) => Promise<void>;
     queueLength: number;
 };
+
+// @public @deprecated
+export interface UseSoundPlayerProps {
+    diagnostics?: VoiceDiagnosticsReporter;
+    enableAudioWorklet: boolean;
+    onError: (message: string, reason: AudioPlayerErrorReason) => void;
+    onPlayAudio: (id: string) => void;
+    onStopAudio: (id: string) => void;
+}
 
 // @public
 export const useVoice: () => VoiceContextType;

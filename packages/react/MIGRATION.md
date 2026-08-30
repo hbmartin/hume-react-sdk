@@ -153,7 +153,7 @@ function Waveform() {
 
 ---
 
-## Migrating from 0.3.x to 1.0.0
+## Migrating from 0.3.0 prereleases to 1.0.0
 
 The 1.0 surface removes low-level hooks and stale model constants that duplicated
 the lifecycle and configuration already owned by `VoiceProvider`, `useVoice`,
@@ -166,13 +166,13 @@ and the `hume` client.
 | `useMicrophone`, `useMicrophoneStream`, `MicrophonePermissionStatus`, `MicrophoneProps`       | Configure microphone capture through `VoiceProvider` and call `connect()` from `useVoice()` |
 | `useVoiceClient`                                                                              | Use `VoiceProvider` and the connection controls returned by `useVoice()`                    |
 | `useCallDuration`, `CallDurationStore`                                                        | `useCallDurationTimestamp()`                                                                |
-| `useFftSubscription`                                                                          | `usePlayerFft()` or `useMicFft()`                                                           |
 | `ConnectionGenerationError`, `ConnectionGenerationErrorReason`, `isConnectionGenerationError` | Remove caller-side generation handling; `VoiceProvider` serializes connection attempts      |
 
 The deprecated `useSoundPlayer` wrapper remains temporarily for compatibility.
-Its `FftStore`, `VoiceDiagnosticInput`, and `VoiceDiagnosticsReporter` support
-types remain deprecated with it; new code should use `VoiceProvider`,
-`usePlayerFft()`, `useMicFft()`, and the `diagnostics` provider option.
+Its `FftStore`, `useFftSubscription`, `VoiceDiagnosticInput`, and
+`VoiceDiagnosticsReporter` support APIs remain deprecated with it; new code
+should use `VoiceProvider`, `usePlayerFft()`, `useMicFft()`, and the `diagnostics`
+provider option.
 
 ### Replace stale configuration constants
 

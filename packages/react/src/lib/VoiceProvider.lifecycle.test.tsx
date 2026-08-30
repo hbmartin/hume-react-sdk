@@ -1975,7 +1975,10 @@ describe('VoiceProvider close lifecycle', () => {
   });
 
   it('maps input permission failures without replacing the active microphone', async () => {
-    const permissionError = new DOMException('denied', 'NotAllowedError');
+    const permissionError = {
+      message: 'blocked by document policy',
+      name: 'SecurityError',
+    };
     const { result } = renderHook(() => useVoice(), {
       wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
     });
@@ -1993,6 +1996,8 @@ describe('VoiceProvider close lifecycle', () => {
     expect(switchError).toMatchObject({
       cause: permissionError,
       kind: 'audioinput',
+      message:
+        'Permission to switch the audio input was denied. blocked by document policy',
       reason: 'permission_denied',
     });
     expect(mocks.micReplace).not.toHaveBeenCalled();
@@ -2016,6 +2021,7 @@ describe('VoiceProvider close lifecycle', () => {
       );
 
       expect(result.current.error).toMatchObject({
+        message: 'denied',
         reason: 'mic_permission_denied',
         type: 'mic_error',
       });

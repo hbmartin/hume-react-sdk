@@ -54,13 +54,23 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  */
 const RESUME_TIMEOUT_MS = 1_000;
 
-type UseSoundPlayerProps = {
+/**
+ * Options accepted by the deprecated standalone sound player.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
+export interface UseSoundPlayerProps {
+  /** Optional diagnostics reporter used by the standalone player. */
   diagnostics?: VoiceDiagnosticsReporter;
+  /** Whether playback should use the AudioWorklet implementation. */
   enableAudioWorklet: boolean;
+  /** Receives player failures that cannot be recovered internally. */
   onError: (message: string, reason: AudioPlayerErrorReason) => void;
+  /** Called when playback starts for an audio message id. */
   onPlayAudio: (id: string) => void;
+  /** Called when playback stops for an audio message id. */
   onStopAudio: (id: string) => void;
-};
+}
 
 /**
  * The audio player itself. `propagateContextStopFailures` selects between the
@@ -1205,13 +1215,8 @@ const useSoundPlayerImplementation = (
  * retained for compatibility and will only be removed in a future breaking
  * release.
  */
-export const useSoundPlayer = (props: {
-  diagnostics?: VoiceDiagnosticsReporter;
-  enableAudioWorklet: boolean;
-  onError: (message: string, reason: AudioPlayerErrorReason) => void;
-  onPlayAudio: (id: string) => void;
-  onStopAudio: (id: string) => void;
-}) => useSoundPlayerImplementation(props, false);
+export const useSoundPlayer = (props: UseSoundPlayerProps) =>
+  useSoundPlayerImplementation(props, false);
 
 /**
  * Strict player cleanup used for provider-level failure aggregation.

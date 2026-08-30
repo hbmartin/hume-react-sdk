@@ -92,7 +92,7 @@ export class FftStore {
 /**
  * Subscribe to an {@link FftStore} from React.
  *
- * @internal
+ * @deprecated Use {@link usePlayerFft} or {@link useMicFft}.
  */
 export function useFftSubscription(store: FftStore): FftSnapshot {
   return useSyncExternalStore(

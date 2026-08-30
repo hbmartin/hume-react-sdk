@@ -23,10 +23,10 @@ export type {
   VoiceDiagnosticValue,
   VoiceLogger,
 } from './lib/diagnostics';
-// `FftStore` remains only because the deprecated player returns it.
-export { FftStore, type FftSnapshot } from './lib/fftStore';
+// These remain only because the deprecated player returns its FFT store.
+export { FftStore, type FftSnapshot, useFftSubscription } from './lib/fftStore';
 export * from './lib/useAudioDevices';
-export { useSoundPlayer } from './lib/useSoundPlayer';
+export { type UseSoundPlayerProps, useSoundPlayer } from './lib/useSoundPlayer';
 export * from './lib/VoiceProvider';
 export {
   AudioDeviceSwitchError,
