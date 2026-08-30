@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitepress';
 
+import { readApiReferenceSidebar } from '../../tools/api-sidebar.mjs';
+
 const repositoryName =
   process.env.GITHUB_REPOSITORY?.split('/').at(-1) ?? 'hume-react-sdk';
 const base = process.env.DOCS_BASE ?? `/${repositoryName}/`;
@@ -98,6 +100,9 @@ export default defineConfig({
           text: 'API Reference',
         },
       ],
+      // Keyed more specifically than '/reference/', so the generated pages get
+      // the generated sidebar while the overview keeps the short one above.
+      '/reference/api/': readApiReferenceSidebar(),
     },
     siteTitle: 'Hume Voice SDK',
     socialLinks: [
