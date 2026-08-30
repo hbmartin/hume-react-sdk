@@ -23,8 +23,11 @@ export {
 
 export type {
   AssistantTranscriptMessage,
+  CloseHandler,
   EmbeddedVoiceConfig,
+  ReadyHandler,
   SocketConfig,
+  TranscriptMessageHandler,
   FrameToClientAction,
   JSONMessage,
   UserTranscriptMessage,

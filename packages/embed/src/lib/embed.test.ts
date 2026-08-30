@@ -240,16 +240,79 @@ describe('EmbeddedVoice', () => {
     expect(container.style.pointerEvents).toBe('painted');
   });
 
-  it('continues unmounting when iframe removal fails', () => {
-    const { iframe, unmount } = createMountedEmbed();
+  it('falls back to parent removal when iframe.remove fails', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+    const embeddedVoice = EmbeddedVoice.create({
+      auth: { type: 'accessToken', value: 'test-token' },
+    });
+    const unmount = embeddedVoice.mount(container);
+    unmounts.push(unmount);
+    const iframe = container.querySelector<HTMLIFrameElement>(
+      '#hume-embedded-voice',
+    );
+    if (!iframe) throw new Error('Embed did not mount its iframe.');
     const remove = vi.spyOn(iframe, 'remove').mockImplementationOnce(() => {
       throw new Error('remove failed');
     });
+    const removeChild = vi.spyOn(container, 'removeChild');
 
     expect(unmount).not.toThrow();
+    expect(removeChild).toHaveBeenCalledWith(iframe);
+    expect(iframe.parentNode).toBeNull();
     expect(iframe.isConnected).toBe(false);
 
     remove.mockRestore();
+    removeChild.mockRestore();
+  });
+
+  it('reports an unrecoverable removal failure after stopping the iframe', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+    const embeddedVoice = EmbeddedVoice.create({
+      auth: { type: 'accessToken', value: 'test-token' },
+    });
+    const unmount = embeddedVoice.mount(container);
+    unmounts.push(unmount);
+    const iframe = container.querySelector<HTMLIFrameElement>(
+      '#hume-embedded-voice',
+    );
+    if (!iframe) throw new Error('Embed did not mount its iframe.');
+    const remove = vi.spyOn(iframe, 'remove').mockImplementationOnce(() => {
+      throw new Error('remove failed');
+    });
+    const removeChild = vi
+      .spyOn(container, 'removeChild')
+      .mockImplementationOnce(() => {
+        throw new Error('removeChild failed');
+      });
+
+    expect(unmount).toThrow('Unable to remove the embedded voice element.');
+    expect(iframe.src).toBe('about:blank');
+    expect(iframe.style.opacity).toBe('0');
+    expect(iframe.style.pointerEvents).toBe('none');
+
+    remove.mockRestore();
+    removeChild.mockRestore();
+  });
+
+  it('throws when the iframe cannot be attached', () => {
+    const container = document.createElement('div');
+    containers.push(container);
+    const appendChild = vi
+      .spyOn(container, 'appendChild')
+      .mockImplementationOnce(() => {
+        throw new Error('append failed');
+      });
+    const embeddedVoice = EmbeddedVoice.create({
+      auth: { type: 'accessToken', value: 'test-token' },
+    });
+
+    expect(() => embeddedVoice.mount(container)).toThrow('append failed');
+
+    appendChild.mockRestore();
   });
 
   it('waits for fresh readiness after remounting the same instance', () => {

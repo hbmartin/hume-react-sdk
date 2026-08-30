@@ -32,6 +32,8 @@ export { AssistantTranscriptMessage }
 
 export { ChatMetadataMessage }
 
+export { CloseHandler }
+
 export { COLLAPSE_WIDGET_ACTION }
 
 // @public
@@ -62,6 +64,8 @@ export { MINIMIZE_WIDGET_ACTION }
 
 export { parseClientToFrameAction }
 
+export { ReadyHandler }
+
 export { RESIZE_FRAME_ACTION }
 
 export { SocketConfig }
@@ -73,6 +77,8 @@ export { ToolError }
 export { ToolResponse }
 
 export { TRANSCRIPT_MESSAGE_ACTION }
+
+export { TranscriptMessageHandler }
 
 export { UserTranscriptMessage }
 

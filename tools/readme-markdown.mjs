@@ -38,6 +38,8 @@ export function makeReadmeVitePressSafe(readme) {
     listContinuationIndent: null,
     /** Whether the preceding block can continue as a paragraph. */
     paragraphOpen: false,
+    /** Raw HTML elements whose text content must remain literal. */
+    rawHtmlElement: null,
   };
   return readme
     .replaceAll('\r\n', '\n')
@@ -48,17 +50,18 @@ export function makeReadmeVitePressSafe(readme) {
 
 /**
  * @param {string} line
- * @param {{ codeFence: { character: '`' | '~', length: number } | null, indentedCodeIndent: number | null, listContinuationIndent: number | null, paragraphOpen: boolean }} state
+ * @param {{ codeFence: { character: '`' | '~', length: number } | null, indentedCodeIndent: number | null, listContinuationIndent: number | null, paragraphOpen: boolean, rawHtmlElement: string | null }} state
  */
 // fallow-ignore-next-line complexity -- explicit branches model CommonMark fence state and escaping
 function transformReadmeLine(line, state) {
+  if (state.rawHtmlElement !== null) {
+    return rewriteSiblingDocumentLinksInRawHtml(line, state);
+  }
   if (state.indentedCodeIndent !== null) {
     if (line.trim().length === 0) {
-      state.paragraphOpen = false;
       return line;
     }
     if (getLeadingIndentation(line).columns >= state.indentedCodeIndent) {
-      state.paragraphOpen = false;
       return line;
     }
     state.indentedCodeIndent = null;
@@ -66,6 +69,7 @@ function transformReadmeLine(line, state) {
 
   const listItemContentStart =
     state.codeFence === null ? updateListContainer(line, state) : null;
+  const paragraphWasOpen = state.paragraphOpen;
   const fence = getCodeFence(
     line,
     state.listContinuationIndent,
@@ -91,12 +95,14 @@ function transformReadmeLine(line, state) {
       : state.listContinuationIndent + 4;
   if (leadingIndentation >= indentedCodeIndent && !state.paragraphOpen) {
     state.indentedCodeIndent = indentedCodeIndent;
-    state.paragraphOpen = false;
     return line;
   }
   if (line.trimStart().startsWith('<')) {
-    state.paragraphOpen = false;
-    return rewriteSiblingDocumentLinksInRawHtml(line);
+    const interruptsParagraph = isInterruptingHtmlBlockStart(line);
+    state.paragraphOpen = interruptsParagraph
+      ? false
+      : paragraphWasOpen || !isTypeSevenHtmlBlockStart(line);
+    return rewriteSiblingDocumentLinksInRawHtml(line, state);
   }
   const inlineCodeSegments = getInlineCodeSegments(line);
   const rewrittenSegments = inlineCodeSegments.map((segment) =>
@@ -104,7 +110,11 @@ function transformReadmeLine(line, state) {
       ? segment
       : { ...segment, value: rewriteSiblingDocumentLinks(segment.value) },
   );
-  state.paragraphOpen = canContinueParagraph(line, listItemContentStart);
+  state.paragraphOpen = canContinueParagraph(
+    line,
+    listItemContentStart,
+    paragraphWasOpen,
+  );
   if (
     !rewrittenSegments.some(
       (segment) => !segment.code && /[A-Za-z0-9_.)\]]</u.test(segment.value),
@@ -121,19 +131,134 @@ function transformReadmeLine(line, state) {
  * avoids changing examples in `<code>` elements or unrelated data attributes.
  *
  * @param {string} line
+ * @param {{ rawHtmlElement: string | null }} state
  */
-function rewriteSiblingDocumentLinksInRawHtml(line) {
-  return line.replace(
-    /(\bhref[ \t]*=[ \t]*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/giu,
-    (_attribute, prefix, doubleQuoted, singleQuoted, unquoted) => {
+function rewriteSiblingDocumentLinksInRawHtml(line, state) {
+  let cursor = 0;
+  let result = '';
+
+  while (cursor < line.length) {
+    if (state.rawHtmlElement !== null) {
+      const closingTag = new RegExp(
+        `</${escapeRegularExpression(state.rawHtmlElement)}[ \\t]*>`,
+        'giu',
+      );
+      closingTag.lastIndex = cursor;
+      const closingMatch = closingTag.exec(line);
+      if (closingMatch === null) return `${result}${line.slice(cursor)}`;
+
+      const closingEnd = closingMatch.index + closingMatch[0].length;
+      result += line.slice(cursor, closingEnd);
+      cursor = closingEnd;
+      state.rawHtmlElement = null;
+      continue;
+    }
+
+    const tagStart = line.indexOf('<', cursor);
+    if (tagStart === -1) {
+      return `${result}${rewriteSiblingDocumentLinks(line.slice(cursor))}`;
+    }
+    result += rewriteSiblingDocumentLinks(line.slice(cursor, tagStart));
+
+    const tagEnd = findHtmlTagEnd(line, tagStart);
+    if (tagEnd === null) return `${result}${line.slice(tagStart)}`;
+    const tag = line.slice(tagStart, tagEnd);
+    const literalElement = getOpeningRawHtmlElement(tag);
+    result +=
+      literalElement === null
+        ? rewriteSiblingDocumentLinksInHrefAttributes(tag)
+        : tag;
+    state.rawHtmlElement = literalElement;
+    cursor = tagEnd;
+  }
+
+  return result;
+}
+
+/** @param {string} tag */
+function rewriteSiblingDocumentLinksInHrefAttributes(tag) {
+  return tag.replace(
+    /(^|[ \t]+)(href[ \t]*=[ \t]*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/giu,
+    (
+      _attribute,
+      leadingWhitespace,
+      prefix,
+      doubleQuoted,
+      singleQuoted,
+      unquoted,
+    ) => {
       if (doubleQuoted !== undefined) {
-        return `${prefix}"${rewriteSiblingDocumentLinks(doubleQuoted)}"`;
+        return `${leadingWhitespace}${prefix}"${rewriteSiblingDocumentLinks(doubleQuoted)}"`;
       }
       if (singleQuoted !== undefined) {
-        return `${prefix}'${rewriteSiblingDocumentLinks(singleQuoted)}'`;
+        return `${leadingWhitespace}${prefix}'${rewriteSiblingDocumentLinks(singleQuoted)}'`;
       }
-      return `${prefix}${rewriteSiblingDocumentLinks(unquoted)}`;
+      return `${leadingWhitespace}${prefix}${rewriteSiblingDocumentLinks(unquoted)}`;
     },
+  );
+}
+
+/**
+ * Finds the end of one HTML tag without treating `>` inside an attribute value
+ * as the end of the tag.
+ *
+ * @param {string} line
+ * @param {number} tagStart
+ */
+function findHtmlTagEnd(line, tagStart) {
+  let quote = null;
+  for (let cursor = tagStart + 1; cursor < line.length; cursor += 1) {
+    const character = line[cursor];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '>') {
+      return cursor + 1;
+    }
+  }
+  return null;
+}
+
+/** @param {string} tag */
+function getOpeningRawHtmlElement(tag) {
+  const match = /^<(code|pre|script|style|textarea)(?:[ \t]|>|\/)/iu.exec(tag);
+  if (match === null || /\/[ \t]*>$/u.test(tag)) return null;
+  return /** @type {string} */ (match[1]).toLowerCase();
+}
+
+/** @param {string} value */
+function escapeRegularExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+const INTERRUPTING_HTML_BLOCK_TAGS =
+  'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+
+/** @param {string} line */
+function isInterruptingHtmlBlockStart(line) {
+  const candidate = line.trimStart();
+  return (
+    /^<(?:script|pre|style|textarea)(?:[ \t]|>|$)/iu.test(candidate) ||
+    candidate.startsWith('<!--') ||
+    candidate.startsWith('<?') ||
+    /^<![A-Z]/u.test(candidate) ||
+    candidate.startsWith('<![CDATA[') ||
+    new RegExp(
+      `^</?(?:${INTERRUPTING_HTML_BLOCK_TAGS})(?:[ \\t]|/?>|$)`,
+      'iu',
+    ).test(candidate)
+  );
+}
+
+/** @param {string} line */
+function isTypeSevenHtmlBlockStart(line) {
+  const candidate = line.trimStart();
+  const tagEnd = findHtmlTagEnd(candidate, 0);
+  if (tagEnd === null || candidate.slice(tagEnd).trim().length > 0)
+    return false;
+  return /^<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t]|\/?>)/u.test(
+    candidate.slice(0, tagEnd),
   );
 }
 
@@ -144,18 +269,29 @@ function rewriteSiblingDocumentLinksInRawHtml(line) {
  *
  * @param {string} line
  * @param {number | null} listItemContentStart
+ * @param {boolean} paragraphWasOpen
  */
-function canContinueParagraph(line, listItemContentStart) {
+function canContinueParagraph(line, listItemContentStart, paragraphWasOpen) {
   if (line.trim().length === 0) return false;
-  const candidate =
+  const content =
     listItemContentStart === null
-      ? line.trimStart()
-      : stripIndentationColumns(line, listItemContentStart).trimStart();
+      ? line
+      : stripIndentationColumns(line, listItemContentStart);
+  const contentIndentation = getLeadingIndentation(content).columns;
+  const candidate = content.trimStart();
   if (candidate.length === 0) return false;
+  if (
+    paragraphWasOpen &&
+    contentIndentation <= 3 &&
+    /^(?:=+|-+)[ \t]*$/u.test(candidate)
+  ) {
+    return false;
+  }
   if (/^#{1,6}(?:[ \t]+|$)/u.test(candidate)) return false;
   if (candidate.startsWith('>') || candidate.startsWith('<')) return false;
-  return !/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/u.test(
-    candidate,
+  return !(
+    contentIndentation <= 3 &&
+    /^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/u.test(candidate)
   );
 }
 

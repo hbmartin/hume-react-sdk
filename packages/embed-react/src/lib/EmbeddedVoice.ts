@@ -91,6 +91,9 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   }, [onClose, onMessage, onReady]);
 
   useEffect(() => {
+    if (previousIsEmbedOpen.current && !isEmbedOpen) {
+      initialOpenOnMountPending.current = false;
+    }
     const applyInitialOpenOnMount = initialOpenOnMountPending.current;
     let readyInstance: EA | null = null;
     const instance = EA.create({
@@ -125,7 +128,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
         controlledOpenInstance.current = null;
       }
     };
-    // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares the serializable embed configuration
+    // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares config; controlled state is consulted only when recreation coincides with a close
   }, [configSignature]);
 
   useEffect(() => {

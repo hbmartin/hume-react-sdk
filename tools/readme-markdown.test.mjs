@@ -98,6 +98,33 @@ await test('indented paragraph continuations are escaped instead of treated as c
   );
 });
 
+await test('indented code directly after setext headings remains unchanged', () => {
+  for (const underline of ['===', '-']) {
+    const example = [
+      'A setext heading',
+      underline,
+      '    const result: Promise<Result> = load();',
+    ].join('\n');
+
+    assert.equal(makeReadmeVitePressSafe(example), example);
+  }
+});
+
+await test('type-seven HTML does not interrupt paragraph continuation', () => {
+  const example = [
+    'A paragraph with inline HTML',
+    '<em>',
+    '    Promise<Result>',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    ['A paragraph with inline HTML', '<em>', '    Promise&lt;Result&gt;'].join(
+      '\n',
+    ),
+  );
+});
+
 await test('indented list-paragraph continuations are not code without a blank line', () => {
   const example = [
     '- A paragraph returning a value:',
@@ -223,11 +250,31 @@ await test('relative sibling-document links point at their site routes', () => {
     '<code>./MIGRATION.md</code>',
   );
   assert.equal(
+    makeReadmeVitePressSafe('<code>href="./MIGRATION.md"</code>'),
+    '<code>href="./MIGRATION.md"</code>',
+  );
+  assert.equal(
+    makeReadmeVitePressSafe(
+      ['<code>', 'href="./MIGRATION.md"', '</code>'].join('\n'),
+    ),
+    ['<code>', 'href="./MIGRATION.md"', '</code>'].join('\n'),
+  );
+  assert.equal(
+    makeReadmeVitePressSafe(
+      '<span>See the [migration guide](./MIGRATION.md).</span>',
+    ),
+    '<span>See the [migration guide](/guide/migration).</span>',
+  );
+  assert.equal(
     makeReadmeVitePressSafe(
       '<div data-example="./MIGRATION.md">Not a link</div>',
     ),
     '<div data-example="./MIGRATION.md">Not a link</div>',
   );
+  for (const attribute of ['data-href', 'x-href', 'v-bind:href']) {
+    const unchanged = `<div ${attribute}="./MIGRATION.md">Not a link</div>`;
+    assert.equal(makeReadmeVitePressSafe(unchanged), unchanged);
+  }
 });
 
 await test('links to other files are left alone', () => {
