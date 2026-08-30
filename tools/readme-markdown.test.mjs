@@ -79,6 +79,39 @@ await test('sibling-document references inside code remain unchanged', () => {
   );
 });
 
+await test('indented paragraph continuations are escaped instead of treated as code', () => {
+  const example = [
+    'A paragraph returning a value:',
+    '    Promise<Result>',
+    '',
+    '    const result: Promise<Result> = load();',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    [
+      'A paragraph returning a value:',
+      '    Promise&lt;Result&gt;',
+      '',
+      '    const result: Promise<Result> = load();',
+    ].join('\n'),
+  );
+});
+
+await test('indented list-paragraph continuations are not code without a blank line', () => {
+  const example = [
+    '- A paragraph returning a value:',
+    '      Promise<Result>',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    ['- A paragraph returning a value:', '      Promise&lt;Result&gt;'].join(
+      '\n',
+    ),
+  );
+});
+
 await test('fences indented inside list items remain unchanged', () => {
   const example = [
     '1. Load the value:',
@@ -184,6 +217,16 @@ await test('relative sibling-document links point at their site routes', () => {
       '<a href="./MIGRATION.md">Read the migration guide</a>',
     ),
     '<a href="/guide/migration">Read the migration guide</a>',
+  );
+  assert.equal(
+    makeReadmeVitePressSafe('<code>./MIGRATION.md</code>'),
+    '<code>./MIGRATION.md</code>',
+  );
+  assert.equal(
+    makeReadmeVitePressSafe(
+      '<div data-example="./MIGRATION.md">Not a link</div>',
+    ),
+    '<div data-example="./MIGRATION.md">Not a link</div>',
   );
 });
 

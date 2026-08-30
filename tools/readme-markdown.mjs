@@ -36,6 +36,8 @@ export function makeReadmeVitePressSafe(readme) {
     indentedCodeIndent: null,
     /** @type {number | null} */
     listContinuationIndent: null,
+    /** Whether the preceding block can continue as a paragraph. */
+    paragraphOpen: false,
   };
   return readme
     .replaceAll('\r\n', '\n')
@@ -46,13 +48,17 @@ export function makeReadmeVitePressSafe(readme) {
 
 /**
  * @param {string} line
- * @param {{ codeFence: { character: '`' | '~', length: number } | null, indentedCodeIndent: number | null, listContinuationIndent: number | null }} state
+ * @param {{ codeFence: { character: '`' | '~', length: number } | null, indentedCodeIndent: number | null, listContinuationIndent: number | null, paragraphOpen: boolean }} state
  */
 // fallow-ignore-next-line complexity -- explicit branches model CommonMark fence state and escaping
 function transformReadmeLine(line, state) {
   if (state.indentedCodeIndent !== null) {
-    if (line.trim().length === 0) return line;
+    if (line.trim().length === 0) {
+      state.paragraphOpen = false;
+      return line;
+    }
     if (getLeadingIndentation(line).columns >= state.indentedCodeIndent) {
+      state.paragraphOpen = false;
       return line;
     }
     state.indentedCodeIndent = null;
@@ -70,10 +76,12 @@ function transformReadmeLine(line, state) {
       character: fence.character,
       length: fence.length,
     };
+    state.paragraphOpen = false;
     return line;
   }
   if (state.codeFence !== null) {
     if (isClosingFence(state.codeFence, fence)) state.codeFence = null;
+    state.paragraphOpen = false;
     return line;
   }
   const leadingIndentation = getLeadingIndentation(line).columns;
@@ -81,12 +89,14 @@ function transformReadmeLine(line, state) {
     state.listContinuationIndent === null
       ? 4
       : state.listContinuationIndent + 4;
-  if (leadingIndentation >= indentedCodeIndent) {
+  if (leadingIndentation >= indentedCodeIndent && !state.paragraphOpen) {
     state.indentedCodeIndent = indentedCodeIndent;
+    state.paragraphOpen = false;
     return line;
   }
   if (line.trimStart().startsWith('<')) {
-    return rewriteSiblingDocumentLinks(line);
+    state.paragraphOpen = false;
+    return rewriteSiblingDocumentLinksInRawHtml(line);
   }
   const inlineCodeSegments = getInlineCodeSegments(line);
   const rewrittenSegments = inlineCodeSegments.map((segment) =>
@@ -94,6 +104,7 @@ function transformReadmeLine(line, state) {
       ? segment
       : { ...segment, value: rewriteSiblingDocumentLinks(segment.value) },
   );
+  state.paragraphOpen = canContinueParagraph(line, listItemContentStart);
   if (
     !rewrittenSegments.some(
       (segment) => !segment.code && /[A-Za-z0-9_.)\]]</u.test(segment.value),
@@ -102,6 +113,50 @@ function transformReadmeLine(line, state) {
     return rewrittenSegments.map((segment) => segment.value).join('');
   }
   return escapeAnglesOutsideInlineCode(rewrittenSegments);
+}
+
+/**
+ * Raw HTML is preserved, but relative document links in actual `href`
+ * attributes still need site routes. Restricting the rewrite to the attribute
+ * avoids changing examples in `<code>` elements or unrelated data attributes.
+ *
+ * @param {string} line
+ */
+function rewriteSiblingDocumentLinksInRawHtml(line) {
+  return line.replace(
+    /(\bhref[ \t]*=[ \t]*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/giu,
+    (_attribute, prefix, doubleQuoted, singleQuoted, unquoted) => {
+      if (doubleQuoted !== undefined) {
+        return `${prefix}"${rewriteSiblingDocumentLinks(doubleQuoted)}"`;
+      }
+      if (singleQuoted !== undefined) {
+        return `${prefix}'${rewriteSiblingDocumentLinks(singleQuoted)}'`;
+      }
+      return `${prefix}${rewriteSiblingDocumentLinks(unquoted)}`;
+    },
+  );
+}
+
+/**
+ * Indented code cannot interrupt a CommonMark paragraph. Track the small set of
+ * block prefixes relevant to deciding whether the next indented line belongs
+ * to paragraph text or starts a code block.
+ *
+ * @param {string} line
+ * @param {number | null} listItemContentStart
+ */
+function canContinueParagraph(line, listItemContentStart) {
+  if (line.trim().length === 0) return false;
+  const candidate =
+    listItemContentStart === null
+      ? line.trimStart()
+      : stripIndentationColumns(line, listItemContentStart).trimStart();
+  if (candidate.length === 0) return false;
+  if (/^#{1,6}(?:[ \t]+|$)/u.test(candidate)) return false;
+  if (candidate.startsWith('>') || candidate.startsWith('<')) return false;
+  return !/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/u.test(
+    candidate,
+  );
 }
 
 /**

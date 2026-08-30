@@ -3,10 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EmbeddedVoice } from './embed';
 
 const unmounts: Array<() => void> = [];
+const containers: HTMLElement[] = [];
 
 afterEach(() => {
   for (const unmount of unmounts.splice(0)) {
     unmount();
+  }
+  for (const container of containers.splice(0)) {
+    container.remove();
   }
 });
 
@@ -19,7 +23,8 @@ const createMountedEmbed = (options?: {
     auth: { type: 'accessToken', value: 'test-token' },
     ...options,
   });
-  unmounts.push(embeddedVoice.mount());
+  const unmount = embeddedVoice.mount();
+  unmounts.push(unmount);
   const iframes = document.querySelectorAll<HTMLIFrameElement>(
     '#hume-embedded-voice',
   );
@@ -30,7 +35,7 @@ const createMountedEmbed = (options?: {
   const postMessage = vi
     .spyOn(iframe.contentWindow, 'postMessage')
     .mockImplementation(() => undefined);
-  return { embeddedVoice, iframe, postMessage };
+  return { embeddedVoice, iframe, postMessage, unmount };
 };
 
 const dispatchReady = (iframe: HTMLIFrameElement) => {
@@ -166,10 +171,11 @@ describe('EmbeddedVoice', () => {
     );
   });
 
-  it('hides stale iframe content and restores a supplied container on unmount', () => {
+  it('hides stale iframe content without changing a supplied container', () => {
     const container = document.createElement('div');
     container.style.pointerEvents = 'auto';
     document.body.appendChild(container);
+    containers.push(container);
     const embeddedVoice = EmbeddedVoice.create({
       auth: { type: 'accessToken', value: 'test-token' },
     });
@@ -179,6 +185,8 @@ describe('EmbeddedVoice', () => {
       '#hume-embedded-voice',
     );
     if (!iframe) throw new Error('Embed did not mount its iframe.');
+    expect(iframe.style.pointerEvents).toBe('none');
+    expect(container.style.pointerEvents).toBe('auto');
     dispatchReady(iframe);
     window.dispatchEvent(
       new MessageEvent('message', {
@@ -190,21 +198,58 @@ describe('EmbeddedVoice', () => {
     expect(iframe.style.opacity).toBe('1');
     expect(iframe.style.width).toBe('320px');
     expect(iframe.style.height).toBe('480px');
-    expect(container.style.pointerEvents).toBe('all');
+    expect(iframe.style.pointerEvents).toBe('auto');
+    expect(container.style.pointerEvents).toBe('auto');
 
     firstUnmount();
 
-    expect(iframe.style.opacity).toBe('0');
-    expect(iframe.style.width).toBe('0px');
-    expect(iframe.style.height).toBe('0px');
+    expect(iframe.isConnected).toBe(false);
     expect(container.style.pointerEvents).toBe('auto');
 
     unmounts.push(embeddedVoice.mount(container));
     expect(iframe.style.opacity).toBe('0');
     expect(iframe.style.width).toBe('0px');
     expect(iframe.style.height).toBe('0px');
-    expect(container.style.pointerEvents).toBe('none');
-    container.remove();
+    expect(iframe.style.pointerEvents).toBe('none');
+    expect(container.style.pointerEvents).toBe('auto');
+  });
+
+  it('does not let multiple embeds overwrite a supplied container style', () => {
+    const container = document.createElement('div');
+    container.style.pointerEvents = 'painted';
+    document.body.appendChild(container);
+    containers.push(container);
+    const first = EmbeddedVoice.create({
+      auth: { type: 'accessToken', value: 'first-token' },
+    });
+    const second = EmbeddedVoice.create({
+      auth: { type: 'accessToken', value: 'second-token' },
+    });
+    const firstUnmount = first.mount(container);
+    const secondUnmount = second.mount(container);
+    unmounts.push(firstUnmount, secondUnmount);
+
+    const iframes = container.querySelectorAll<HTMLIFrameElement>(
+      '#hume-embedded-voice',
+    );
+    dispatchReady(iframes.item(0));
+    dispatchReady(iframes.item(1));
+    firstUnmount();
+    secondUnmount();
+
+    expect(container.style.pointerEvents).toBe('painted');
+  });
+
+  it('continues unmounting when iframe removal fails', () => {
+    const { iframe, unmount } = createMountedEmbed();
+    const remove = vi.spyOn(iframe, 'remove').mockImplementationOnce(() => {
+      throw new Error('remove failed');
+    });
+
+    expect(unmount).not.toThrow();
+    expect(iframe.isConnected).toBe(false);
+
+    remove.mockRestore();
   });
 
   it('waits for fresh readiness after remounting the same instance', () => {
