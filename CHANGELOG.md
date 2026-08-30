@@ -56,6 +56,26 @@ recoverable notes.
   microphone data is preserved on stop.
 - Tool results sent from the client are now surfaced in `messages`.
 
+#### Removed
+
+- **Breaking.** Removed low-level resource APIs that duplicated the lifecycle
+  owned by `VoiceProvider`: `useMicrophone`, `useMicrophoneStream`,
+  `useVoiceClient`, `useCallDuration`, `MicrophonePermissionStatus`, and
+  `MicrophoneProps`. Use `VoiceProvider` and `useVoice`; read elapsed time with
+  `useCallDurationTimestamp`.
+- **Breaking.** Removed implementation stores and connection-generation details:
+  `CallDurationStore`, `useFftSubscription`, `ConnectionGenerationError`,
+  `ConnectionGenerationErrorReason`, and `isConnectionGenerationError`. Use
+  `useCallDurationTimestamp`, `usePlayerFft`, and `useMicFft`; connection
+  generations are now managed internally.
+- **Breaking.** Removed the stale `AudioEncoding`, `Channels`,
+  `LanguageModelOption`, and `TTSService` constants and types. Audio and model
+  configuration comes from EVI configuration and the current `hume` request
+  types rather than duplicated client-side enumerations.
+- **Breaking.** Removed `TimeSlice` and `TimeSliceSchema`. Read the timestamp
+  fields on transcript messages instead. See the
+  [migration guide](packages/react/MIGRATION.md).
+
 ### `@humeai/voice-embed` and `@humeai/voice-embed-react`
 
 #### Added

@@ -31,6 +31,10 @@ import {
   closeAudioContextWithTimeout,
 } from '../utils/closeAudioContextWithTimeout';
 import { getAuthStrategyError } from './auth';
+import {
+  getBrowserErrorName,
+  isMicrophonePermissionDeniedError,
+} from './browserErrors';
 import type { ConnectionMessage } from './connection-message';
 import {
   createVoiceDiagnosticsReporter,
@@ -168,11 +172,8 @@ type DisconnectDiagnosticReason = 'consumer' | 'server' | 'error' | 'unmount';
 const getDeviceSwitchReason = (
   error: unknown,
 ): AudioDeviceSwitchErrorReason => {
-  const name =
-    typeof error === 'object' && error !== null && 'name' in error
-      ? error.name
-      : null;
-  if (name === 'NotAllowedError' || name === 'SecurityError') {
+  const name = getBrowserErrorName(error);
+  if (isMicrophonePermissionDeniedError(error)) {
     return 'permission_denied';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
@@ -1995,8 +1996,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         if (!checkShouldContinueConnecting(generation)) {
           return;
         }
-        const isPermissionDeniedError =
-          e instanceof DOMException && e.name === 'NotAllowedError';
+        const isPermissionDeniedError = isMicrophonePermissionDeniedError(e);
         const voiceError: VoiceError = {
           type: 'mic_error',
           reason: isPermissionDeniedError

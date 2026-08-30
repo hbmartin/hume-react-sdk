@@ -129,6 +129,22 @@ export interface DeviceOptions {
 // @public
 export type FftSnapshot = readonly number[];
 
+// @public @deprecated
+export class FftStore {
+    // (undocumented)
+    clear(): void;
+    // (undocumented)
+    destroy(): void;
+    // (undocumented)
+    getServerSnapshot: () => FftSnapshot;
+    // (undocumented)
+    getSnapshot: () => FftSnapshot;
+    // (undocumented)
+    subscribe: (listener: () => void) => (() => void);
+    // (undocumented)
+    write(data: number[]): void;
+}
+
 // @public
 export const getAllAudioDevices: () => Promise<AudioDevices>;
 
@@ -300,6 +316,31 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 // @public
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
+// @public @deprecated
+export const useSoundPlayer: (props: {
+    diagnostics?: VoiceDiagnosticsReporter;
+    enableAudioWorklet: boolean;
+    onError: (message: string, reason: AudioPlayerErrorReason) => void;
+    onPlayAudio: (id: string) => void;
+    onStopAudio: (id: string) => void;
+}) => {
+    addToQueue: (message: AudioOutputMessage) => Promise<void>;
+    fftStore: FftStore;
+    initPlayer: (speakerDeviceId?: string, sharedAudioContext?: AudioContext) => Promise<boolean>;
+    isPlaying: boolean;
+    isAudioMuted: boolean;
+    muteAudio: () => void;
+    unmuteAudio: () => void;
+    stopAll: (expectedContext?: AudioContext) => Promise<void>;
+    stopAllForContext: (context: AudioContext) => Promise<void>;
+    waitForQueueToDrain: (timeoutMs?: number) => Promise<boolean>;
+    clearQueue: () => void;
+    volume: number;
+    setVolume: (newLevel: number) => void;
+    setOutputDevice: (deviceId: string | null) => Promise<void>;
+    queueLength: number;
+};
+
 // @public
 export const useVoice: () => VoiceContextType;
 
@@ -375,6 +416,18 @@ export type VoiceDiagnosticEvent = Readonly<{
 // @public
 export type VoiceDiagnosticEventName = 'connection.attempt_started' | 'connection.attempt_ignored' | 'connection.attempt_cancelled' | 'connection.connected' | 'connection.disconnect_started' | 'connection.disconnected' | 'socket.opened' | 'socket.closed' | 'resource.initialization_started' | 'resource.initialized' | 'resource.stop_started' | 'resource.stopped' | 'resource.cleanup_failed' | 'microphone.permission_requested' | 'microphone.permission_resolved' | 'microphone.mime_type_selected' | 'microphone.recording_started' | 'microphone.recording_stopped' | 'microphone.audio_chunk_captured' | 'microphone.flush_completed' | 'microphone.analyzer_failed' | 'audio.chunk_received' | 'audio.queue_changed' | 'audio.playback_started' | 'audio.playback_ended' | 'audio.drain_completed' | 'audio_device.switch_started' | 'audio_device.switch_completed' | 'audio_device.switch_failed' | 'audio_device.switch_ignored' | 'message.sent' | 'message.received' | 'message.skipped' | 'tool.handler_started' | 'tool.handler_completed' | 'tool.handler_failed' | 'tool.handler_skipped' | 'control.changed' | 'consumer.callback_failed' | 'sdk.error' | 'sdk.error_cleared';
 
+// @public @deprecated
+export type VoiceDiagnosticInput = {
+    level: VoiceDiagnosticLevel;
+    category: VoiceDiagnosticCategory;
+    name: VoiceDiagnosticEventName;
+    connectionId?: string | null;
+    chatId?: string | null;
+    durationMs?: number;
+    details?: Record<string, unknown>;
+    sensitiveDetails?: Record<string, unknown>;
+};
+
 // @public
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -384,6 +437,20 @@ export interface VoiceDiagnosticsOptions {
     level?: VoiceDiagnosticLevel;
     logger?: VoiceLogger | false;
     onEvent?: (event: VoiceDiagnosticEvent) => void;
+}
+
+// @public @deprecated
+export interface VoiceDiagnosticsReporter {
+    addRedactionValue(value?: string): void;
+    beginConnection(secret?: string): string;
+    clearConnection(): void;
+    emit(input: VoiceDiagnosticInput): void;
+    getCorrelation(): Readonly<{
+        connectionId?: string;
+        chatId?: string;
+    }>;
+    isEnabled(level: VoiceDiagnosticLevel): boolean;
+    setChatId(chatId?: string): void;
 }
 
 // @public

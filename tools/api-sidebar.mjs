@@ -5,12 +5,13 @@ import { fileURLToPath } from 'node:url';
 /**
  * Builds the VitePress sidebar for the generated API reference.
  *
- * API Documenter emits one flat Markdown file per exported symbol — 264 of them
- * today — with no navigation of its own. This derives a grouped sidebar from the
- * same API models the documenter reads, so the two cannot drift.
+ * API Documenter emits one flat Markdown file per exported symbol, with no
+ * navigation of its own. This derives a grouped sidebar from the same API models
+ * the documenter reads, so the two cannot drift.
  *
  * @typedef {{ kind: string, name?: string, docComment?: string, overloadIndex?: number, members?: ApiMember[] }} ApiMember
  * @typedef {{ name: string, members: ApiMember[] }} ApiModel
+ * @typedef {{ text: string, link: string, deprecated: boolean, kind: string }} SidebarEntry
  * @typedef {{ text: string, link?: string, base?: string, collapsed?: boolean, items?: SidebarItem[] }} SidebarItem
  */
 
@@ -132,6 +133,15 @@ function byDisplayName(a, b) {
 }
 
 /**
+ * Match a real TSDoc block tag, not prose or code that mentions `@deprecated`.
+ *
+ * @param {string | undefined} docComment
+ */
+function hasDeprecatedTag(docComment) {
+  return /^\s*\*\s*@deprecated(?:\s|$)/mu.test(docComment ?? '');
+}
+
+/**
  * Collects the top-level exports of one model as sidebar-ready entries.
  *
  * API Documenter derives filenames case-insensitively, so a type alias and a
@@ -143,18 +153,20 @@ function byDisplayName(a, b) {
  */
 function collectEntries(model) {
   const packageBase = toSafeFilename(toUnscopedName(model.name));
-  const [entryPoint] = model.members;
-  /** @type {Map<string, { text: string, link: string, deprecated: boolean, kind: string }>} */
+  /** @type {Map<string, SidebarEntry>} */
   const entries = new Map();
 
-  // A package model always wraps its exports in exactly one EntryPoint, which
-  // itself contributes no path segment.
-  for (const member of entryPoint.members ?? []) {
+  // Entry points contribute no path segment. Flatten all of them so a package
+  // remains complete if API Extractor adds secondary entry-point support.
+  const members = model.members.flatMap(
+    (entryPoint) => entryPoint.members ?? [],
+  );
+  for (const member of members) {
     if (!KIND_GROUPS.has(member.kind)) continue;
 
     const link = toPageSlug(packageBase, member);
     entries.set(link, {
-      deprecated: (member.docComment ?? '').includes('@deprecated'),
+      deprecated: hasDeprecatedTag(member.docComment),
       kind: member.kind,
       link,
       text: toDisplayName(member),
@@ -169,45 +181,63 @@ function collectEntries(model) {
 }
 
 /**
- * @param {ReturnType<typeof collectEntries>} collected
- * @returns {SidebarItem}
+ * Renders current exports flat for small packages or grouped by kind for larger
+ * ones.
+ *
+ * @param {SidebarEntry[]} entries
+ * @returns {SidebarItem[]}
  */
-function toPackageSection({ entries, packageBase, packageName }) {
+function toLiveItems(entries) {
   const live = entries.filter((entry) => !entry.deprecated).sort(byDisplayName);
+
+  if (entries.length < KIND_GROUP_THRESHOLD) {
+    // Kind headers cost more than they explain for a two-export package.
+    return live.map(({ link, text }) => ({ link, text }));
+  }
+
+  /** @type {SidebarItem[]} */
+  const items = [];
+  for (const [kind, label] of KIND_GROUPS) {
+    const inKind = live.filter((entry) => entry.kind === kind);
+    if (inKind.length === 0) continue;
+    items.push({
+      collapsed: true,
+      items: inKind.map(({ link, text }) => ({ link, text })),
+      text: label,
+    });
+  }
+  return items;
+}
+
+/**
+ * @param {SidebarEntry[]} entries
+ * @returns {SidebarItem[]}
+ */
+function toDeprecatedItems(entries) {
   const deprecated = entries
     .filter((entry) => entry.deprecated)
     .sort(byDisplayName);
 
-  /** @type {SidebarItem[]} */
-  const items = [];
+  return deprecated.length === 0
+    ? []
+    : [
+        {
+          collapsed: true,
+          items: deprecated.map(({ link, text }) => ({ link, text })),
+          text: DEPRECATED_GROUP,
+        },
+      ];
+}
 
-  if (entries.length < KIND_GROUP_THRESHOLD) {
-    // Kind headers cost more than they explain for a two-export package.
-    items.push(...live.map(({ link, text }) => ({ link, text })));
-  } else {
-    for (const [kind, label] of KIND_GROUPS) {
-      const inKind = live.filter((entry) => entry.kind === kind);
-      if (inKind.length === 0) continue;
-      items.push({
-        collapsed: true,
-        items: inKind.map(({ link, text }) => ({ link, text })),
-        text: label,
-      });
-    }
-  }
-
-  if (deprecated.length > 0) {
-    items.push({
-      collapsed: true,
-      items: deprecated.map(({ link, text }) => ({ link, text })),
-      text: DEPRECATED_GROUP,
-    });
-  }
-
+/**
+ * @param {ReturnType<typeof collectEntries>} collected
+ * @returns {SidebarItem}
+ */
+function toPackageSection({ entries, packageBase, packageName }) {
   return {
     base: apiReferenceBase,
     collapsed: true,
-    items,
+    items: [...toLiveItems(entries), ...toDeprecatedItems(entries)],
     link: packageBase,
     text: packageName,
   };

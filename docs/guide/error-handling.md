@@ -57,14 +57,18 @@ The same value is on `useVoice().error`, and `status` becomes
 | `malformed_audio`                     | An audio chunk could not be decoded     | Log it; usually transient               |
 | `audio_player_closure_failure`        | Cleanup failed on disconnect            | Log it; the call is already over        |
 
-### Narrowing
+### Checking the error category
 
-Four guards read better than comparing `type` by hand, and `useVoice()` also
-exposes `isError`, `isSocketError`, `isMicrophoneError`, and `isAudioError` as
-booleans for rendering.
+Compare `error.type` when TypeScript needs to narrow a `VoiceError`. For
+rendering, `useVoice()` also exposes `isError`, `isSocketError`,
+`isMicrophoneError`, and `isAudioError` as convenient booleans.
 
 ```tsx
 const { error, isSocketError, isMicrophoneError } = useVoice();
+
+if (error?.type === 'socket_error') {
+  console.error(error.reason);
+}
 ```
 
 ## Thrown failures

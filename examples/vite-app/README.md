@@ -1,4 +1,4 @@
-# Raw EVI client example (no SDK)
+# Raw EVI client example (`hume` TypeScript SDK, no React SDK)
 
 **This example deliberately uses none of the packages in this repository.** It
 talks to the Empathic Voice Interface directly through the

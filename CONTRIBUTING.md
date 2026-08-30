@@ -55,8 +55,10 @@ and fill it in, then start it from the repository root.
 | `examples/vite-app-embed` | `@humeai/voice-embed-react`                | 3002 |
 | `examples/vite-app`       | none — the raw `hume` client, for contrast | 3001 |
 
-Ports are fixed with `--strictPort` so a stale process fails loudly rather than
-silently moving. Port 3000 is left free for a locally-run widget renderer.
+The Vite examples use `--strictPort`; the Next.js example supplies an explicit
+`--port`, which Next.js also treats as strict. A stale process therefore fails
+loudly instead of moving an example to another port. Port 3000 is left free for
+a locally-run widget renderer.
 
 To run one example on its own, use `pnpm --filter <workspace-name> dev` — for
 instance `pnpm --filter example-next-app dev`.

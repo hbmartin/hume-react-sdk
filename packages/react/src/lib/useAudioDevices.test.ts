@@ -193,14 +193,17 @@ describe('useAudioDevices', () => {
   });
 
   it('distinguishes permission denial from other capture failures', async () => {
-    vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce(
-      new DOMException('Denied', 'NotAllowedError'),
-    );
-    const denied = renderHook(() => useAudioDevices());
-    await act(() => denied.result.current.requestPermission());
-    expect(denied.result.current.permissionDenied).toBe(true);
-    expect(denied.result.current.permissionError).toBeNull();
-    denied.unmount();
+    for (const name of ['NotAllowedError', 'SecurityError']) {
+      vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce({
+        message: 'Denied',
+        name,
+      });
+      const denied = renderHook(() => useAudioDevices());
+      await act(() => denied.result.current.requestPermission());
+      expect(denied.result.current.permissionDenied).toBe(true);
+      expect(denied.result.current.permissionError).toBeNull();
+      denied.unmount();
+    }
 
     const unavailable = new DOMException('Busy', 'NotReadableError');
     vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce(unavailable);

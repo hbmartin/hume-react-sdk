@@ -170,6 +170,20 @@ await test('an empty deprecated group is omitted entirely', () => {
   );
 });
 
+await test('mentioning the deprecated tag in prose keeps an export live', () => {
+  const items = buildApiReferenceSidebar([
+    model('@humeai/tiny', [
+      {
+        docComment: '/**\n * Explains the literal `@deprecated` tag.\n */\n',
+        kind: 'Function',
+        name: 'Widget',
+      },
+    ]),
+  ])[1]?.items;
+
+  assert.deepEqual(items, [{ link: 'tiny.widget', text: 'Widget' }]);
+});
+
 await test('colliding filenames keep the last export, as API Documenter does', () => {
   const items = buildApiReferenceSidebar([
     model('@humeai/tiny', [
@@ -210,6 +224,29 @@ await test('members without a page of their own are skipped', () => {
   assert.deepEqual(items, [{ link: 'tiny.readystate', text: 'ReadyState' }]);
 });
 
+await test('empty package models render an empty section', () => {
+  const emptyModel = model('@humeai/empty', []);
+  emptyModel.members = [];
+
+  assert.deepEqual(buildApiReferenceSidebar([emptyModel])[1]?.items, []);
+});
+
+await test('exports from every entry point are included', () => {
+  const multipleEntryPoints = model('@humeai/tiny', [
+    { kind: 'Function', name: 'First' },
+  ]);
+  multipleEntryPoints.members.push({
+    kind: 'EntryPoint',
+    members: [{ kind: 'Function', name: 'Second' }],
+    name: './secondary',
+  });
+
+  assert.deepEqual(buildApiReferenceSidebar([multipleEntryPoints])[1]?.items, [
+    { link: 'tiny.first', text: 'First' },
+    { link: 'tiny.second', text: 'Second' },
+  ]);
+});
+
 await test('a missing API model names the command that generates it', () => {
   assert.throws(
     () => readApiReferenceSidebar(join(repositoryRoot, 'does-not-exist')),
@@ -219,9 +256,23 @@ await test('a missing API model names the command that generates it', () => {
 
 const generatedOutputExists =
   existsSync(apiReferenceDirectory) && existsSync(defaultApiModelDirectory);
+const generatedOutputRequired =
+  process.env.REQUIRE_GENERATED_API_OUTPUT === 'true';
 const skipWithoutGeneratedOutput = generatedOutputExists
   ? false
   : 'run `pnpm docs:api` first';
+
+await test(
+  'generated API output exists when the environment requires it',
+  { skip: !generatedOutputRequired },
+  () => {
+    assert.equal(
+      generatedOutputExists,
+      true,
+      'generated API output is required; run `pnpm docs:api` first',
+    );
+  },
+);
 
 /**
  * Every `link` in the sidebar, with each item's inherited `base` applied.
@@ -267,23 +318,19 @@ function readModels() {
  *
  * @returns {string[]}
  */
-function readTopLevelPageSlugs() {
-  const kindsWithPages = new Set([
-    'Class',
-    'Enum',
-    'Function',
-    'Interface',
-    'TypeAlias',
-    'Variable',
-  ]);
-
-  return readModels().flatMap((parsed) => {
+function readTopLevelPageSlugs(models = readModels()) {
+  return models.flatMap((parsed) => {
     const base = parsed.name.slice(parsed.name.indexOf('/') + 1);
+    const members = parsed.members.flatMap(
+      (entryPoint) => entryPoint.members ?? [],
+    );
     return [
       base,
-      ...(parsed.members[0]?.members ?? [])
-        .filter((member) => kindsWithPages.has(member.kind))
-        .map((member) => `${base}.${toSlug(member.name ?? '')}`),
+      ...members.map((member) => {
+        const overloadIndex = member.overloadIndex ?? 1;
+        const suffix = overloadIndex > 1 ? `_${overloadIndex - 1}` : '';
+        return `${base}.${toSlug(member.name ?? '')}${suffix}`;
+      }),
     ];
   });
 }
@@ -292,6 +339,15 @@ function readTopLevelPageSlugs() {
 function toSlug(name) {
   return name.replaceAll(/[^a-z0-9_\-.]/giu, '_').toLowerCase();
 }
+
+await test('the page cross-check does not filter unfamiliar top-level kinds', () => {
+  assert.deepEqual(
+    readTopLevelPageSlugs([
+      model('@humeai/tiny', [{ kind: 'Namespace', name: 'Tools' }]),
+    ]),
+    ['tiny', 'tiny.tools'],
+  );
+});
 
 await test(
   'every sidebar link resolves to a generated page',

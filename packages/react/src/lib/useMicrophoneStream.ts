@@ -2,6 +2,8 @@
 import { checkForAudioTracks } from 'hume';
 import { useCallback, useRef, useState } from 'react';
 
+import { isMicrophonePermissionDeniedError } from './browserErrors';
+
 /**
  * Browser microphone permission state reported by {@link useMicrophoneStream}.
  *
@@ -36,6 +38,24 @@ const getAudioStream = async (
   });
 };
 
+/** Stop as many tracks as possible without replacing the acquisition failure. */
+const stopTracksAfterValidationFailure = (stream: MediaStream): void => {
+  let tracks: MediaStreamTrack[];
+  try {
+    tracks = stream.getTracks();
+  } catch {
+    return;
+  }
+
+  for (const track of tracks) {
+    try {
+      track.stop();
+    } catch {
+      // The validation error is the actionable failure; cleanup is best effort.
+    }
+  }
+};
+
 /**
  * Acquire and release a browser microphone stream.
  *
@@ -53,11 +73,7 @@ export const useMicrophoneStream = () => {
       try {
         stream = await getAudioStream(audioConstraints);
       } catch (e) {
-        if (
-          e instanceof DOMException &&
-          'name' in e &&
-          e.name === 'NotAllowedError'
-        ) {
+        if (isMicrophonePermissionDeniedError(e)) {
           setPermission('denied');
         }
         throw e;
@@ -68,7 +84,7 @@ export const useMicrophoneStream = () => {
       try {
         checkForAudioTracks(stream);
       } catch (e) {
-        stream.getTracks().forEach((track) => track.stop());
+        stopTracksAfterValidationFailure(stream);
         throw e;
       }
 
