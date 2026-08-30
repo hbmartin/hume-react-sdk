@@ -1,5 +1,6 @@
 import { renderHook } from '@testing-library/react-hooks';
-import { describe, expect, it, vi } from 'vitest';
+import { checkForAudioTracks } from 'hume';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useMicrophoneStream } from './useMicrophoneStream';
 
@@ -7,13 +8,35 @@ vi.mock('hume', () => ({
   checkForAudioTracks: vi.fn(),
 }));
 
-const getUserMediaMock = vi.fn(() => Promise.resolve({}));
+const getUserMediaMock = vi.fn<() => Promise<MediaStream>>();
+const originalMediaDevices = Object.getOwnPropertyDescriptor(
+  window.navigator,
+  'mediaDevices',
+);
 
-Object.defineProperty(window.navigator, 'mediaDevices', {
-  value: {
-    getUserMedia: getUserMediaMock,
-  },
-  configurable: true,
+beforeEach(() => {
+  vi.clearAllMocks();
+  getUserMediaMock.mockResolvedValue({
+    getTracks: () => [],
+  } as unknown as MediaStream);
+  Object.defineProperty(window.navigator, 'mediaDevices', {
+    value: {
+      getUserMedia: getUserMediaMock,
+    },
+    configurable: true,
+  });
+});
+
+afterEach(() => {
+  if (originalMediaDevices) {
+    Object.defineProperty(
+      window.navigator,
+      'mediaDevices',
+      originalMediaDevices,
+    );
+  } else {
+    Reflect.deleteProperty(window.navigator, 'mediaDevices');
+  }
 });
 
 describe('useGetMicrophoneStream', () => {
@@ -61,5 +84,36 @@ describe('useGetMicrophoneStream', () => {
 
     expect(staleTrackStop).toHaveBeenCalledOnce();
     expect(currentTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('reports an unsupported environment without treating it as a permission denial', async () => {
+    Reflect.deleteProperty(window.navigator, 'mediaDevices');
+    const { result } = renderHook(() => useMicrophoneStream());
+
+    await expect(result.current.getStream({})).rejects.toMatchObject({
+      name: 'NotSupportedError',
+      message: 'Microphone capture is not supported.',
+    });
+
+    expect(result.current.permission).toBe('prompt');
+  });
+
+  it('stops an acquired stream when audio-track validation fails', async () => {
+    const trackStop = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: trackStop }],
+    } as unknown as MediaStream;
+    getUserMediaMock.mockResolvedValueOnce(stream);
+    vi.mocked(checkForAudioTracks).mockImplementationOnce(() => {
+      throw new Error('No audio tracks');
+    });
+    const { result } = renderHook(() => useMicrophoneStream());
+
+    await expect(result.current.getStream({})).rejects.toThrow(
+      'No audio tracks',
+    );
+
+    expect(trackStop).toHaveBeenCalledOnce();
+    expect(result.current.permission).toBe('granted');
   });
 });
