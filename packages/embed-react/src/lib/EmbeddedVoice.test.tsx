@@ -256,7 +256,7 @@ describe('EmbeddedVoice', () => {
     ]);
   });
 
-  it('does not cancel openOnMount on a replacement embed', () => {
+  it('does not apply openOnMount to a replacement created during controlled close', () => {
     const { rerender } = render(
       <EmbeddedVoice
         auth={{ type: 'accessToken', value: 'first-token' }}
@@ -274,6 +274,10 @@ describe('EmbeddedVoice', () => {
     );
 
     expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
+    expect(embeddedVoiceMocks.create.mock.calls).toEqual([
+      [expect.objectContaining({ openOnMount: true })],
+      [expect.objectContaining({ openOnMount: false })],
+    ]);
     expect(embeddedVoiceMocks.cancelPendingOpen).not.toHaveBeenCalled();
   });
 
@@ -405,8 +409,9 @@ describe('EmbeddedVoice', () => {
     );
 
     expect(embeddedVoiceMocks.cancelPendingOpen).toHaveBeenCalledOnce();
-    expect(embeddedVoiceMocks.create.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ openOnMount: false }),
-    );
+    expect(embeddedVoiceMocks.create.mock.calls).toEqual([
+      [expect.objectContaining({ openOnMount: true })],
+      [expect.objectContaining({ openOnMount: false })],
+    ]);
   });
 });

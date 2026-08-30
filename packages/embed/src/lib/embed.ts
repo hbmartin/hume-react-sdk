@@ -34,14 +34,48 @@ export type CloseHandler = () => void;
 /** Called after the widget iframe reports that it is ready. */
 export type ReadyHandler = () => void;
 
-/** Runs a best-effort teardown step without interrupting the remaining cleanup. */
-function runTeardownStep(step: () => void): boolean {
+/** Runs one teardown step and records a failure without stopping later cleanup. */
+function runTeardownStep(step: () => void, errors: unknown[]): boolean {
   try {
     step();
     return true;
-  } catch {
+  } catch (error) {
+    errors.push(error);
     return false;
   }
+}
+
+/** Throws teardown failures after every cleanup step has had a chance to run. */
+function throwTeardownErrors(errors: unknown[], message: string) {
+  if (errors.length === 0) return;
+  if (errors.length === 1) throw errors[0];
+  throw new AggregateError(errors, message);
+}
+
+/** Removes an element, falling back to its parent when `Element.remove` fails. */
+function removeElement(element: HTMLElement) {
+  const errors: unknown[] = [];
+  runTeardownStep(() => {
+    element.remove();
+  }, errors);
+  if (isDetached(element)) return;
+
+  const parent = element.parentNode;
+  if (parent === null) return;
+  runTeardownStep(() => {
+    parent.removeChild(element);
+  }, errors);
+  if (isDetached(element)) return;
+
+  if (errors.length === 0) {
+    errors.push(new Error('The element remained attached after removal.'));
+  }
+  throwTeardownErrors(errors, 'Unable to remove the embedded voice element.');
+}
+
+/** @returns Whether an element has no DOM parent, including in detached trees. */
+function isDetached(element: HTMLElement): boolean {
+  return element.parentNode === null;
 }
 
 /**
@@ -138,6 +172,7 @@ export class EmbeddedVoice {
    * @param container - Element to mount into. When omitted, a fixed-position
    * container is appended to `document.body` and removed again on unmount.
    * @returns A function that unmounts the widget and removes its listeners.
+   * @throws If the widget cannot be attached or teardown cannot release it.
    */
   mount(container?: HTMLElement) {
     this.unmountActiveMount?.();
@@ -153,6 +188,14 @@ export class EmbeddedVoice {
     const resizeHandler = () => {
       this.sendWindowSize();
     };
+    const removeListeners = (errors: unknown[]) => {
+      runTeardownStep(() => {
+        window.removeEventListener('message', messageHandler);
+      }, errors);
+      runTeardownStep(() => {
+        window.removeEventListener('resize', resizeHandler);
+      }, errors);
+    };
 
     const el = container ?? this.createContainer();
     this.hideIframe();
@@ -164,24 +207,29 @@ export class EmbeddedVoice {
       }
       isActive = false;
       this.isReady = false;
-      runTeardownStep(() => {
-        window.removeEventListener('message', messageHandler);
-      });
-      runTeardownStep(() => {
-        window.removeEventListener('resize', resizeHandler);
-      });
+      const errors: unknown[] = [];
+      removeListeners(errors);
       const removedIframe = runTeardownStep(() => {
-        this.iframe.remove();
-      });
-      if (!removedIframe) this.hideIframe();
+        removeElement(this.iframe);
+      }, errors);
+      if (!removedIframe) {
+        runTeardownStep(() => {
+          this.iframe.src = 'about:blank';
+        }, errors);
+        this.hideIframe();
+      }
       if (!container) {
         runTeardownStep(() => {
-          el.remove();
-        });
+          removeElement(el);
+        }, errors);
       }
       if (this.unmountActiveMount === unmount) {
         this.unmountActiveMount = null;
       }
+      throwTeardownErrors(
+        errors,
+        'Unable to completely unmount EmbeddedVoice.',
+      );
     };
 
     try {
@@ -190,18 +238,18 @@ export class EmbeddedVoice {
       el.appendChild(this.iframe);
       isActive = true;
       this.unmountActiveMount = unmount;
-    } catch {
-      runTeardownStep(() => {
-        window.removeEventListener('message', messageHandler);
-      });
-      runTeardownStep(() => {
-        window.removeEventListener('resize', resizeHandler);
-      });
+    } catch (mountError) {
+      const cleanupErrors: unknown[] = [];
+      removeListeners(cleanupErrors);
       if (!container) {
         runTeardownStep(() => {
-          el.remove();
-        });
+          removeElement(el);
+        }, cleanupErrors);
       }
+      throwTeardownErrors(
+        [mountError, ...cleanupErrors],
+        'Unable to mount EmbeddedVoice.',
+      );
     }
 
     return unmount;
