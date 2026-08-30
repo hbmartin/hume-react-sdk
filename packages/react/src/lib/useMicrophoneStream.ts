@@ -5,7 +5,7 @@ import { useCallback, useRef, useState } from 'react';
 /**
  * Browser microphone permission state reported by {@link useMicrophoneStream}.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export type MicrophonePermissionStatus = 'prompt' | 'granted' | 'denied';
 
@@ -39,7 +39,7 @@ const getAudioStream = async (
 /**
  * Acquire and release a browser microphone stream.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export const useMicrophoneStream = () => {
   const [permission, setPermission] =

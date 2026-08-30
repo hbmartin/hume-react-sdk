@@ -24,13 +24,7 @@ const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
  * Pinned so a newly introduced collision fails here instead of silently
  * dropping a sidebar entry.
  */
-const EXPECTED_COLLISIONS = [
-  'voice-embed.languagemodeloption',
-  'voice-react.audioencoding',
-  'voice-react.channels',
-  'voice-react.languagemodeloption',
-  'voice-react.ttsservice',
-];
+const EXPECTED_COLLISIONS = ['voice-embed.languagemodeloption'];
 
 /**
  * Minimal stand-ins for `docs/.generated/api-model/*.api.json`. Inline rather

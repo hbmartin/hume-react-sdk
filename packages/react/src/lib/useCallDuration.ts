@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from 'react';
 /**
  * Store backing the granular call-duration subscription hook.
  *
- * @deprecated Use {@link useCallDurationTimestamp}.
+ * @internal
  */
 class CallDurationStore {
   private _snapshot: string | null = null;
@@ -38,7 +38,7 @@ class CallDurationStore {
 /**
  * Create low-level controls for a call-duration timer.
  *
- * @deprecated Use {@link useCallDurationTimestamp} with {@link VoiceProvider}.
+ * @internal
  */
 export const useCallDuration = () => {
   const interval = useRef<number | null>(null);

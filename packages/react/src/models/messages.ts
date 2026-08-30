@@ -1,5 +1,4 @@
 import { type Hume } from 'hume';
-import z from 'zod';
 
 type AssistantEnd = Hume.empathicVoice.AssistantEnd;
 type AssistantMessage = Hume.empathicVoice.AssistantMessage;
@@ -49,22 +48,3 @@ export type ToolResponse = WithReceivedAt<ToolResponseMessage>;
 export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 /** A transcript of what the user said. */
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
-
-/**
- * Runtime schema for a transcript time range.
- *
- * @deprecated Prefer the timestamp fields exposed by the transcript message
- * types.
- */
-export const TimeSliceSchema = z.object({
-  begin: z.number(),
-  end: z.number(),
-});
-
-/**
- * Start and end offsets for a transcript segment.
- *
- * @deprecated Prefer the timestamp fields exposed by the transcript message
- * types.
- */
-export type TimeSlice = z.infer<typeof TimeSliceSchema>;
