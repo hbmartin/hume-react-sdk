@@ -98,39 +98,18 @@ Or, integrate with the API directly
 ## Documentation
 
 Guides and a generated API reference for every package are published at
-<https://humeai.github.io/hume-react-sdk/>. The repository's
-[`docs` directory](https://github.com/HumeAI/hume-react-sdk/tree/main/docs)
-contains the site guides and configuration. Package READMEs and generated
-TypeScript declarations are also documentation sources, and local development
-instructions follow below.
+<https://humeai.github.io/hume-react-sdk/>.
 
-## Local development
+- [Getting started](https://humeai.github.io/hume-react-sdk/guide/getting-started)
+- [API reference](https://humeai.github.io/hume-react-sdk/reference/)
+- [Changelog](CHANGELOG.md) and
+  [migration guide](packages/react/MIGRATION.md)
 
-This SDK is developed on Turborepo. Development requires Node `22.18` (see
-`.nvmrc`) and pnpm `11.24`; the published packages themselves support Node
-`>=18`.
+## Contributing
 
-```sh
-pnpm install
-pnpm dev
-```
-
-This starts the development server for each SDK package and each example
-application. Copy the `.env.example` file in an example directory to
-`.env.local` and fill in your Hume credentials before running it.
-
-Useful commands:
-
-| Command                  | What it does                                                                                                           |
-| :----------------------- | :--------------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev`               | Watch-build every package and example                                                                                  |
-| `pnpm dev:iframe`        | Watch-build the packages and the embed example only                                                                    |
-| `pnpm test`              | Run the unit tests                                                                                                     |
-| `pnpm docs:dev`          | Serve the documentation site locally                                                                                   |
-| `pnpm api-report:update` | Regenerate the committed API reports after changing a public API                                                       |
-| `pnpm check`             | Run the full gate: build, lint, typecheck, format, dependency, docs, dead-code, packaging, API-report, and test checks |
-
-Run `pnpm check` before opening a pull request — CI runs the same set.
+Local development setup, the check gate, and the release procedure are in
+[CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, see
+[SECURITY.md](SECURITY.md).
 
 ## Support
 

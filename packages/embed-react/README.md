@@ -87,6 +87,11 @@ In addition, it accepts a few other props specific to creating a widget:
 | `onReady`     | no       | Callback function invoked after the current widget iframe reports that it is ready.                                                                                                                                                                                                                                |
 | `openOnMount` | no       | Boolean which indicates whether the widget should be initialized in an open or closed state. Set as `true` if you want it to be open. The default value is `false`.                                                                                                                                                |
 
+## Changelog
+
+Release notes for every version live in the repository's
+[CHANGELOG](https://github.com/HumeAI/hume-react-sdk/blob/main/CHANGELOG.md).
+
 ## Support
 
 If you have questions or require assistance pertaining to this package, [reach out to us on Discord](https://hume.ai/discord)!
