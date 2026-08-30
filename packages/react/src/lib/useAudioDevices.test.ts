@@ -192,18 +192,29 @@ describe('useAudioDevices', () => {
     expect(result.current.selectedOutputDeviceId).toBeNull();
   });
 
-  it('distinguishes permission denial from other capture failures', async () => {
-    for (const name of ['NotAllowedError', 'SecurityError']) {
-      vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce({
-        message: 'Denied',
-        name,
-      });
-      const denied = renderHook(() => useAudioDevices());
-      await act(() => denied.result.current.requestPermission());
-      expect(denied.result.current.permissionDenied).toBe(true);
-      expect(denied.result.current.permissionError).toBeNull();
-      denied.unmount();
-    }
+  it('distinguishes user denial, policy blocks, and other capture failures', async () => {
+    vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce({
+      message: 'Denied',
+      name: 'NotAllowedError',
+    });
+    const denied = renderHook(() => useAudioDevices());
+    await act(() => denied.result.current.requestPermission());
+    expect(denied.result.current.permissionDenied).toBe(true);
+    expect(denied.result.current.permissionError).toBeNull();
+    denied.unmount();
+
+    vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce({
+      message: 'Blocked by policy',
+      name: 'SecurityError',
+    });
+    const blocked = renderHook(() => useAudioDevices());
+    await act(() => blocked.result.current.requestPermission());
+    expect(blocked.result.current.permissionDenied).toBe(true);
+    expect(blocked.result.current.permissionError).toMatchObject({
+      message: 'Blocked by policy',
+      name: 'SecurityError',
+    });
+    blocked.unmount();
 
     const unavailable = new DOMException('Busy', 'NotReadableError');
     vi.mocked(requestAudioDevicePermission).mockRejectedValueOnce(unavailable);

@@ -55,6 +55,9 @@ recoverable notes.
   returns the provider to `disconnected` instead of hanging; and final
   microphone data is preserved on stop.
 - Tool results sent from the client are now surfaced in `messages`.
+- The deprecated `useSoundPlayer`, `FftStore`, and `useFftSubscription`
+  compatibility surface remains available while consumers migrate to
+  `VoiceProvider`, `usePlayerFft`, and `useMicFft`.
 
 #### Removed
 
@@ -64,10 +67,9 @@ recoverable notes.
   `MicrophoneProps`. Use `VoiceProvider` and `useVoice`; read elapsed time with
   `useCallDurationTimestamp`.
 - **Breaking.** Removed implementation stores and connection-generation details:
-  `CallDurationStore`, `useFftSubscription`, `ConnectionGenerationError`,
+  `CallDurationStore`, `ConnectionGenerationError`,
   `ConnectionGenerationErrorReason`, and `isConnectionGenerationError`. Use
-  `useCallDurationTimestamp`, `usePlayerFft`, and `useMicFft`; connection
-  generations are now managed internally.
+  `useCallDurationTimestamp`; connection generations are now managed internally.
 - **Breaking.** Removed the stale `AudioEncoding`, `Channels`,
   `LanguageModelOption`, and `TTSService` constants and types. Audio and model
   configuration comes from EVI configuration and the current `hume` request

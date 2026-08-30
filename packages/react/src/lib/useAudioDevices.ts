@@ -6,15 +6,15 @@ import {
   isAudioDeviceEnumerationSupported,
   requestAudioDevicePermission,
 } from '../utils';
-import { isMicrophonePermissionDeniedError } from './browserErrors';
+import { getBrowserErrorName, normalizeBrowserError } from './browserErrors';
 
 /** Options for {@link useAudioDevices}. */
 export interface UseAudioDevicesOptions {
   /**
    * Request microphone permission on mount so that real device labels are
-   * available. When permission is refused the hook still enumerates devices,
-   * but their labels fall back to generated names and `permissionDenied`
-   * becomes `true`. Defaults to `false`; prefer the returned
+   * available. When permission is refused or blocked by policy, the hook still
+   * enumerates devices, but their labels fall back to generated names and
+   * `permissionDenied` becomes `true`. Defaults to `false`; prefer the returned
    * `requestPermission` function from a user gesture.
    */
   requestPermission?: boolean;
@@ -42,11 +42,15 @@ export interface UseAudioDevicesReturn {
   isLoading: boolean;
   /** Failure from the most recent enumeration, if any. */
   error: Error | null;
-  /** Non-denial failure while acquiring microphone permission. */
+  /**
+   * Policy block or non-denial failure while acquiring microphone permission.
+   * This remains `null` for `NotAllowedError`, which is exposed through
+   * `permissionDenied`.
+   */
   permissionError: Error | null;
   /** `false` during server-side rendering and in insecure contexts. */
   isSupported: boolean;
-  /** `true` when microphone permission was refused, so labels are generated. */
+  /** `true` when microphone permission was refused or blocked by policy. */
   permissionDenied: boolean;
 }
 
@@ -169,26 +173,17 @@ export const useAudioDevices = ({
           setPermissionError(null);
         }
       } catch (e) {
-        const browserError =
-          typeof e === 'object' && e !== null
-            ? (e as { message?: unknown; name?: unknown })
-            : null;
-        const permissionFailure = isMicrophonePermissionDeniedError(e);
+        const browserErrorName = getBrowserErrorName(e);
+        const permissionFailure =
+          browserErrorName === 'NotAllowedError' ||
+          browserErrorName === 'SecurityError';
         if (isMounted.current) {
           let nextPermissionError: Error | null = null;
-          if (!permissionFailure) {
-            if (e instanceof Error) {
-              nextPermissionError = e;
-            } else {
-              nextPermissionError = new Error(
-                typeof browserError?.message === 'string'
-                  ? browserError.message
-                  : 'Failed to request microphone permission.',
-              );
-              if (typeof browserError?.name === 'string') {
-                nextPermissionError.name = browserError.name;
-              }
-            }
+          if (!permissionFailure || browserErrorName === 'SecurityError') {
+            nextPermissionError = normalizeBrowserError(
+              e,
+              'Failed to request microphone permission.',
+            );
           }
           setPermissionDenied(permissionFailure);
           setPermissionError(nextPermissionError);

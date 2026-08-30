@@ -97,7 +97,7 @@ Each event carries a `category`, useful for filtering before forwarding:
 
 The complete catalogue for schema version 1:
 
-| Category       | Names                                                                                                                                                                                                                                                               |
+| Event family   | Names                                                                                                                                                                                                                                                               |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Connection     | `connection.attempt_started`, `connection.attempt_ignored`, `connection.attempt_cancelled`, `connection.connected`, `connection.disconnect_started`, `connection.disconnected`                                                                                      |
 | Socket         | `socket.opened`, `socket.closed`                                                                                                                                                                                                                                    |
@@ -108,7 +108,13 @@ The complete catalogue for schema version 1:
 | Messages       | `message.sent`, `message.received`, `message.skipped`                                                                                                                                                                                                               |
 | Tools          | `tool.handler_started`, `tool.handler_completed`, `tool.handler_failed`, `tool.handler_skipped`                                                                                                                                                                     |
 | Consumer       | `consumer.callback_failed`                                                                                                                                                                                                                                          |
-| Other          | `control.changed`, `sdk.error`, `sdk.error_cleared`                                                                                                                                                                                                                 |
+| Controls       | `control.changed`                                                                                                                                                                                                                                                   |
+| SDK errors     | `sdk.error`, `sdk.error_cleared`                                                                                                                                                                                                                                    |
+
+Event families are naming groups, not categories. Cross-cutting events use the
+category of the affected subsystem: for example, `control.changed` can be
+`message`, `microphone`, or `audio_player`, while SDK errors use the category of
+the error they report.
 
 The high-volume names — `microphone.audio_chunk_captured`, `audio.chunk_received`,
 `audio.queue_changed`, and `message.received` — only appear at `debug` level.

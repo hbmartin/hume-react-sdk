@@ -45,7 +45,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         error: 'Invalid arguments',
         code: 'invalid_arguments',
         level: 'warn',
-        content: 'The arguments did not match the weather tool schema.',
+        content: 'The weather tool arguments were not valid JSON.',
       });
     }
 

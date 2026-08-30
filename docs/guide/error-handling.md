@@ -40,12 +40,12 @@ The same value is on `useVoice().error`, and `status` becomes
 
 ### `mic_error`
 
-| Reason                       | Typical cause                      | What to do                                  |
-| ---------------------------- | ---------------------------------- | ------------------------------------------- |
-| `mic_permission_denied`      | The user refused microphone access | Explain why it is needed and offer to retry |
-| `mic_initialization_failure` | The device could not be opened     | Suggest another input device                |
-| `mic_closure_failure`        | Cleanup failed on disconnect       | Log it; the call is already over            |
-| `mime_types_not_supported`   | No supported capture format        | The browser cannot be used                  |
+| Reason                       | Typical cause                                      | What to do                                                          |
+| ---------------------------- | -------------------------------------------------- | ------------------------------------------------------------------- |
+| `mic_permission_denied`      | User refusal or a browser/document security policy | Retry after refusal; fix the document or browser policy for a block |
+| `mic_initialization_failure` | The device could not be opened                     | Suggest another input device                                        |
+| `mic_closure_failure`        | Cleanup failed on disconnect                       | Log it; the call is already over                                    |
+| `mime_types_not_supported`   | No supported capture format                        | The browser cannot be used                                          |
 
 ### `audio_error`
 
@@ -64,9 +64,9 @@ rendering, `useVoice()` also exposes `isError`, `isSocketError`,
 `isMicrophoneError`, and `isAudioError` as convenient booleans.
 
 ```tsx
-const { error, isSocketError, isMicrophoneError } = useVoice();
+const { error, isSocketError } = useVoice();
 
-if (error?.type === 'socket_error') {
+if (isSocketError && error) {
   console.error(error.reason);
 }
 ```

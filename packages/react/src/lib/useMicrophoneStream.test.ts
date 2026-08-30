@@ -169,4 +169,27 @@ describe('useGetMicrophoneStream', () => {
     await expect(result.current.getStream({})).rejects.toBe(validationError);
     expect(finalTrackStop).toHaveBeenCalledOnce();
   });
+
+  it('attempts every track and releases the owned stream when stopping fails', async () => {
+    const firstTrackStop = vi.fn(() => {
+      throw new Error('First track failed to stop');
+    });
+    const finalTrackStop = vi.fn();
+    const stream = {
+      getTracks: () => [{ stop: firstTrackStop }, { stop: finalTrackStop }],
+    } as unknown as MediaStream;
+    getUserMediaMock.mockResolvedValueOnce(stream);
+    const { result } = renderHook(() => useMicrophoneStream());
+    await result.current.getStream({});
+
+    expect(() => result.current.stopStream()).toThrow(
+      'First track failed to stop',
+    );
+    expect(firstTrackStop).toHaveBeenCalledOnce();
+    expect(finalTrackStop).toHaveBeenCalledOnce();
+
+    result.current.stopStream();
+    expect(firstTrackStop).toHaveBeenCalledOnce();
+    expect(finalTrackStop).toHaveBeenCalledOnce();
+  });
 });
