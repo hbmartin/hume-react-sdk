@@ -41,6 +41,7 @@ export default defineConfig({
     },
     nav: [
       { link: '/guide/getting-started', text: 'Guides' },
+      { link: '/examples/', text: 'Examples' },
       { link: '/reference/', text: 'API Reference' },
     ],
     outline: {
@@ -77,6 +78,17 @@ export default defineConfig({
             { link: '/guide/documentation-model', text: 'How these docs work' },
           ],
           text: 'Reference material',
+        },
+      ],
+      '/examples/': [
+        {
+          items: [
+            { link: '/examples/', text: 'Overview' },
+            { link: '/examples/next-app', text: 'Next.js reference app' },
+            { link: '/examples/vite-embed', text: 'Embedded widget' },
+            { link: '/examples/raw-client', text: 'Raw EVI client' },
+          ],
+          text: 'Examples',
         },
       ],
       '/reference/': [
