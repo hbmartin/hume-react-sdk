@@ -1,7 +1,7 @@
 import { type Hume } from 'hume';
 import * as HumeSerialization from 'hume/serialization';
 
-import { type AudioMessage, parseAudioMessage } from './audio-message';
+import { type ParsedAudioMessage, parseAudioMessage } from './audio-message';
 import {
   SocketFailedToParseMessageError,
   SocketUnknownMessageError,
@@ -31,7 +31,7 @@ const subscribeEventParser = (
 export type ParsedMessageResult =
   | {
       success: true;
-      message: Hume.empathicVoice.SubscribeEvent | AudioMessage;
+      message: Hume.empathicVoice.SubscribeEvent | ParsedAudioMessage;
     }
   | {
       success: false;

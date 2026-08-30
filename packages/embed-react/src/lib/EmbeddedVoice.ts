@@ -77,9 +77,8 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
   const initialOpenOnMount = useRef(openOnMount);
+  const initialOpenOnMountPending = useRef(initialOpenOnMount.current);
   const configSignature = getConfigSignature(config);
-  const previousConfigSignature = useRef(configSignature);
-  const shouldApplyOpenOnMount = useRef(true);
 
   useEffect(() => {
     onMessageHandler.current = onMessage;
@@ -87,13 +86,8 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   }, [onClose, onMessage]);
 
   useEffect(() => {
-    if (previousConfigSignature.current !== configSignature) {
-      previousConfigSignature.current = configSignature;
-      shouldApplyOpenOnMount.current = false;
-    }
-  }, [configSignature]);
-
-  useEffect(() => {
+    const applyInitialOpenOnMount = initialOpenOnMountPending.current;
+    let readyInstance: EA | null = null;
     const instance = EA.create({
       onMessage: (message) => {
         onMessageHandler.current?.(message);
@@ -101,11 +95,19 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
       onClose: () => {
         onCloseHandler.current?.();
       },
-      openOnMount: shouldApplyOpenOnMount.current
-        ? initialOpenOnMount.current
-        : false,
+      onReady: () => {
+        if (
+          applyInitialOpenOnMount &&
+          readyInstance !== null &&
+          embeddedVoice.current === readyInstance
+        ) {
+          initialOpenOnMountPending.current = false;
+        }
+      },
+      openOnMount: applyInitialOpenOnMount,
       ...config,
     });
+    readyInstance = instance;
     embeddedVoice.current = instance;
     const unmount = instance.mount();
 
@@ -118,8 +120,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
         controlledOpenInstance.current = null;
       }
     };
-    // The signature is the semantic dependency for the serializable config.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react/exhaustive-deps -- the signature deep-compares the serializable embed configuration
   }, [configSignature]);
 
   useEffect(() => {

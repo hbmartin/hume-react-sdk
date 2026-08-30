@@ -63,12 +63,12 @@ export type VoiceDiagnosticEventName =
   | 'sdk.error'
   | 'sdk.error_cleared';
 
-/** @internal */
-export type VoiceDiagnosticPrimitive = string | number | boolean | null;
-
 /** A JSON-serializable value carried in a diagnostic event's details. */
 export type VoiceDiagnosticValue =
-  | VoiceDiagnosticPrimitive
+  | string
+  | number
+  | boolean
+  | null
   | readonly VoiceDiagnosticValue[]
   | { readonly [key: string]: VoiceDiagnosticValue };
 
@@ -142,7 +142,13 @@ export interface VoiceDiagnosticsOptions {
 
 type DiagnosticConfiguration = false | VoiceDiagnosticsOptions | undefined;
 
-/** @internal */
+/**
+ * Low-level diagnostic event input accepted by a diagnostics reporter.
+ *
+ * @deprecated This belongs to deprecated low-level hooks. Configure
+ * diagnostics through {@link VoiceDiagnosticsOptions} on {@link VoiceProvider}
+ * instead.
+ */
 export type VoiceDiagnosticInput = {
   level: VoiceDiagnosticLevel;
   category: VoiceDiagnosticCategory;
@@ -162,17 +168,29 @@ export type VoiceDiagnosticInput = {
   sensitiveDetails?: Record<string, unknown>;
 };
 
-/** @internal */
+/**
+ * Low-level diagnostics sink accepted by deprecated resource hooks.
+ *
+ * @deprecated Configure diagnostics through {@link VoiceDiagnosticsOptions} on
+ * {@link VoiceProvider} instead.
+ */
 export interface VoiceDiagnosticsReporter {
+  /** Adds a sensitive value that must be redacted from future events. */
   addRedactionValue(value?: string): void;
+  /** Starts correlation for a connection attempt and returns its identifier. */
   beginConnection(secret?: string): string;
+  /** Clears active connection and chat correlation. */
   clearConnection(): void;
+  /** Emits a structured diagnostic event. */
   emit(input: VoiceDiagnosticInput): void;
+  /** Returns the active connection and chat correlation identifiers. */
   getCorrelation(): Readonly<{
     connectionId?: string;
     chatId?: string;
   }>;
+  /** Whether an event at the given level would be reported. */
   isEnabled(level: VoiceDiagnosticLevel): boolean;
+  /** Updates the chat identifier attached to later events. */
   setChatId(chatId?: string): void;
 }
 

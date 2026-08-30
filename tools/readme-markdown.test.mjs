@@ -58,8 +58,21 @@ await test('fenced JSX remains unchanged', () => {
 
 await test('sibling-document references inside code remain unchanged', () => {
   const fenced = ['```md', './MIGRATION.md', '```'].join('\n');
+  const indented = [
+    '    ./MIGRATION.md',
+    '    const result: Promise<Result> = load();',
+    'Outside Promise<Result>.',
+  ].join('\n');
 
   assert.equal(makeReadmeVitePressSafe(fenced), fenced);
+  assert.equal(
+    makeReadmeVitePressSafe(indented),
+    [
+      '    ./MIGRATION.md',
+      '    const result: Promise<Result> = load();',
+      'Outside Promise&lt;Result&gt;.',
+    ].join('\n'),
+  );
   assert.equal(
     makeReadmeVitePressSafe('Use `./MIGRATION.md` as the example path.'),
     'Use `./MIGRATION.md` as the example path.',
@@ -82,6 +95,27 @@ await test('fences indented inside list items remain unchanged', () => {
       '    ```ts',
       '    const result: Promise<Result> = load();',
       '    ```',
+      'Outside Promise&lt;Result&gt;.',
+    ].join('\n'),
+  );
+});
+
+await test('tab-indented fences inside list items remain unchanged', () => {
+  const example = [
+    '- Load the value:',
+    '\t```ts',
+    '\tconst result: Promise<Result> = load();',
+    '\t```',
+    'Outside Promise<Result>.',
+  ].join('\n');
+
+  assert.equal(
+    makeReadmeVitePressSafe(example),
+    [
+      '- Load the value:',
+      '\t```ts',
+      '\tconst result: Promise<Result> = load();',
+      '\t```',
       'Outside Promise&lt;Result&gt;.',
     ].join('\n'),
   );
@@ -144,6 +178,12 @@ await test('relative sibling-document links point at their site routes', () => {
   assert.equal(
     makeReadmeVitePressSafe('See the [migration guide](./MIGRATION.md).'),
     'See the [migration guide](/guide/migration).',
+  );
+  assert.equal(
+    makeReadmeVitePressSafe(
+      '<a href="./MIGRATION.md">Read the migration guide</a>',
+    ),
+    '<a href="/guide/migration">Read the migration guide</a>',
   );
 });
 

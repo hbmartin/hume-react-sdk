@@ -33,6 +33,8 @@ export function makeReadmeVitePressSafe(readme) {
     /** @type {{ character: '`' | '~', length: number } | null} */
     codeFence: null,
     /** @type {number | null} */
+    indentedCodeIndent: null,
+    /** @type {number | null} */
     listContinuationIndent: null,
   };
   return readme
@@ -44,10 +46,18 @@ export function makeReadmeVitePressSafe(readme) {
 
 /**
  * @param {string} line
- * @param {{ codeFence: { character: '`' | '~', length: number } | null, listContinuationIndent: number | null }} state
+ * @param {{ codeFence: { character: '`' | '~', length: number } | null, indentedCodeIndent: number | null, listContinuationIndent: number | null }} state
  */
 // fallow-ignore-next-line complexity -- explicit branches model CommonMark fence state and escaping
 function transformReadmeLine(line, state) {
+  if (state.indentedCodeIndent !== null) {
+    if (line.trim().length === 0) return line;
+    if (getLeadingIndentation(line).columns >= state.indentedCodeIndent) {
+      return line;
+    }
+    state.indentedCodeIndent = null;
+  }
+
   const listItemContentStart =
     state.codeFence === null ? updateListContainer(line, state) : null;
   const fence = getCodeFence(
@@ -66,7 +76,18 @@ function transformReadmeLine(line, state) {
     if (isClosingFence(state.codeFence, fence)) state.codeFence = null;
     return line;
   }
-  if (line.trimStart().startsWith('<')) return line;
+  const leadingIndentation = getLeadingIndentation(line).columns;
+  const indentedCodeIndent =
+    state.listContinuationIndent === null
+      ? 4
+      : state.listContinuationIndent + 4;
+  if (leadingIndentation >= indentedCodeIndent) {
+    state.indentedCodeIndent = indentedCodeIndent;
+    return line;
+  }
+  if (line.trimStart().startsWith('<')) {
+    return rewriteSiblingDocumentLinks(line);
+  }
   const inlineCodeSegments = getInlineCodeSegments(line);
   const rewrittenSegments = inlineCodeSegments.map((segment) =>
     segment.code
@@ -94,8 +115,9 @@ function transformReadmeLine(line, state) {
  * @returns {number | null}
  */
 function updateListContainer(line, state) {
-  const listItem = /^( *)(?:[-+*]|\d{1,9}[.)])([ \t]+)/u.exec(line);
-  const listItemIndent = listItem?.[1].length;
+  const listItem = /^([ \t]*)(?:[-+*]|\d{1,9}[.)])([ \t]+)/u.exec(line);
+  const listItemIndent =
+    listItem === null ? undefined : getColumnWidth(listItem[1]);
   const isDocumentListItem =
     listItemIndent !== undefined && listItemIndent <= 3;
   const isNestedListItem =
@@ -104,16 +126,16 @@ function updateListContainer(line, state) {
     listItemIndent >= state.listContinuationIndent &&
     listItemIndent - state.listContinuationIndent <= 3;
   if (listItem !== null && (isDocumentListItem || isNestedListItem)) {
-    const contentStart = listItem[0].length;
+    const contentStart = getColumnWidth(listItem[0]);
     state.listContinuationIndent = contentStart;
     return contentStart;
   }
 
   if (line.trim().length === 0) return null;
-  const leadingSpaces = /^( *)/u.exec(line)?.[0].length ?? 0;
+  const leadingIndentation = getLeadingIndentation(line).columns;
   if (
     state.listContinuationIndent !== null &&
-    leadingSpaces >= state.listContinuationIndent
+    leadingIndentation >= state.listContinuationIndent
   ) {
     return null;
   }
@@ -152,15 +174,15 @@ function isClosingFence(activeFence, candidate) {
  * @param {number | null} listItemContentStart
  */
 function getCodeFence(line, listContinuationIndent, listItemContentStart) {
-  const leadingSpaces = /^( *)/u.exec(line)?.[0].length ?? 0;
+  const leadingIndentation = getLeadingIndentation(line).columns;
   let candidate = line;
   if (listItemContentStart !== null) {
-    candidate = line.slice(listItemContentStart);
+    candidate = stripIndentationColumns(line, listItemContentStart);
   } else if (
     listContinuationIndent !== null &&
-    leadingSpaces >= listContinuationIndent
+    leadingIndentation >= listContinuationIndent
   ) {
-    candidate = line.slice(listContinuationIndent);
+    candidate = stripIndentationColumns(line, listContinuationIndent);
   }
 
   const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(candidate);
@@ -176,6 +198,38 @@ function getCodeFence(line, listContinuationIndent, listItemContentStart) {
     character,
     length: marker.length,
   };
+}
+
+/**
+ * Calculates display columns using CommonMark's four-column tab stops.
+ *
+ * @param {string} value
+ */
+function getColumnWidth(value) {
+  let columns = 0;
+  for (const character of value) {
+    columns = character === '\t' ? columns + (4 - (columns % 4)) : columns + 1;
+  }
+  return columns;
+}
+
+/** @param {string} line */
+function getLeadingIndentation(line) {
+  const whitespace = /^[ \t]*/u.exec(line)?.[0] ?? '';
+  return { columns: getColumnWidth(whitespace), end: whitespace.length };
+}
+
+/**
+ * Removes indentation by display column, expanding any remaining part of a tab
+ * to spaces so fence parsing sees its CommonMark-relative indentation.
+ *
+ * @param {string} line
+ * @param {number} columnsToStrip
+ */
+function stripIndentationColumns(line, columnsToStrip) {
+  const indentation = getLeadingIndentation(line);
+  if (indentation.columns < columnsToStrip) return line;
+  return `${' '.repeat(indentation.columns - columnsToStrip)}${line.slice(indentation.end)}`;
 }
 
 /** @param {string} line */

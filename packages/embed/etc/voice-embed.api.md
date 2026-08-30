@@ -38,6 +38,7 @@ export class EmbeddedVoice {
     static create(input: EmbeddedVoiceConfig & {
         onMessage?: TranscriptMessageHandler;
         onClose?: CloseHandler;
+        onReady?: ReadyHandler;
         openOnMount?: boolean;
     }): EmbeddedVoice;
     mount(container?: HTMLElement): () => void;
@@ -89,6 +90,9 @@ export const MINIMIZE_WIDGET_ACTION: {
 
 // @public
 export const parseClientToFrameAction: (data: unknown) => Promise<ClientToFrameAction>;
+
+// @public
+export type ReadyHandler = () => void;
 
 // @public
 export const RESIZE_FRAME_ACTION: (dimensions: {

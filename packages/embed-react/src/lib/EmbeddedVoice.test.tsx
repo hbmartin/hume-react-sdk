@@ -4,9 +4,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EmbeddedVoice } from './EmbeddedVoice';
 
+type MockEmbeddedVoiceInstance = {
+  cancelPendingOpen: ReturnType<typeof vi.fn>;
+  mount: ReturnType<typeof vi.fn>;
+  openEmbed: ReturnType<typeof vi.fn>;
+};
+
 const embeddedVoiceMocks = vi.hoisted(() => ({
   cancelPendingOpen: vi.fn(),
   create: vi.fn(),
+  instances: [] as MockEmbeddedVoiceInstance[],
   mount: vi.fn(),
   openEmbed: vi.fn(),
   unmount: vi.fn(),
@@ -22,17 +29,31 @@ type CreatedConfig = {
   auth: { type: 'accessToken'; value: string };
   onMessage?: (message: unknown) => void;
   onClose?: () => void;
+  onReady?: () => void;
   openOnMount?: boolean;
   rendererUrl?: string;
 };
 
 describe('EmbeddedVoice', () => {
   beforeEach(() => {
-    embeddedVoiceMocks.mount.mockReturnValue(embeddedVoiceMocks.unmount);
-    embeddedVoiceMocks.create.mockReturnValue({
-      cancelPendingOpen: embeddedVoiceMocks.cancelPendingOpen,
-      mount: embeddedVoiceMocks.mount,
-      openEmbed: embeddedVoiceMocks.openEmbed,
+    embeddedVoiceMocks.instances.length = 0;
+    embeddedVoiceMocks.create.mockImplementation(() => {
+      const instance = {
+        cancelPendingOpen: vi.fn(() => {
+          embeddedVoiceMocks.cancelPendingOpen();
+        }),
+        mount: vi.fn(() => {
+          embeddedVoiceMocks.mount();
+          return () => {
+            embeddedVoiceMocks.unmount();
+          };
+        }),
+        openEmbed: vi.fn(() => {
+          embeddedVoiceMocks.openEmbed();
+        }),
+      };
+      embeddedVoiceMocks.instances.push(instance);
+      return instance;
     });
   });
 
@@ -94,6 +115,9 @@ describe('EmbeddedVoice', () => {
 
     expect(embeddedVoiceMocks.unmount).toHaveBeenCalledOnce();
     expect(embeddedVoiceMocks.create).toHaveBeenCalledTimes(2);
+    expect(embeddedVoiceMocks.instances[0]).not.toBe(
+      embeddedVoiceMocks.instances[1],
+    );
     expect(embeddedVoiceMocks.create).toHaveBeenLastCalledWith(
       expect.objectContaining({
         auth: { type: 'accessToken', value: 'latest-token' },
@@ -122,7 +146,7 @@ describe('EmbeddedVoice', () => {
     expect(embeddedVoiceMocks.openEmbed).toHaveBeenCalledTimes(2);
   });
 
-  it('does not reapply openOnMount when configuration recreates the embed', () => {
+  it('preserves openOnMount when configuration changes before readiness', () => {
     const { rerender } = render(
       <EmbeddedVoice
         auth={{ type: 'accessToken', value: 'first-token' }}
@@ -144,7 +168,66 @@ describe('EmbeddedVoice', () => {
       expect.objectContaining({ openOnMount: true }),
     );
     expect(embeddedVoiceMocks.create.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ openOnMount: true }),
+    );
+  });
+
+  it('does not reapply openOnMount after the current embed reaches readiness', () => {
+    const { rerender } = render(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'first-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+    const firstConfig = embeddedVoiceMocks.create.mock.calls[0]?.[0] as
+      | CreatedConfig
+      | undefined;
+    firstConfig?.onReady?.();
+
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'latest-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+
+    expect(embeddedVoiceMocks.create.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({ openOnMount: false }),
+    );
+  });
+
+  it('ignores readiness reported by an instance that has been replaced', () => {
+    const { rerender } = render(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'first-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+    const firstConfig = embeddedVoiceMocks.create.mock.calls[0]?.[0] as
+      | CreatedConfig
+      | undefined;
+
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'second-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+    firstConfig?.onReady?.();
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'third-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+
+    expect(embeddedVoiceMocks.create.mock.calls[2]?.[0]).toEqual(
+      expect.objectContaining({ openOnMount: true }),
     );
   });
 

@@ -31,6 +31,9 @@ export type TranscriptMessageHandler = (
 /** Called when the user collapses the widget. */
 export type CloseHandler = () => void;
 
+/** Called after the widget iframe reports that it is ready. */
+export type ReadyHandler = () => void;
+
 /**
  * Hume's hosted voice widget, embedded in an iframe.
  *
@@ -52,8 +55,6 @@ export type CloseHandler = () => void;
 export class EmbeddedVoice {
   private iframe: HTMLIFrameElement;
 
-  private isMounted: boolean = false;
-
   private managedContainer: HTMLElement | null = null;
 
   private config: EmbeddedVoiceConfig;
@@ -61,6 +62,8 @@ export class EmbeddedVoice {
   private onMessage: TranscriptMessageHandler;
 
   private onClose: CloseHandler;
+
+  private onReady: ReadyHandler;
 
   private isReady: boolean = false;
 
@@ -73,17 +76,20 @@ export class EmbeddedVoice {
   private constructor({
     onMessage = () => {},
     onClose = () => {},
+    onReady = () => {},
     openOnMount,
     ...config
   }: {
     onMessage?: TranscriptMessageHandler;
     onClose?: CloseHandler;
+    onReady?: ReadyHandler;
     openOnMount?: boolean;
   } & EmbeddedVoiceConfig) {
     this.config = config;
     this.iframe = this.createIframe(config);
     this.onMessage = onMessage;
     this.onClose = onClose;
+    this.onReady = onReady;
     this.openOnMount = openOnMount ?? false;
     this.messageHandler = this.messageHandler.bind(this);
   }
@@ -98,17 +104,20 @@ export class EmbeddedVoice {
     rendererUrl,
     onMessage,
     onClose,
+    onReady,
     openOnMount,
     ...config
   }: EmbeddedVoiceConfig & {
     onMessage?: TranscriptMessageHandler;
     onClose?: CloseHandler;
+    onReady?: ReadyHandler;
     openOnMount?: boolean;
   }): EmbeddedVoice {
     return new EmbeddedVoice({
       rendererUrl: rendererUrl ?? 'https://voice-widget.hume.ai',
       ...(onMessage === undefined ? {} : { onMessage }),
       ...(onClose === undefined ? {} : { onClose }),
+      ...(onReady === undefined ? {} : { onReady }),
       ...(openOnMount === undefined ? {} : { openOnMount }),
       ...config,
     });
@@ -138,8 +147,10 @@ export class EmbeddedVoice {
     };
 
     const el = container ?? this.createContainer();
+    const previousContainerPointerEvents = el.style.pointerEvents;
 
     this.managedContainer = el;
+    this.hideIframe();
 
     let isActive = false;
     const unmount = () => {
@@ -148,23 +159,22 @@ export class EmbeddedVoice {
       }
       isActive = false;
       this.isReady = false;
+      this.hideIframe();
       try {
         window.removeEventListener('message', messageHandler);
         window.removeEventListener('resize', resizeHandler);
         this.iframe.remove();
-        this.isMounted = false;
-      } catch {
-        this.isMounted = true;
-      }
-
-      if (!container) {
-        el.remove();
-      }
-      if (this.managedContainer === el) {
-        this.managedContainer = null;
-      }
-      if (this.unmountActiveMount === unmount) {
-        this.unmountActiveMount = null;
+      } finally {
+        if (!container) {
+          el.remove();
+        }
+        el.style.pointerEvents = previousContainerPointerEvents;
+        if (this.managedContainer === el) {
+          this.managedContainer = null;
+        }
+        if (this.unmountActiveMount === unmount) {
+          this.unmountActiveMount = null;
+        }
       }
     };
 
@@ -172,7 +182,6 @@ export class EmbeddedVoice {
       window.addEventListener('message', messageHandler);
       window.addEventListener('resize', resizeHandler);
       el.appendChild(this.iframe);
-      this.isMounted = true;
       isActive = true;
       this.unmountActiveMount = unmount;
     } catch {
@@ -181,10 +190,10 @@ export class EmbeddedVoice {
       if (!container) {
         el.remove();
       }
+      el.style.pointerEvents = previousContainerPointerEvents;
       if (this.managedContainer === el) {
         this.managedContainer = null;
       }
-      this.isMounted = false;
     }
 
     return unmount;
@@ -262,9 +271,9 @@ export class EmbeddedVoice {
         this.sendConfigObject();
         this.sendWindowSize();
         if (this.shouldOpenWhenReady) {
-          this.shouldOpenWhenReady = false;
           this.openEmbed();
         }
+        this.onReady();
         break;
       }
       case 'resize_frame': {
@@ -348,6 +357,8 @@ export class EmbeddedVoice {
 
   private hideIframe() {
     this.iframe.style.opacity = '0';
+    this.iframe.style.width = '0px';
+    this.iframe.style.height = '0px';
     if (this.managedContainer) {
       this.managedContainer.style.pointerEvents = 'none';
     }

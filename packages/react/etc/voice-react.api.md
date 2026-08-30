@@ -246,6 +246,9 @@ export type LanguageModelOption = (typeof LanguageModelOption)[keyof typeof Lang
 export type MicErrorReason = 'mic_permission_denied' | 'mic_initialization_failure' | 'mic_closure_failure' | 'mime_types_not_supported';
 
 // @public @deprecated
+export type MicrophonePermissionStatus = 'prompt' | 'granted' | 'denied';
+
+// @public @deprecated
 export type MicrophoneProps = {
     diagnostics?: VoiceDiagnosticsReporter;
     onAudioCaptured: (b: ArrayBuffer) => void;
@@ -255,9 +258,16 @@ export type MicrophoneProps = {
 };
 
 // @public
+export type ParsedAudioMessage = {
+    type: 'audio';
+    data: ArrayBuffer;
+    receivedAt: Date;
+};
+
+// @public
 export type ParsedMessageResult = {
     success: true;
-    message: Hume.empathicVoice.SubscribeEvent | AudioMessage_2;
+    message: Hume.empathicVoice.SubscribeEvent | ParsedAudioMessage;
 } | {
     success: false;
     error: Error;
@@ -418,7 +428,7 @@ export const useMicrophone: (props: MicrophoneProps) => {
 export const useMicrophoneStream: () => {
     getStream: (audioConstraints: MediaTrackConstraints) => Promise<MediaStream>;
     stopStream: (stream?: MediaStream | null) => void;
-    permission: PermissionStatus_2;
+    permission: MicrophonePermissionStatus;
 };
 
 // @public
@@ -558,6 +568,18 @@ export type VoiceDiagnosticEvent = Readonly<{
 // @public
 export type VoiceDiagnosticEventName = 'connection.attempt_started' | 'connection.attempt_ignored' | 'connection.attempt_cancelled' | 'connection.connected' | 'connection.disconnect_started' | 'connection.disconnected' | 'socket.opened' | 'socket.closed' | 'resource.initialization_started' | 'resource.initialized' | 'resource.stop_started' | 'resource.stopped' | 'resource.cleanup_failed' | 'microphone.permission_requested' | 'microphone.permission_resolved' | 'microphone.mime_type_selected' | 'microphone.recording_started' | 'microphone.recording_stopped' | 'microphone.audio_chunk_captured' | 'microphone.flush_completed' | 'microphone.analyzer_failed' | 'audio.chunk_received' | 'audio.queue_changed' | 'audio.playback_started' | 'audio.playback_ended' | 'audio.drain_completed' | 'audio_device.switch_started' | 'audio_device.switch_completed' | 'audio_device.switch_failed' | 'audio_device.switch_ignored' | 'message.sent' | 'message.received' | 'message.skipped' | 'tool.handler_started' | 'tool.handler_completed' | 'tool.handler_failed' | 'tool.handler_skipped' | 'control.changed' | 'consumer.callback_failed' | 'sdk.error' | 'sdk.error_cleared';
 
+// @public @deprecated
+export type VoiceDiagnosticInput = {
+    level: VoiceDiagnosticLevel;
+    category: VoiceDiagnosticCategory;
+    name: VoiceDiagnosticEventName;
+    connectionId?: string | null;
+    chatId?: string | null;
+    durationMs?: number;
+    details?: Record<string, unknown>;
+    sensitiveDetails?: Record<string, unknown>;
+};
+
 // @public
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -569,10 +591,22 @@ export interface VoiceDiagnosticsOptions {
     onEvent?: (event: VoiceDiagnosticEvent) => void;
 }
 
-// Warning: (ae-forgotten-export) The symbol "VoiceDiagnosticPrimitive" needs to be exported by the entry point index.d.ts
-//
+// @public @deprecated
+export interface VoiceDiagnosticsReporter {
+    addRedactionValue(value?: string): void;
+    beginConnection(secret?: string): string;
+    clearConnection(): void;
+    emit(input: VoiceDiagnosticInput): void;
+    getCorrelation(): Readonly<{
+        connectionId?: string;
+        chatId?: string;
+    }>;
+    isEnabled(level: VoiceDiagnosticLevel): boolean;
+    setChatId(chatId?: string): void;
+}
+
 // @public
-export type VoiceDiagnosticValue = VoiceDiagnosticPrimitive | readonly VoiceDiagnosticValue[] | {
+export type VoiceDiagnosticValue = string | number | boolean | null | readonly VoiceDiagnosticValue[] | {
     readonly [key: string]: VoiceDiagnosticValue;
 };
 
@@ -645,11 +679,5 @@ export type VoiceStatus = Readonly<{
 export type WithReceivedAt<T> = T & {
     receivedAt: Date;
 };
-
-// Warnings were encountered during analysis:
-//
-// dist/index.d.ts:467:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:480:5 - (ae-forgotten-export) The symbol "AudioMessage_2" needs to be exported by the entry point index.d.ts
-// dist/index.d.ts:776:5 - (ae-forgotten-export) The symbol "PermissionStatus_2" needs to be exported by the entry point index.d.ts
 
 ```
