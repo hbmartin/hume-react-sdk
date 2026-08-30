@@ -67,9 +67,8 @@ type UseSoundPlayerProps = {
  * lenient teardown used in isolation and the strict aggregation the provider
  * relies on to report cleanup failures.
  *
- * @internal
  */
-export const useSoundPlayerImplementation = (
+const useSoundPlayerImplementation = (
   props: UseSoundPlayerProps,
   propagateContextStopFailures: boolean,
 ) => {

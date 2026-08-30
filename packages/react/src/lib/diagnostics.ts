@@ -145,7 +145,8 @@ type DiagnosticConfiguration = false | VoiceDiagnosticsOptions | undefined;
 /**
  * Low-level diagnostic event input accepted by a diagnostics reporter.
  *
- * @internal
+ * @deprecated Configure diagnostics with {@link VoiceDiagnosticsOptions} on
+ * {@link VoiceProvider}. This type remains for `useSoundPlayer` compatibility.
  */
 export type VoiceDiagnosticInput = {
   level: VoiceDiagnosticLevel;
@@ -167,9 +168,11 @@ export type VoiceDiagnosticInput = {
 };
 
 /**
- * Low-level diagnostics sink accepted by deprecated resource hooks.
+ * Low-level diagnostics sink used by internal provider resources and retained
+ * for the deprecated `useSoundPlayer` compatibility wrapper.
  *
- * @internal
+ * @deprecated Configure diagnostics with {@link VoiceDiagnosticsOptions} on
+ * {@link VoiceProvider} instead.
  */
 export interface VoiceDiagnosticsReporter {
   /** Adds a sensitive value that must be redacted from future events. */

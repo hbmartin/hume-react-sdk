@@ -2000,6 +2000,28 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('connected');
   });
 
+  it.each(['NotAllowedError', 'SecurityError'])(
+    'maps a name-only %s during connect to microphone permission denial',
+    async (name) => {
+      const permissionError = { message: 'denied', name };
+      mocks.getStream.mockRejectedValueOnce(permissionError);
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+      });
+
+      await act(() =>
+        result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
+
+      expect(result.current.error).toMatchObject({
+        reason: 'mic_permission_denied',
+        type: 'mic_error',
+      });
+    },
+  );
+
   it('maps unsupported output switching without disrupting playback', async () => {
     const unsupportedError = new DOMException(
       'unavailable',

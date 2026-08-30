@@ -5,9 +5,10 @@ contracts can evolve without drifting apart.
 
 ## Guides and package documentation
 
-The package pages include the package READMEs directly from the repository.
-Those files own installation instructions, walkthroughs, examples, migration
-notes, and troubleshooting guidance.
+Task-oriented guidance is written directly in `docs/guide/`. Package READMEs
+remain the landing pages for npm and GitHub, but the documentation build does
+not copy them into this site. Update a guide when readers need a walkthrough,
+example, migration path, or troubleshooting procedure.
 
 ## API reference
 
@@ -19,6 +20,11 @@ Markdown.
 Generated reference pages are build artifacts. Improve an incomplete reference
 page by updating the exported symbol's TSDoc comment in source rather than
 editing generated Markdown.
+
+The build also copies `packages/react/MIGRATION.md` to the generated migration
+guide. Run `pnpm docs:api` to refresh that page, the API models, and the API
+reference; `pnpm docs:build` performs the same generation before building the
+site.
 
 ## Release status
 

@@ -16,13 +16,15 @@ export type {
   VoiceDiagnosticDetails,
   VoiceDiagnosticEvent,
   VoiceDiagnosticEventName,
+  VoiceDiagnosticInput,
   VoiceDiagnosticLevel,
   VoiceDiagnosticsOptions,
+  VoiceDiagnosticsReporter,
   VoiceDiagnosticValue,
   VoiceLogger,
 } from './lib/diagnostics';
-// `FftStore` and `useFftSubscription` back the hooks below and are internal.
-export type { FftSnapshot } from './lib/fftStore';
+// `FftStore` remains only because the deprecated player returns it.
+export { FftStore, type FftSnapshot } from './lib/fftStore';
 export * from './lib/useAudioDevices';
 export { useSoundPlayer } from './lib/useSoundPlayer';
 export * from './lib/VoiceProvider';

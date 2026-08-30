@@ -6,6 +6,7 @@ import {
   isAudioDeviceEnumerationSupported,
   requestAudioDevicePermission,
 } from '../utils';
+import { isMicrophonePermissionDeniedError } from './browserErrors';
 
 /** Options for {@link useAudioDevices}. */
 export interface UseAudioDevicesOptions {
@@ -172,7 +173,7 @@ export const useAudioDevices = ({
           typeof e === 'object' && e !== null
             ? (e as { message?: unknown; name?: unknown })
             : null;
-        const permissionFailure = browserError?.name === 'NotAllowedError';
+        const permissionFailure = isMicrophonePermissionDeniedError(e);
         if (isMounted.current) {
           let nextPermissionError: Error | null = null;
           if (!permissionFailure) {

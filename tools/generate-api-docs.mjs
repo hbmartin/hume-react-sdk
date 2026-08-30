@@ -17,6 +17,7 @@ const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const generatedRoot = join(repositoryRoot, 'docs', '.generated');
 const apiModelDirectory = join(generatedRoot, 'api-model');
 const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
+const legacyPackageGuideDirectory = join(repositoryRoot, 'docs', 'packages');
 const guideDirectory = join(repositoryRoot, 'docs', 'guide');
 const migrationGuidePath = join(guideDirectory, 'migration.md');
 
@@ -104,6 +105,9 @@ async function writeMigrationGuide() {
 }
 
 await rm(generatedRoot, { force: true, recursive: true });
+// Older versions generated package README copies here. Remove them from reused
+// checkouts so stale pages cannot be linted or published after that model ended.
+await rm(legacyPackageGuideDirectory, { force: true, recursive: true });
 await rm(migrationGuidePath, { force: true });
 await mkdir(apiModelDirectory, { recursive: true });
 await writeMigrationGuide();

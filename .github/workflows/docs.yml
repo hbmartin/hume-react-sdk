@@ -52,6 +52,8 @@ jobs:
       # The only job with the generated reference on disk, so the only one that
       # can check the sidebar against the pages API Documenter actually emitted.
       - name: Check the API reference sidebar matches the generated pages
+        env:
+          REQUIRE_GENERATED_API_OUTPUT: 'true'
         run: node --test tools/api-sidebar.test.mjs
       # First-time setup must select GitHub Actions in Settings > Pages.
       # Automatic enablement requires a credential other than GITHUB_TOKEN.

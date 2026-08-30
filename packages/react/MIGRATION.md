@@ -150,3 +150,37 @@ function Waveform() {
 - **Performance:** High-frequency FFT updates no longer trigger rerenders in components that only need other voice state (e.g. `status`, `messages`, `connect`). Only components that use `usePlayerFft()`, `useMicFft()`, or `useCallDurationTimestamp()` subscribe to that data.
 - **Stable context:** The main `VoiceContext` from `useVoice()` changes less often, so consumers that do not use FFT or call duration avoid extra renders.
 - **Clearer API:** FFT and call duration are explicitly “display/visualization” data and are now accessed via dedicated hooks.
+
+---
+
+## Migrating from 0.3.x to 1.0.0
+
+The 1.0 surface removes low-level hooks and stale model constants that duplicated
+the lifecycle and configuration already owned by `VoiceProvider`, `useVoice`,
+and the `hume` client.
+
+### Replace low-level resource hooks
+
+| Removed                                                                                       | Use instead                                                                                 |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `useMicrophone`, `useMicrophoneStream`, `MicrophonePermissionStatus`, `MicrophoneProps`       | Configure microphone capture through `VoiceProvider` and call `connect()` from `useVoice()` |
+| `useVoiceClient`                                                                              | Use `VoiceProvider` and the connection controls returned by `useVoice()`                    |
+| `useCallDuration`, `CallDurationStore`                                                        | `useCallDurationTimestamp()`                                                                |
+| `useFftSubscription`                                                                          | `usePlayerFft()` or `useMicFft()`                                                           |
+| `ConnectionGenerationError`, `ConnectionGenerationErrorReason`, `isConnectionGenerationError` | Remove caller-side generation handling; `VoiceProvider` serializes connection attempts      |
+
+The deprecated `useSoundPlayer` wrapper remains temporarily for compatibility.
+Its `FftStore`, `VoiceDiagnosticInput`, and `VoiceDiagnosticsReporter` support
+types remain deprecated with it; new code should use `VoiceProvider`,
+`usePlayerFft()`, `useMicFft()`, and the `diagnostics` provider option.
+
+### Replace stale configuration constants
+
+- Remove `LanguageModelOption` and `TTSService`. Select the language model and
+  text-to-speech provider in the server-side EVI configuration referenced by
+  `configId`.
+- Remove `AudioEncoding` and `Channels`. Use the current request types exported
+  by `hume` when constructing lower-level EVI requests; `VoiceProvider` manages
+  its own supported audio format.
+- Replace `TimeSlice` and `TimeSliceSchema` with the timestamp fields on the
+  transcript message types.

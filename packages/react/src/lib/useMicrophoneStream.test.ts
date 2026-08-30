@@ -98,6 +98,20 @@ describe('useGetMicrophoneStream', () => {
     expect(result.current.permission).toBe('prompt');
   });
 
+  it.each(['NotAllowedError', 'SecurityError'])(
+    'recognizes a name-only %s as a permission denial',
+    async (name) => {
+      getUserMediaMock.mockRejectedValueOnce({ name });
+      const { result } = renderHook(() => useMicrophoneStream());
+
+      await expect(result.current.getStream({})).rejects.toMatchObject({
+        name,
+      });
+
+      expect(result.current.permission).toBe('denied');
+    },
+  );
+
   it('stops an acquired stream when audio-track validation fails', async () => {
     const trackStop = vi.fn();
     const stream = {
@@ -115,5 +129,44 @@ describe('useGetMicrophoneStream', () => {
 
     expect(trackStop).toHaveBeenCalledOnce();
     expect(result.current.permission).toBe('granted');
+  });
+
+  it('preserves the validation error when enumerating cleanup tracks fails', async () => {
+    const validationError = new Error('No audio tracks');
+    const stream = {
+      getTracks: () => {
+        throw new Error('Track enumeration failed');
+      },
+    } as unknown as MediaStream;
+    getUserMediaMock.mockResolvedValueOnce(stream);
+    vi.mocked(checkForAudioTracks).mockImplementationOnce(() => {
+      throw validationError;
+    });
+    const { result } = renderHook(() => useMicrophoneStream());
+
+    await expect(result.current.getStream({})).rejects.toBe(validationError);
+  });
+
+  it('stops remaining tracks and preserves validation when one stop fails', async () => {
+    const validationError = new Error('No audio tracks');
+    const finalTrackStop = vi.fn();
+    const stream = {
+      getTracks: () => [
+        {
+          stop: () => {
+            throw new Error('First track failed to stop');
+          },
+        },
+        { stop: finalTrackStop },
+      ],
+    } as unknown as MediaStream;
+    getUserMediaMock.mockResolvedValueOnce(stream);
+    vi.mocked(checkForAudioTracks).mockImplementationOnce(() => {
+      throw validationError;
+    });
+    const { result } = renderHook(() => useMicrophoneStream());
+
+    await expect(result.current.getStream({})).rejects.toBe(validationError);
+    expect(finalTrackStop).toHaveBeenCalledOnce();
   });
 });

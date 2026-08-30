@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 /**
  * Builds the VitePress sidebar for the generated API reference.
  *
- * API Documenter emits one flat Markdown file per exported symbol — 264 of them
- * today — with no navigation of its own. This derives a grouped sidebar from the
- * same API models the documenter reads, so the two cannot drift.
+ * API Documenter emits one flat Markdown file per exported symbol, with no
+ * navigation of its own. This derives a grouped sidebar from the same API models
+ * the documenter reads, so the two cannot drift.
  *
  * @typedef {{ kind: string, name?: string, docComment?: string, overloadIndex?: number, members?: ApiMember[] }} ApiMember
  * @typedef {{ name: string, members: ApiMember[] }} ApiModel
@@ -133,6 +133,15 @@ function byDisplayName(a, b) {
 }
 
 /**
+ * Match a real TSDoc block tag, not prose or code that mentions `@deprecated`.
+ *
+ * @param {string | undefined} docComment
+ */
+function hasDeprecatedTag(docComment) {
+  return /^\s*\*\s*@deprecated(?:\s|$)/mu.test(docComment ?? '');
+}
+
+/**
  * Collects the top-level exports of one model as sidebar-ready entries.
  *
  * API Documenter derives filenames case-insensitively, so a type alias and a
@@ -144,18 +153,20 @@ function byDisplayName(a, b) {
  */
 function collectEntries(model) {
   const packageBase = toSafeFilename(toUnscopedName(model.name));
-  const [entryPoint] = model.members;
   /** @type {Map<string, SidebarEntry>} */
   const entries = new Map();
 
-  // A package model always wraps its exports in exactly one EntryPoint, which
-  // itself contributes no path segment.
-  for (const member of entryPoint.members ?? []) {
+  // Entry points contribute no path segment. Flatten all of them so a package
+  // remains complete if API Extractor adds secondary entry-point support.
+  const members = model.members.flatMap(
+    (entryPoint) => entryPoint.members ?? [],
+  );
+  for (const member of members) {
     if (!KIND_GROUPS.has(member.kind)) continue;
 
     const link = toPageSlug(packageBase, member);
     entries.set(link, {
-      deprecated: (member.docComment ?? '').includes('@deprecated'),
+      deprecated: hasDeprecatedTag(member.docComment),
       kind: member.kind,
       link,
       text: toDisplayName(member),

@@ -16,7 +16,8 @@ const EMPTY_FFT: FftSnapshot = Object.freeze(
 /**
  * Mutable store backing the granular FFT subscription hooks.
  *
- * @internal
+ * @deprecated Use {@link usePlayerFft} or {@link useMicFft}. This class remains
+ * exported only because the deprecated `useSoundPlayer` return type exposes it.
  */
 export class FftStore {
   private _buffer: number[] = Array.from({ length: BARK_BAND_COUNT }, () => 0);
