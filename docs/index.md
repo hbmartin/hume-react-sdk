@@ -16,13 +16,13 @@ hero:
 features:
   - title: Headless React
     details: Build your own interface with VoiceProvider, hooks, audio controls, and message state.
-    link: /packages/voice-react
+    link: /guide/voice-react
   - title: Embedded React widget
     details: Add Hume's hosted voice interface to a React application with one component.
-    link: /packages/voice-embed-react
+    link: /guide/voice-embed-react
   - title: Framework-agnostic embed
     details: Mount the hosted voice interface from any browser application using an imperative API.
-    link: /packages/voice-embed
+    link: /guide/voice-embed
 ---
 
 ::: warning Latest source documentation

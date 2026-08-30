@@ -39,7 +39,6 @@ export default defineConfig({
     },
     nav: [
       { link: '/guide/getting-started', text: 'Guides' },
-      { link: '/packages/voice-react', text: 'Packages' },
       { link: '/reference/', text: 'API Reference' },
     ],
     outline: {
@@ -52,22 +51,30 @@ export default defineConfig({
     sidebar: {
       '/guide/': [
         {
-          items: [
-            { link: '/guide/getting-started', text: 'Getting started' },
-            { link: '/guide/migration', text: 'Migrating versions' },
-            { link: '/guide/documentation-model', text: 'Documentation model' },
-          ],
-          text: 'Guides',
+          items: [{ link: '/guide/getting-started', text: 'Choose a package' }],
+          text: 'Getting started',
         },
-      ],
-      '/packages/': [
+        {
+          items: [{ link: '/guide/voice-react', text: '@humeai/voice-react' }],
+          text: 'Build a custom UI',
+        },
         {
           items: [
-            { link: '/packages/voice-react', text: 'voice-react' },
-            { link: '/packages/voice-embed-react', text: 'voice-embed-react' },
-            { link: '/packages/voice-embed', text: 'voice-embed' },
+            {
+              link: '/guide/voice-embed-react',
+              text: '@humeai/voice-embed-react',
+            },
+            { link: '/guide/voice-embed', text: '@humeai/voice-embed' },
           ],
-          text: 'Packages',
+          text: 'Use the hosted widget',
+        },
+        {
+          collapsed: true,
+          items: [
+            { link: '/guide/migration', text: 'Migrating versions' },
+            { link: '/guide/documentation-model', text: 'How these docs work' },
+          ],
+          text: 'Reference material',
         },
       ],
       '/reference/': [

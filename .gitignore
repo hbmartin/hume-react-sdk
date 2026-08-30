@@ -32,7 +32,6 @@ dist
 .types
 .api-extractor
 docs/.generated/
-docs/packages/*.md
 docs/guide/migration.md
 docs/reference/api/
 
