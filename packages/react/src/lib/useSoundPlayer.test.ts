@@ -12,15 +12,9 @@ import {
 import type { AudioOutputMessage } from '../models/messages';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import {
+  useSoundPlayer,
   useSoundPlayerForVoiceProvider,
-  useSoundPlayerImplementation,
 } from './useSoundPlayer';
-
-// The provider uses the strict teardown path; these tests exercise the
-// lenient one, which is what the removed public `useSoundPlayer` selected.
-const useSoundPlayer = (
-  props: Parameters<typeof useSoundPlayerImplementation>[0],
-) => useSoundPlayerImplementation(props, false);
 
 vi.mock('./convertFrequencyScale', () => ({
   convertLinearFrequenciesToBark: (data: Uint8Array) => Array.from(data),

@@ -41,14 +41,15 @@ instead of failing — so it is safe to start before filling in `.env.local`.
 | --------------------------------- | -------- | ----------------------------------------------------------------- |
 | `HUME_API_KEY`                    | yes      | Server-side only. Used to mint an access token.                   |
 | `HUME_SECRET_KEY`                 | yes      | Server-side only. Used to mint an access token.                   |
-| `HUME_CONFIG_ID`                  | no       | An EVI configuration ID. Enables tool calling and built-in tools. |
+| `HUME_CONFIG_ID`                  | no       | A non-secret EVI configuration ID. Enables tools in this example. |
 | `NEXT_PUBLIC_HUME_VOICE_HOSTNAME` | no       | Defaults to `api.hume.ai`.                                        |
 | `NEXT_PUBLIC_GEOCODE_API_KEY`     | no       | Only used by the weather tool.                                    |
 
-`HUME_API_KEY`, `HUME_SECRET_KEY`, and `HUME_CONFIG_ID` deliberately have no
-`NEXT_PUBLIC_` prefix: they are read in a server component and must never reach
-the browser. Anything prefixed `NEXT_PUBLIC_` is embedded in the client bundle
-and is public.
+`HUME_API_KEY` and `HUME_SECRET_KEY` are server-only secrets and must never
+reach the browser. `HUME_CONFIG_ID` is not a secret: this example reads it in a
+server component, exposes it to the client as a prop, and passes it to
+`connect()` when configuration is required. Anything prefixed `NEXT_PUBLIC_`
+is embedded in the client bundle and is public.
 
 ## What this demonstrates
 

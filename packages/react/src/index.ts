@@ -24,6 +24,7 @@ export type {
 // `FftStore` and `useFftSubscription` back the hooks below and are internal.
 export type { FftSnapshot } from './lib/fftStore';
 export * from './lib/useAudioDevices';
+export { useSoundPlayer } from './lib/useSoundPlayer';
 export * from './lib/VoiceProvider';
 export {
   AudioDeviceSwitchError,

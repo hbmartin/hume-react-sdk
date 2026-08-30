@@ -283,7 +283,11 @@ function readTopLevelPageSlugs() {
       base,
       ...(parsed.members[0]?.members ?? [])
         .filter((member) => kindsWithPages.has(member.kind))
-        .map((member) => `${base}.${toSlug(member.name ?? '')}`),
+        .map((member) => {
+          const overloadIndex = member.overloadIndex ?? 1;
+          const suffix = overloadIndex > 1 ? `_${overloadIndex - 1}` : '';
+          return `${base}.${toSlug(member.name ?? '')}${suffix}`;
+        }),
     ];
   });
 }

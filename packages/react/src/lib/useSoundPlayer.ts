@@ -1200,6 +1200,21 @@ export const useSoundPlayerImplementation = (
 };
 
 /**
+ * Stops player resources and reports teardown failures through `onError`.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}. This wrapper is
+ * retained for compatibility and will only be removed in a future breaking
+ * release.
+ */
+export const useSoundPlayer = (props: {
+  diagnostics?: VoiceDiagnosticsReporter;
+  enableAudioWorklet: boolean;
+  onError: (message: string, reason: AudioPlayerErrorReason) => void;
+  onPlayAudio: (id: string) => void;
+  onStopAudio: (id: string) => void;
+}) => useSoundPlayerImplementation(props, false);
+
+/**
  * Strict player cleanup used for provider-level failure aggregation.
  *
  * @internal

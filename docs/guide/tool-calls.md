@@ -37,7 +37,19 @@ export function Providers({ children }: { children: React.ReactNode }) {
     }
 
     // `parameters` is a JSON *string*, not an object.
-    const args = weatherArgs.safeParse(JSON.parse(toolCall.parameters));
+    let parameters: unknown;
+    try {
+      parameters = JSON.parse(toolCall.parameters);
+    } catch {
+      return send.error({
+        error: 'Invalid arguments',
+        code: 'invalid_arguments',
+        level: 'warn',
+        content: 'The arguments did not match the weather tool schema.',
+      });
+    }
+
+    const args = weatherArgs.safeParse(parameters);
     if (!args.success) {
       return send.error({
         error: 'Invalid arguments',

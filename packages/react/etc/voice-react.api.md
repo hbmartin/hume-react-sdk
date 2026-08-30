@@ -300,6 +300,31 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 // @public
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
+// @public @deprecated
+export const useSoundPlayer: (props: {
+    diagnostics?: VoiceDiagnosticsReporter;
+    enableAudioWorklet: boolean;
+    onError: (message: string, reason: AudioPlayerErrorReason) => void;
+    onPlayAudio: (id: string) => void;
+    onStopAudio: (id: string) => void;
+}) => {
+    addToQueue: (message: AudioOutputMessage) => Promise<void>;
+    fftStore: FftStore;
+    initPlayer: (speakerDeviceId?: string, sharedAudioContext?: AudioContext) => Promise<boolean>;
+    isPlaying: boolean;
+    isAudioMuted: boolean;
+    muteAudio: () => void;
+    unmuteAudio: () => void;
+    stopAll: (expectedContext?: AudioContext) => Promise<void>;
+    stopAllForContext: (context: AudioContext) => Promise<void>;
+    waitForQueueToDrain: (timeoutMs?: number) => Promise<boolean>;
+    clearQueue: () => void;
+    volume: number;
+    setVolume: (newLevel: number) => void;
+    setOutputDevice: (deviceId: string | null) => Promise<void>;
+    queueLength: number;
+};
+
 // @public
 export const useVoice: () => VoiceContextType;
 
@@ -460,5 +485,10 @@ export type VoiceStatus = Readonly<{
 export type WithReceivedAt<T> = T & {
     receivedAt: Date;
 };
+
+// Warnings were encountered during analysis:
+//
+// dist/index.d.ts:600:5 - (ae-forgotten-export) The symbol "VoiceDiagnosticsReporter" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:607:5 - (ae-forgotten-export) The symbol "FftStore" needs to be exported by the entry point index.d.ts
 
 ```

@@ -107,7 +107,8 @@ The complete catalogue for schema version 1:
 | Audio devices  | `audio_device.switch_started`, `audio_device.switch_completed`, `audio_device.switch_failed`, `audio_device.switch_ignored`                                                                                                                                         |
 | Messages       | `message.sent`, `message.received`, `message.skipped`                                                                                                                                                                                                               |
 | Tools          | `tool.handler_started`, `tool.handler_completed`, `tool.handler_failed`, `tool.handler_skipped`                                                                                                                                                                     |
-| Other          | `control.changed`, `consumer.callback_failed`, `sdk.error`, `sdk.error_cleared`                                                                                                                                                                                     |
+| Consumer       | `consumer.callback_failed`                                                                                                                                                                                                                                          |
+| Other          | `control.changed`, `sdk.error`, `sdk.error_cleared`                                                                                                                                                                                                                 |
 
 The high-volume names — `microphone.audio_chunk_captured`, `audio.chunk_received`,
 `audio.queue_changed`, and `message.received` — only appear at `debug` level.
