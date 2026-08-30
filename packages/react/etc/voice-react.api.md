@@ -59,15 +59,6 @@ export class AudioDeviceSwitchError extends Error {
 // @public
 export type AudioDeviceSwitchErrorReason = 'not_connected' | 'unsupported' | 'permission_denied' | 'device_not_found' | 'switch_failed' | 'interrupted';
 
-// @public
-export const AudioEncoding: {
-    readonly LINEAR16: 'linear16';
-    readonly OPUS: 'opus';
-};
-
-// @public
-export type AudioEncoding = (typeof AudioEncoding)[keyof typeof AudioEncoding];
-
 // Warning: (ae-forgotten-export) The symbol "AudioInput" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -86,29 +77,6 @@ export type AudioPlayerErrorReason = 'audio_player_initialization_failure' | 'au
 // @public
 export type AuthStrategy = z.infer<typeof AuthStrategySchema>;
 
-// @public @deprecated
-export class CallDurationStore {
-    // (undocumented)
-    getServerSnapshot: () => string | null;
-    // (undocumented)
-    getSnapshot: () => string | null;
-    // (undocumented)
-    subscribe: (listener: () => void) => (() => void);
-    // (undocumented)
-    write(value: string | null): void;
-}
-
-// @public
-export const Channels: {
-    readonly 1: 'MONO';
-    readonly 2: 'STEREO';
-    readonly MONO: 1;
-    readonly STEREO: 2;
-};
-
-// @public
-export type Channels = typeof Channels.MONO | typeof Channels.STEREO;
-
 // Warning: (ae-forgotten-export) The symbol "ChatMetadata" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -123,18 +91,6 @@ export class ConcurrentConnectAuthError extends Error {
     constructor();
     readonly reason: 'auth_conflict';
 }
-
-// @public @deprecated
-export class ConnectionGenerationError extends Error {
-    constructor(connectionGeneration: number, reason: ConnectionGenerationErrorReason, message: string);
-    // (undocumented)
-    readonly connectionGeneration: number;
-    // (undocumented)
-    readonly reason: ConnectionGenerationErrorReason;
-}
-
-// @public @deprecated
-export type ConnectionGenerationErrorReason = 'invalid' | 'not_strictly_increasing';
 
 // @public
 export type ConnectionMessage = {
@@ -173,22 +129,6 @@ export interface DeviceOptions {
 // @public
 export type FftSnapshot = readonly number[];
 
-// @public @deprecated
-export class FftStore {
-    // (undocumented)
-    clear(): void;
-    // (undocumented)
-    destroy(): void;
-    // (undocumented)
-    getServerSnapshot: () => FftSnapshot;
-    // (undocumented)
-    getSnapshot: () => FftSnapshot;
-    // (undocumented)
-    subscribe: (listener: () => void) => (() => void);
-    // (undocumented)
-    write(data: number[]): void;
-}
-
 // @public
 export const getAllAudioDevices: () => Promise<AudioDevices>;
 
@@ -207,9 +147,6 @@ export const isAudioDeviceSwitchError: (error: unknown) => error is AudioDeviceS
 // @public
 export const isConcurrentConnectAuthError: (error: unknown) => error is ConcurrentConnectAuthError;
 
-// @public @deprecated
-export const isConnectionGenerationError: (error: unknown) => error is ConnectionGenerationError;
-
 // @public
 export const isSocketFailedToParseMessageError: (err: unknown) => err is SocketFailedToParseMessageError;
 
@@ -226,36 +163,8 @@ export type JSONErrorMessage = WithReceivedAt<WebSocketError>;
 // @public
 export type JSONMessage = WithReceivedAt<JsonMessage>;
 
-// @public @deprecated (undocumented)
-export const LanguageModelOption: {
-    readonly CLAUDE_3_OPUS: 'CLAUDE_3_OPUS';
-    readonly CLAUDE_3_SONNET: 'CLAUDE_3_SONNET';
-    readonly CLAUDE_3_HAIKU: 'CLAUDE_3_HAIKU';
-    readonly CLAUDE_21: 'CLAUDE_21';
-    readonly CLAUDE_INSTANT_12: 'CLAUDE_INSTANT_12';
-    readonly GPT_4_TURBO_PREVIEW: 'GPT_4_TURBO_PREVIEW';
-    readonly GPT_35_TURBO_0125: 'GPT_35_TURBO_0125';
-    readonly GPT_35_TURBO: 'GPT_35_TURBO';
-    readonly FIREWORKS_MIXTRAL_8X7B: 'FIREWORKS_MIXTRAL_8X7B';
-};
-
-// @public @deprecated (undocumented)
-export type LanguageModelOption = (typeof LanguageModelOption)[keyof typeof LanguageModelOption];
-
 // @public
 export type MicErrorReason = 'mic_permission_denied' | 'mic_initialization_failure' | 'mic_closure_failure' | 'mime_types_not_supported';
-
-// @public @deprecated
-export type MicrophonePermissionStatus = 'prompt' | 'granted' | 'denied';
-
-// @public @deprecated
-export type MicrophoneProps = {
-    diagnostics?: VoiceDiagnosticsReporter;
-    onAudioCaptured: (b: ArrayBuffer) => void;
-    onStartRecording?: () => void;
-    onStopRecording?: () => void;
-    onError: (message: string, reason: MicErrorReason) => void;
-};
 
 // @public
 export type ParsedAudioMessage = {
@@ -307,21 +216,6 @@ export class SocketUnknownMessageError extends Error {
     constructor(message?: string);
 }
 
-// @public @deprecated
-export type TimeSlice = z.infer<typeof TimeSliceSchema>;
-
-// @public @deprecated
-export const TimeSliceSchema: z.ZodObject<{
-    begin: z.ZodNumber;
-    end: z.ZodNumber;
-}, "strip", z.ZodTypeAny, {
-    begin: number;
-    end: number;
-}, {
-    begin: number;
-    end: number;
-}>;
-
 // Warning: (ae-forgotten-export) The symbol "ToolCallMessage" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -363,16 +257,6 @@ export interface ToolStatusEntry {
 export type ToolStatusStore = Record<string, ToolStatusEntry>;
 
 // @public
-export const TTSService: {
-    readonly DEFAULT: 'hume_ai';
-    readonly ELEVEN_LABS: 'eleven_labs';
-    readonly PLAY_HT: 'play_ht';
-};
-
-// @public
-export type TTSService = (typeof TTSService)[keyof typeof TTSService];
-
-// @public
 export const useAudioDevices: (input?: UseAudioDevicesOptions) => UseAudioDevicesReturn;
 
 // @public
@@ -397,39 +281,11 @@ export interface UseAudioDevicesReturn {
     setSelectedOutputDeviceId: (deviceId: string | null) => void;
 }
 
-// @public @deprecated
-export const useCallDuration: () => {
-    store: CallDurationStore;
-    start: () => void;
-    stop: () => void;
-};
-
 // @public
 export const useCallDurationTimestamp: () => string | null;
 
-// @public @deprecated
-export function useFftSubscription(store: FftStore): FftSnapshot;
-
 // @public
 export const useMicFft: () => FftSnapshot;
-
-// @public @deprecated
-export const useMicrophone: (props: MicrophoneProps) => {
-    start: (stream: MediaStream, sharedAudioContext?: AudioContext) => void;
-    replace: (stream: MediaStream, sharedAudioContext?: AudioContext) => Promise<void>;
-    stop: () => Promise<void>;
-    mute: () => void;
-    unmute: () => void;
-    isMuted: boolean;
-    fftStore: FftStore;
-};
-
-// @public @deprecated
-export const useMicrophoneStream: () => {
-    getStream: (audioConstraints: MediaTrackConstraints) => Promise<MediaStream>;
-    stopStream: (stream?: MediaStream | null) => void;
-    permission: MicrophonePermissionStatus;
-};
 
 // @public
 export const usePlayerFft: () => FftSnapshot;
@@ -444,57 +300,8 @@ export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
 // @public
 export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
 
-// @public @deprecated
-export const useSoundPlayer: (props: {
-    diagnostics?: VoiceDiagnosticsReporter;
-    enableAudioWorklet: boolean;
-    onError: (message: string, reason: AudioPlayerErrorReason) => void;
-    onPlayAudio: (id: string) => void;
-    onStopAudio: (id: string) => void;
-}) => {
-    addToQueue: (message: AudioOutputMessage) => Promise<void>;
-    fftStore: FftStore;
-    initPlayer: (speakerDeviceId?: string, sharedAudioContext?: AudioContext) => Promise<boolean>;
-    isPlaying: boolean;
-    isAudioMuted: boolean;
-    muteAudio: () => void;
-    unmuteAudio: () => void;
-    stopAll: (expectedContext?: AudioContext) => Promise<void>;
-    stopAllForContext: (context: AudioContext) => Promise<void>;
-    waitForQueueToDrain: (timeoutMs?: number) => Promise<boolean>;
-    clearQueue: () => void;
-    volume: number;
-    setVolume: (newLevel: number) => void;
-    setOutputDevice: (deviceId: string | null) => Promise<void>;
-    queueLength: number;
-};
-
 // @public
 export const useVoice: () => VoiceContextType;
-
-// @public @deprecated
-export const useVoiceClient: (props: {
-    diagnostics?: VoiceDiagnosticsReporter;
-    onAudioMessage?: (message: AudioOutputMessage) => void;
-    onMessage?: (message: JSONMessage) => void;
-    onSessionSettings?: (sessionSettings: Hume.empathicVoice.SessionSettings) => void;
-    onToolCall?: ToolCallHandler;
-    onToolCallError?: (message: string, error?: Error, source?: ToolCallErrorSource) => void;
-    onClientError?: (message: string, error?: Error) => void;
-    onOpen?: () => void;
-    onClose?: (event: SocketCloseEvent, consumerInitiated: boolean, connectionGeneration: number) => void | Promise<void>;
-}) => {
-    readyState: VoiceReadyState;
-    sendSessionSettings: (sessionSettings: SessionSettingsUpdate) => void;
-    sendAudio: (arrayBuffer: ArrayBufferLike) => void;
-    connect: (config: SocketConfig, sessionSettings?: Hume.empathicVoice.SessionSettings, connectionGeneration?: number) => Promise<VoiceReadyState>;
-    disconnect: () => void;
-    sendUserInput: (text: string) => void;
-    sendAssistantInput: (text: string) => void;
-    sendToolMessage: (toolMessage: Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage) => void;
-    sendPauseAssistantMessage: () => void;
-    sendResumeAssistantMessage: () => void;
-};
 
 // @public
 export interface VoiceAudioDeviceState {
@@ -568,18 +375,6 @@ export type VoiceDiagnosticEvent = Readonly<{
 // @public
 export type VoiceDiagnosticEventName = 'connection.attempt_started' | 'connection.attempt_ignored' | 'connection.attempt_cancelled' | 'connection.connected' | 'connection.disconnect_started' | 'connection.disconnected' | 'socket.opened' | 'socket.closed' | 'resource.initialization_started' | 'resource.initialized' | 'resource.stop_started' | 'resource.stopped' | 'resource.cleanup_failed' | 'microphone.permission_requested' | 'microphone.permission_resolved' | 'microphone.mime_type_selected' | 'microphone.recording_started' | 'microphone.recording_stopped' | 'microphone.audio_chunk_captured' | 'microphone.flush_completed' | 'microphone.analyzer_failed' | 'audio.chunk_received' | 'audio.queue_changed' | 'audio.playback_started' | 'audio.playback_ended' | 'audio.drain_completed' | 'audio_device.switch_started' | 'audio_device.switch_completed' | 'audio_device.switch_failed' | 'audio_device.switch_ignored' | 'message.sent' | 'message.received' | 'message.skipped' | 'tool.handler_started' | 'tool.handler_completed' | 'tool.handler_failed' | 'tool.handler_skipped' | 'control.changed' | 'consumer.callback_failed' | 'sdk.error' | 'sdk.error_cleared';
 
-// @public @deprecated
-export type VoiceDiagnosticInput = {
-    level: VoiceDiagnosticLevel;
-    category: VoiceDiagnosticCategory;
-    name: VoiceDiagnosticEventName;
-    connectionId?: string | null;
-    chatId?: string | null;
-    durationMs?: number;
-    details?: Record<string, unknown>;
-    sensitiveDetails?: Record<string, unknown>;
-};
-
 // @public
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -589,20 +384,6 @@ export interface VoiceDiagnosticsOptions {
     level?: VoiceDiagnosticLevel;
     logger?: VoiceLogger | false;
     onEvent?: (event: VoiceDiagnosticEvent) => void;
-}
-
-// @public @deprecated
-export interface VoiceDiagnosticsReporter {
-    addRedactionValue(value?: string): void;
-    beginConnection(secret?: string): string;
-    clearConnection(): void;
-    emit(input: VoiceDiagnosticInput): void;
-    getCorrelation(): Readonly<{
-        connectionId?: string;
-        chatId?: string;
-    }>;
-    isEnabled(level: VoiceDiagnosticLevel): boolean;
-    setChatId(chatId?: string): void;
 }
 
 // @public

@@ -13,7 +13,7 @@
     },
     "tsdocMessageReporting": {
       "tsdoc-undefined-tag": {
-        "logLevel": "none"
+        "logLevel": "error"
       }
     }
   }

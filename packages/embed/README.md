@@ -111,6 +111,11 @@ own UI, which invokes `onClose`.
 Full generated signatures for every export live in the
 [SDK API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-embed).
 
+## Changelog
+
+Release notes for every version live in the repository's
+[CHANGELOG](https://github.com/HumeAI/hume-react-sdk/blob/main/CHANGELOG.md).
+
 ## Support
 
 If you have questions or require assistance pertaining to this package, [reach out to us on Discord](https://hume.ai/discord)!

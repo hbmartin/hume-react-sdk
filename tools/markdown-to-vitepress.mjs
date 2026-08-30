@@ -1,8 +1,8 @@
 /**
- * Sibling Markdown files a package README links to relatively, mapped to the
+ * Sibling Markdown files a source document links to relatively, mapped to the
  * routes they occupy on the documentation site. Relative links resolve on
- * GitHub and npm, where the README is read next to its siblings, but not on
- * the site, where the README is published under `/packages/`.
+ * GitHub and npm, where the document is read next to its siblings, but not on
+ * the site, where it is published under a route of its own.
  *
  * @type {ReadonlyArray<readonly [RegExp, string]>}
  */
@@ -14,7 +14,7 @@ const SIBLING_DOCUMENT_ROUTES = [[/\.\/MIGRATION\.md/gu, '/guide/migration']];
  *
  * @param {string} readme
  */
-export function rewriteSiblingDocumentLinks(readme) {
+function rewriteSiblingDocumentLinks(readme) {
   return SIBLING_DOCUMENT_ROUTES.reduce(
     (result, [pattern, route]) => result.replace(pattern, route),
     readme,
@@ -26,9 +26,13 @@ export function rewriteSiblingDocumentLinks(readme) {
  * while preserving fenced examples and deliberate raw-HTML blocks, and points
  * relative sibling-document links at their site routes.
  *
+ * Applied to repository Markdown that VitePress renders without a human
+ * rewriting it for the site — currently `packages/react/MIGRATION.md`, which
+ * mixes fenced TSX with prose that names generic types.
+ *
  * @param {string} readme
  */
-export function makeReadmeVitePressSafe(readme) {
+export function escapeVitePressUnsafeMarkdown(readme) {
   const state = {
     /** @type {{ character: '`' | '~', length: number } | null} */
     codeFence: null,

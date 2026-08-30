@@ -145,9 +145,7 @@ type DiagnosticConfiguration = false | VoiceDiagnosticsOptions | undefined;
 /**
  * Low-level diagnostic event input accepted by a diagnostics reporter.
  *
- * @deprecated This belongs to deprecated low-level hooks. Configure
- * diagnostics through {@link VoiceDiagnosticsOptions} on {@link VoiceProvider}
- * instead.
+ * @internal
  */
 export type VoiceDiagnosticInput = {
   level: VoiceDiagnosticLevel;
@@ -171,8 +169,7 @@ export type VoiceDiagnosticInput = {
 /**
  * Low-level diagnostics sink accepted by deprecated resource hooks.
  *
- * @deprecated Configure diagnostics through {@link VoiceDiagnosticsOptions} on
- * {@link VoiceProvider} instead.
+ * @internal
  */
 export interface VoiceDiagnosticsReporter {
   /** Adds a sensitive value that must be redacted from future events. */

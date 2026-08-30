@@ -62,7 +62,14 @@ type UseSoundPlayerProps = {
   onStopAudio: (id: string) => void;
 };
 
-const useSoundPlayerImplementation = (
+/**
+ * The audio player itself. `propagateContextStopFailures` selects between the
+ * lenient teardown used in isolation and the strict aggregation the provider
+ * relies on to report cleanup failures.
+ *
+ * @internal
+ */
+export const useSoundPlayerImplementation = (
   props: UseSoundPlayerProps,
   propagateContextStopFailures: boolean,
 ) => {
@@ -1191,19 +1198,6 @@ const useSoundPlayerImplementation = (
     ],
   );
 };
-
-/**
- * Stops player resources and reports teardown failures through `onError`.
- *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
- */
-export const useSoundPlayer = (props: {
-  diagnostics?: VoiceDiagnosticsReporter;
-  enableAudioWorklet: boolean;
-  onError: (message: string, reason: AudioPlayerErrorReason) => void;
-  onPlayAudio: (id: string) => void;
-  onStopAudio: (id: string) => void;
-}) => useSoundPlayerImplementation(props, false);
 
 /**
  * Strict player cleanup used for provider-level failure aggregation.

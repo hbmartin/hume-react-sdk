@@ -162,7 +162,7 @@ export type ToolCallHandler = (
 /**
  * Connect directly to the EVI socket without provider-managed audio resources.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export const useVoiceClient = (props: {
   diagnostics?: VoiceDiagnosticsReporter;

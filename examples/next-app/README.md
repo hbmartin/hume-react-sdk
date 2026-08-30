@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Hume EVI React example (Next.js)
 
-## Getting Started
+The full-surface reference application for
+[`@humeai/voice-react`](../../packages/react). It exercises nearly every part of
+the package — connection lifecycle, tool calling, live audio device switching,
+message history, and FFT visualization — in one Next.js App Router app.
 
-First, run the development server:
+For an annotated tour of what each file demonstrates, see the
+[Examples section of the documentation site](https://humeai.github.io/hume-react-sdk/examples/next-app).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Prerequisites
+
+- A [Hume account](https://platform.hume.ai) with an API key and a secret key.
+- Optionally, an EVI configuration that defines a `weather_tool` function tool.
+  Without it the app runs normally and tool calling is disabled.
+- Optionally, a [geocode.maps.co](https://geocode.maps.co) API key, used only by
+  the weather tool.
+
+## Running it
+
+```sh
+cp .env.example .env.local   # then fill in your keys
 ```
 
-Open [http://localhost:3003](http://localhost:3003) with your browser to see the result.
+From the repository root:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```sh
+pnpm install
+pnpm --filter example-next-app dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+Then open <http://localhost:3003>. (`pnpm dev` from the root starts this app
+alongside every package and the other examples.)
 
-## Learn More
+If the API key or secret key is missing, the app renders a short setup screen
+instead of failing — so it is safe to start before filling in `.env.local`.
 
-To learn more about Next.js, take a look at the following resources:
+## Environment variables
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Variable                          | Required | Notes                                                             |
+| --------------------------------- | -------- | ----------------------------------------------------------------- |
+| `HUME_API_KEY`                    | yes      | Server-side only. Used to mint an access token.                   |
+| `HUME_SECRET_KEY`                 | yes      | Server-side only. Used to mint an access token.                   |
+| `HUME_CONFIG_ID`                  | no       | An EVI configuration ID. Enables tool calling and built-in tools. |
+| `NEXT_PUBLIC_HUME_VOICE_HOSTNAME` | no       | Defaults to `api.hume.ai`.                                        |
+| `NEXT_PUBLIC_GEOCODE_API_KEY`     | no       | Only used by the weather tool.                                    |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+`HUME_API_KEY`, `HUME_SECRET_KEY`, and `HUME_CONFIG_ID` deliberately have no
+`NEXT_PUBLIC_` prefix: they are read in a server component and must never reach
+the browser. Anything prefixed `NEXT_PUBLIC_` is embedded in the client bundle
+and is public.
 
-## Deploy on Vercel
+## What this demonstrates
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| File                              | Shows                                                                                                                                                                                                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app/page.tsx`                    | Minting a short-lived access token server-side with `fetchAccessToken`, and degrading gracefully when keys are absent                                                                                                                                      |
+| `components/Voice.tsx`            | `VoiceProvider` with every lifecycle callback, `messageHistoryLimit`, an `enableAudioWorklet` toggle, and a complete `ToolCallHandler` — a weather tool that resolves a location to coordinates, calls `api.weather.gov`, and validates every hop with zod |
+| `components/ExampleComponent.tsx` | Exhaustive `status.value` handling, live microphone and speaker switching during a call, and `AudioDeviceSwitchError` handling                                                                                                                             |
+| `components/ChatConnected.tsx`    | Mute, pause and resume, volume, text input as user or assistant, `chatMetadata`, `readyState`, and prosody                                                                                                                                                 |
+| `components/Waveform.tsx`         | Rendering `useMicFft()` and `usePlayerFft()`                                                                                                                                                                                                               |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+## Without a configuration ID
+
+The app runs without `HUME_CONFIG_ID`. Tool calling and built-in tools are
+disabled and the UI says so — the rest of the conversation works normally.
+
+## See also
+
+- [`@humeai/voice-react` guide](https://humeai.github.io/hume-react-sdk/guide/voice-react)
+- [API reference](https://humeai.github.io/hume-react-sdk/reference/api/voice-react)
+- [EVI Next.js Starter](https://github.com/humeai/hume-evi-next-js-starter) — the
+  deployable template to fork for a real project

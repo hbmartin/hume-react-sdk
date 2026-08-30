@@ -17,26 +17,27 @@ export type {
   VoiceDiagnosticEvent,
   VoiceDiagnosticEventName,
   VoiceDiagnosticLevel,
-  VoiceDiagnosticInput,
   VoiceDiagnosticsOptions,
-  VoiceDiagnosticsReporter,
   VoiceDiagnosticValue,
   VoiceLogger,
 } from './lib/diagnostics';
-export * from './lib/fftStore';
+// `FftStore` and `useFftSubscription` back the hooks below and are internal.
+export type { FftSnapshot } from './lib/fftStore';
 export * from './lib/useAudioDevices';
-export * from './lib/useCallDuration';
-export * from './lib/useMicrophoneStream';
-export * from './lib/useMicrophone';
-export { useSoundPlayer } from './lib/useSoundPlayer';
-export * from './lib/useVoiceClient';
 export * from './lib/VoiceProvider';
-export * from './lib/errors';
+export {
+  AudioDeviceSwitchError,
+  ConcurrentConnectAuthError,
+  isAudioDeviceSwitchError,
+  isConcurrentConnectAuthError,
+  isSocketFailedToParseMessageError,
+  isSocketUnknownMessageError,
+  SocketFailedToParseMessageError,
+  SocketUnknownMessageError,
+  type AudioDeviceSwitchErrorReason,
+} from './lib/errors';
 export * from './lib/messages';
-export * from './models/audio';
-export * from './models/llm';
-export * from './models/messages';
-export * from './models/ttsService';
+export type * from './models/messages';
 export type * from './models/connect-options';
 
 export {
@@ -47,6 +48,14 @@ export {
   requestAudioDevicePermission,
 } from './utils';
 
-export type { SocketConfig } from './lib/useVoiceClient';
+// The rest of this module is the low-level client the provider is built on.
+export {
+  VoiceReadyState,
+  type SessionSettingsUpdate,
+  type SocketCloseEvent,
+  type SocketConfig,
+  type ToolCallErrorSource,
+  type ToolCallHandler,
+} from './lib/useVoiceClient';
 export type { AuthStrategy } from './lib/auth';
 export type { ToolStatusEntry, ToolStatusStore } from './lib/useToolStatus';

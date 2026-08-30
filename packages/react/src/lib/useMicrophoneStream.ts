@@ -5,13 +5,23 @@ import { useCallback, useRef, useState } from 'react';
 /**
  * Browser microphone permission state reported by {@link useMicrophoneStream}.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export type MicrophonePermissionStatus = 'prompt' | 'granted' | 'denied';
 
 const getAudioStream = async (
   audioConstraints: MediaTrackConstraints,
 ): Promise<MediaStream> => {
+  if (
+    typeof navigator === 'undefined' ||
+    typeof navigator.mediaDevices === 'undefined' ||
+    typeof navigator.mediaDevices.getUserMedia !== 'function'
+  ) {
+    const error = new Error('Microphone capture is not supported.');
+    error.name = 'NotSupportedError';
+    throw error;
+  }
+
   return navigator.mediaDevices.getUserMedia({
     audio: {
       ...audioConstraints,
@@ -29,7 +39,7 @@ const getAudioStream = async (
 /**
  * Acquire and release a browser microphone stream.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export const useMicrophoneStream = () => {
   const [permission, setPermission] =
@@ -55,7 +65,12 @@ export const useMicrophoneStream = () => {
 
       setPermission('granted');
 
-      checkForAudioTracks(stream);
+      try {
+        checkForAudioTracks(stream);
+      } catch (e) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw e;
+      }
 
       currentStream.current = stream;
 

@@ -3,11 +3,11 @@
 The SDK is split into three packages. Choose based on how much of the interface
 you want Hume to provide.
 
-| Package                                                    | Choose it when                                             | Interface ownership |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ------------------- |
-| [`@humeai/voice-react`](/packages/voice-react)             | You use React and want complete control over the interface | Your application    |
-| [`@humeai/voice-embed-react`](/packages/voice-embed-react) | You use React and want Hume's hosted widget                | Hume                |
-| [`@humeai/voice-embed`](/packages/voice-embed)             | You do not use React and want Hume's hosted widget         | Hume                |
+| Package                                                 | Choose it when                                             | Interface ownership |
+| ------------------------------------------------------- | ---------------------------------------------------------- | ------------------- |
+| [`@humeai/voice-react`](/guide/voice-react)             | You use React and want complete control over the interface | Your application    |
+| [`@humeai/voice-embed-react`](/guide/voice-embed-react) | You use React and want Hume's hosted widget                | Hume                |
+| [`@humeai/voice-embed`](/guide/voice-embed)             | You do not use React and want Hume's hosted widget         | Hume                |
 
 ## Install a package
 

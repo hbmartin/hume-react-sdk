@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitepress';
 
+import { readApiReferenceSidebar } from '../../tools/api-sidebar.mjs';
+
 const repositoryName =
   process.env.GITHUB_REPOSITORY?.split('/').at(-1) ?? 'hume-react-sdk';
 const base = process.env.DOCS_BASE ?? `/${repositoryName}/`;
@@ -39,7 +41,7 @@ export default defineConfig({
     },
     nav: [
       { link: '/guide/getting-started', text: 'Guides' },
-      { link: '/packages/voice-react', text: 'Packages' },
+      { link: '/examples/', text: 'Examples' },
       { link: '/reference/', text: 'API Reference' },
     ],
     outline: {
@@ -53,21 +55,61 @@ export default defineConfig({
       '/guide/': [
         {
           items: [
-            { link: '/guide/getting-started', text: 'Getting started' },
-            { link: '/guide/migration', text: 'Migrating versions' },
-            { link: '/guide/documentation-model', text: 'Documentation model' },
+            { link: '/guide/getting-started', text: 'Choose a package' },
+            { link: '/guide/authentication', text: 'Authentication' },
           ],
-          text: 'Guides',
+          text: 'Getting started',
         },
-      ],
-      '/packages/': [
         {
           items: [
-            { link: '/packages/voice-react', text: 'voice-react' },
-            { link: '/packages/voice-embed-react', text: 'voice-embed-react' },
-            { link: '/packages/voice-embed', text: 'voice-embed' },
+            { link: '/guide/voice-react', text: '@humeai/voice-react' },
+            { link: '/guide/tool-calls', text: 'Tool calls' },
+            { link: '/guide/error-handling', text: 'Errors and reconnection' },
+            {
+              link: '/guide/session-settings',
+              text: 'Session settings and resuming',
+            },
+            { link: '/guide/interruptions', text: 'Interruptions' },
+            {
+              link: '/guide/expression-measurement',
+              text: 'Expression measurement',
+            },
+            { link: '/guide/audio-devices', text: 'Audio devices' },
+            { link: '/guide/visualizations', text: 'Audio visualizations' },
+            { link: '/guide/diagnostics', text: 'Diagnostics and logging' },
+            { link: '/guide/nextjs', text: 'Next.js and server rendering' },
           ],
-          text: 'Packages',
+          text: 'Build a custom UI',
+        },
+        {
+          items: [
+            { link: '/guide/embedded-widget', text: 'Embedding the widget' },
+            {
+              link: '/guide/voice-embed-react',
+              text: '@humeai/voice-embed-react',
+            },
+            { link: '/guide/voice-embed', text: '@humeai/voice-embed' },
+          ],
+          text: 'Use the hosted widget',
+        },
+        {
+          collapsed: true,
+          items: [
+            { link: '/guide/migration', text: 'Migrating versions' },
+            { link: '/guide/documentation-model', text: 'How these docs work' },
+          ],
+          text: 'Reference material',
+        },
+      ],
+      '/examples/': [
+        {
+          items: [
+            { link: '/examples/', text: 'Overview' },
+            { link: '/examples/next-app', text: 'Next.js reference app' },
+            { link: '/examples/vite-embed', text: 'Embedded widget' },
+            { link: '/examples/raw-client', text: 'Raw EVI client' },
+          ],
+          text: 'Examples',
         },
       ],
       '/reference/': [
@@ -91,6 +133,9 @@ export default defineConfig({
           text: 'API Reference',
         },
       ],
+      // Keyed more specifically than '/reference/', so the generated pages get
+      // the generated sidebar while the overview keeps the short one above.
+      '/reference/api/': readApiReferenceSidebar(),
     },
     siteTitle: 'Hume Voice SDK',
     socialLinks: [

@@ -10,41 +10,23 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { escapeVitePressUnsafeMarkdown } from './markdown-to-vitepress.mjs';
 import { getPnpmInvocation } from './pnpm-command.mjs';
-import { makeReadmeVitePressSafe } from './readme-markdown.mjs';
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const generatedRoot = join(repositoryRoot, 'docs', '.generated');
 const apiModelDirectory = join(generatedRoot, 'api-model');
 const apiReferenceDirectory = join(repositoryRoot, 'docs', 'reference', 'api');
-const packageGuideDirectory = join(repositoryRoot, 'docs', 'packages');
 const guideDirectory = join(repositoryRoot, 'docs', 'guide');
 const migrationGuidePath = join(guideDirectory, 'migration.md');
 
+// Package guides are hand-written at `docs/guide/<package>.md`. This script
+// only produces the API reference and the migration guide; package READMEs are
+// npm landing pages and are no longer republished to the site.
 const packages = [
-  {
-    description:
-      "Hume's hosted voice widget for browser applications that do not use React.",
-    directory: 'packages/embed',
-    model: 'voice-embed.api.json',
-    output: 'voice-embed.md',
-    title: '@humeai/voice-embed',
-  },
-  {
-    description: "Hume's hosted voice widget as a React component.",
-    directory: 'packages/embed-react',
-    model: 'voice-embed-react.api.json',
-    output: 'voice-embed-react.md',
-    title: '@humeai/voice-embed-react',
-  },
-  {
-    description:
-      'Headless hooks and components for building a custom React voice interface.',
-    directory: 'packages/react',
-    model: 'voice-react.api.json',
-    output: 'voice-react.md',
-    title: '@humeai/voice-react',
-  },
+  { directory: 'packages/embed', model: 'voice-embed.api.json' },
+  { directory: 'packages/embed-react', model: 'voice-embed-react.api.json' },
+  { directory: 'packages/react', model: 'voice-react.api.json' },
 ];
 
 /**
@@ -117,41 +99,13 @@ async function writeMigrationGuide() {
 
   await writeFile(
     migrationGuidePath,
-    `${frontmatter}${makeReadmeVitePressSafe(migration)}`,
-  );
-}
-
-async function writePackageGuides() {
-  await mkdir(packageGuideDirectory, { recursive: true });
-
-  await Promise.all(
-    packages.map(async (package_) => {
-      const readme = await readFile(
-        join(repositoryRoot, package_.directory, 'README.md'),
-        'utf8',
-      );
-      const vitePressSafeReadme = makeReadmeVitePressSafe(readme);
-      const frontmatter = [
-        '---',
-        `description: ${JSON.stringify(package_.description)}`,
-        `title: ${JSON.stringify(package_.title)}`,
-        '---',
-        '',
-      ].join('\n');
-
-      await writeFile(
-        join(packageGuideDirectory, package_.output),
-        `${frontmatter}${vitePressSafeReadme}`,
-      );
-    }),
+    `${frontmatter}${escapeVitePressUnsafeMarkdown(migration)}`,
   );
 }
 
 await rm(generatedRoot, { force: true, recursive: true });
-await rm(packageGuideDirectory, { force: true, recursive: true });
 await rm(migrationGuidePath, { force: true });
 await mkdir(apiModelDirectory, { recursive: true });
-await writePackageGuides();
 await writeMigrationGuide();
 
 for (const package_ of packages) {

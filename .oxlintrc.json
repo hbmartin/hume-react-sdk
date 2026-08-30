@@ -20,7 +20,7 @@
   },
   "rules": {
     "eqeqeq": "error",
-    "no-console": "warn",
+    "no-console": "error",
     "no-debugger": "error",
     "no-duplicate-imports": "error",
     "no-nested-ternary": "error",

@@ -37,7 +37,7 @@ type DisposeMicrophoneOptions = {
 /**
  * Configuration for the deprecated low-level microphone hook.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export type MicrophoneProps = {
   diagnostics?: VoiceDiagnosticsReporter;
@@ -50,7 +50,7 @@ export type MicrophoneProps = {
 /**
  * Manage microphone capture independently of the voice provider.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * @internal
  */
 export const useMicrophone = (props: MicrophoneProps) => {
   const { onAudioCaptured } = props;

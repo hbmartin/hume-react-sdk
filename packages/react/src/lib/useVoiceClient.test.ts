@@ -5,7 +5,7 @@ import {
   createVoiceDiagnosticsReporter,
   type VoiceDiagnosticEvent,
 } from './diagnostics';
-import { isConnectionGenerationError } from './errors';
+import { ConnectionGenerationError } from './errors';
 import {
   type ToolCallHandler,
   useVoiceClient,
@@ -305,7 +305,7 @@ describe('useVoiceClient', () => {
       .connect(config, undefined, 9)
       .catch((error: unknown) => error);
 
-    expect(isConnectionGenerationError(generationError)).toBe(true);
+    expect(generationError).toBeInstanceOf(ConnectionGenerationError);
     expect(generationError).toMatchObject({
       connectionGeneration: 9,
       reason: 'not_strictly_increasing',
