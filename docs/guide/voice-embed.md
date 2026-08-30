@@ -86,6 +86,12 @@ never takes down the surrounding page.
 Instantiate `EmbeddedVoice` inside a client component. See the Next.js
 documentation on [client components][next-client].
 
+## Guides
+
+- [Embedding the widget](./embedded-widget) — behavior shared with the React
+  wrapper
+- [Authentication](./authentication) — minting a token for `auth`
+
 ## Reference
 
 | Symbol                                                                  | What it is                                                             |

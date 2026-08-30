@@ -54,15 +54,36 @@ export default defineConfig({
     sidebar: {
       '/guide/': [
         {
-          items: [{ link: '/guide/getting-started', text: 'Choose a package' }],
+          items: [
+            { link: '/guide/getting-started', text: 'Choose a package' },
+            { link: '/guide/authentication', text: 'Authentication' },
+          ],
           text: 'Getting started',
         },
         {
-          items: [{ link: '/guide/voice-react', text: '@humeai/voice-react' }],
+          items: [
+            { link: '/guide/voice-react', text: '@humeai/voice-react' },
+            { link: '/guide/tool-calls', text: 'Tool calls' },
+            { link: '/guide/error-handling', text: 'Errors and reconnection' },
+            {
+              link: '/guide/session-settings',
+              text: 'Session settings and resuming',
+            },
+            { link: '/guide/interruptions', text: 'Interruptions' },
+            {
+              link: '/guide/expression-measurement',
+              text: 'Expression measurement',
+            },
+            { link: '/guide/audio-devices', text: 'Audio devices' },
+            { link: '/guide/visualizations', text: 'Audio visualizations' },
+            { link: '/guide/diagnostics', text: 'Diagnostics and logging' },
+            { link: '/guide/nextjs', text: 'Next.js and server rendering' },
+          ],
           text: 'Build a custom UI',
         },
         {
           items: [
+            { link: '/guide/embedded-widget', text: 'Embedding the widget' },
             {
               link: '/guide/voice-embed-react',
               text: '@humeai/voice-embed-react',

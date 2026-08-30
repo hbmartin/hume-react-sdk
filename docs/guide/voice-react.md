@@ -128,6 +128,21 @@ Session settings moved off the provider in 0.2.0 precisely so that refreshing a
 token or switching configs does not remount your tree. See the
 [migration guide](./migration).
 
+## Guides
+
+| Guide                                               | Covers                                                            |
+| --------------------------------------------------- | ----------------------------------------------------------------- |
+| [Authentication](./authentication)                  | Minting access tokens, and keeping your API key off the client    |
+| [Tool calls](./tool-calls)                          | Implementing function tools and rendering their status            |
+| [Errors and reconnection](./error-handling)         | The `VoiceError` taxonomy, what rejects, and building a reconnect |
+| [Session settings and resuming](./session-settings) | Per-call configuration, and continuing an earlier conversation    |
+| [Interruptions](./interruptions)                    | What happens on barge-in                                          |
+| [Expression measurement](./expression-measurement)  | Reading and rendering prosody scores                              |
+| [Audio devices](./audio-devices)                    | Enumerating and switching microphones and speakers                |
+| [Audio visualizations](./visualizations)            | Waveforms and a call timer, without extra rerenders               |
+| [Diagnostics and logging](./diagnostics)            | Structured events for debugging a call                            |
+| [Next.js and server rendering](./nextjs)            | Client boundaries, server-side tokens, SSR safety                 |
+
 ## Reference
 
 Every export is documented with its exact signature in the

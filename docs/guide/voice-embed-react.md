@@ -83,6 +83,12 @@ quickstart above does. Treat `isEmbedOpen` as "please open", not as "is open".
 Instantiate `EmbeddedVoice` inside a client component. See the Next.js
 documentation on [client components][next-client].
 
+## Guides
+
+- [Embedding the widget](./embedded-widget) — behavior shared with the
+  framework-agnostic package, including why `isEmbedOpen` cannot close the widget
+- [Authentication](./authentication) — minting a token for the `auth` prop
+
 ## Reference
 
 | Symbol                                                                      | What it is                                 |
