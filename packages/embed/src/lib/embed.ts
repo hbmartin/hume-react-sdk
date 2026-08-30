@@ -34,6 +34,16 @@ export type CloseHandler = () => void;
 /** Called after the widget iframe reports that it is ready. */
 export type ReadyHandler = () => void;
 
+/** Runs a best-effort teardown step without interrupting the remaining cleanup. */
+function runTeardownStep(step: () => void): boolean {
+  try {
+    step();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Hume's hosted voice widget, embedded in an iframe.
  *
@@ -54,8 +64,6 @@ export type ReadyHandler = () => void;
  */
 export class EmbeddedVoice {
   private iframe: HTMLIFrameElement;
-
-  private managedContainer: HTMLElement | null = null;
 
   private config: EmbeddedVoiceConfig;
 
@@ -147,9 +155,6 @@ export class EmbeddedVoice {
     };
 
     const el = container ?? this.createContainer();
-    const previousContainerPointerEvents = el.style.pointerEvents;
-
-    this.managedContainer = el;
     this.hideIframe();
 
     let isActive = false;
@@ -159,22 +164,23 @@ export class EmbeddedVoice {
       }
       isActive = false;
       this.isReady = false;
-      this.hideIframe();
-      try {
+      runTeardownStep(() => {
         window.removeEventListener('message', messageHandler);
+      });
+      runTeardownStep(() => {
         window.removeEventListener('resize', resizeHandler);
+      });
+      const removedIframe = runTeardownStep(() => {
         this.iframe.remove();
-      } finally {
-        if (!container) {
+      });
+      if (!removedIframe) this.hideIframe();
+      if (!container) {
+        runTeardownStep(() => {
           el.remove();
-        }
-        el.style.pointerEvents = previousContainerPointerEvents;
-        if (this.managedContainer === el) {
-          this.managedContainer = null;
-        }
-        if (this.unmountActiveMount === unmount) {
-          this.unmountActiveMount = null;
-        }
+        });
+      }
+      if (this.unmountActiveMount === unmount) {
+        this.unmountActiveMount = null;
       }
     };
 
@@ -185,14 +191,16 @@ export class EmbeddedVoice {
       isActive = true;
       this.unmountActiveMount = unmount;
     } catch {
-      window.removeEventListener('message', messageHandler);
-      window.removeEventListener('resize', resizeHandler);
+      runTeardownStep(() => {
+        window.removeEventListener('message', messageHandler);
+      });
+      runTeardownStep(() => {
+        window.removeEventListener('resize', resizeHandler);
+      });
       if (!container) {
-        el.remove();
-      }
-      el.style.pointerEvents = previousContainerPointerEvents;
-      if (this.managedContainer === el) {
-        this.managedContainer = null;
+        runTeardownStep(() => {
+          el.remove();
+        });
       }
     }
 
@@ -210,7 +218,6 @@ export class EmbeddedVoice {
       margin: '24px',
       zIndex: '999999',
       fontSize: '0px',
-      pointerEvents: 'none',
     });
 
     div.id = 'hume-embedded-voice-container';
@@ -230,6 +237,7 @@ export class EmbeddedVoice {
       height: '0px',
       width: '0px',
       opacity: '0',
+      pointerEvents: 'none',
     });
 
     el.id = 'hume-embedded-voice';
@@ -350,18 +358,14 @@ export class EmbeddedVoice {
 
   private showIframe() {
     this.iframe.style.opacity = '1';
-    if (this.managedContainer) {
-      this.managedContainer.style.pointerEvents = 'all';
-    }
+    this.iframe.style.pointerEvents = 'auto';
   }
 
   private hideIframe() {
     this.iframe.style.opacity = '0';
     this.iframe.style.width = '0px';
     this.iframe.style.height = '0px';
-    if (this.managedContainer) {
-      this.managedContainer.style.pointerEvents = 'none';
-    }
+    this.iframe.style.pointerEvents = 'none';
   }
 
   private resizeIframe({ width, height }: { width: number; height: number }) {

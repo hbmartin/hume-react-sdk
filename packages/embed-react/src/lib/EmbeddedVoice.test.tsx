@@ -60,8 +60,10 @@ describe('EmbeddedVoice', () => {
   it('forwards messages and closes to the latest callbacks without remounting', () => {
     const firstOnMessage = vi.fn();
     const firstOnClose = vi.fn();
+    const firstOnReady = vi.fn();
     const latestOnMessage = vi.fn();
     const latestOnClose = vi.fn();
+    const latestOnReady = vi.fn();
     const auth = { type: 'accessToken' as const, value: 'token' };
     const { rerender } = render(
       <EmbeddedVoice
@@ -69,6 +71,7 @@ describe('EmbeddedVoice', () => {
         isEmbedOpen={false}
         onClose={firstOnClose}
         onMessage={firstOnMessage}
+        onReady={firstOnReady}
       />,
     );
     const createdConfig = embeddedVoiceMocks.create.mock.calls[0]?.[0] as
@@ -81,18 +84,22 @@ describe('EmbeddedVoice', () => {
         isEmbedOpen={false}
         onClose={latestOnClose}
         onMessage={latestOnMessage}
+        onReady={latestOnReady}
       />,
     );
     act(() => {
       createdConfig?.onMessage?.({ type: 'user_message' });
       createdConfig?.onClose?.();
+      createdConfig?.onReady?.();
     });
 
     expect(embeddedVoiceMocks.create).toHaveBeenCalledOnce();
     expect(firstOnMessage).not.toHaveBeenCalled();
     expect(firstOnClose).not.toHaveBeenCalled();
+    expect(firstOnReady).not.toHaveBeenCalled();
     expect(latestOnMessage).toHaveBeenCalledOnce();
     expect(latestOnClose).toHaveBeenCalledOnce();
+    expect(latestOnReady).toHaveBeenCalledOnce();
   });
 
   it('recreates the embed when authentication or configuration changes', () => {
@@ -371,5 +378,35 @@ describe('EmbeddedVoice', () => {
     rerender(<EmbeddedVoice auth={auth} isEmbedOpen={false} />);
 
     expect(embeddedVoiceMocks.cancelPendingOpen).toHaveBeenCalledOnce();
+  });
+
+  it('does not resurrect openOnMount after a controlled open is cancelled', () => {
+    const { rerender } = render(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'first-token' }}
+        isEmbedOpen={true}
+        openOnMount={true}
+      />,
+    );
+
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'first-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+    rerender(
+      <EmbeddedVoice
+        auth={{ type: 'accessToken', value: 'latest-token' }}
+        isEmbedOpen={false}
+        openOnMount={true}
+      />,
+    );
+
+    expect(embeddedVoiceMocks.cancelPendingOpen).toHaveBeenCalledOnce();
+    expect(embeddedVoiceMocks.create.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ openOnMount: false }),
+    );
   });
 });

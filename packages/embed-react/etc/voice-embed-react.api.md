@@ -16,6 +16,7 @@ import { JSONMessage } from '@humeai/voice-embed';
 import { LanguageModelOption } from '@humeai/voice-embed';
 import { MINIMIZE_WIDGET_ACTION } from '@humeai/voice-embed';
 import { parseClientToFrameAction } from '@humeai/voice-embed';
+import { ReadyHandler } from '@humeai/voice-embed';
 import { RESIZE_FRAME_ACTION } from '@humeai/voice-embed';
 import { SocketConfig } from '@humeai/voice-embed';
 import { ToolCall } from '@humeai/voice-embed';
@@ -42,6 +43,7 @@ export { EmbeddedVoiceConfig }
 export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> & NonNullable<Pick<EmbeddedVoiceConfig, 'auth'>> & {
     onMessage?: TranscriptMessageHandler;
     onClose?: CloseHandler;
+    onReady?: ReadyHandler;
     isEmbedOpen: boolean;
     openOnMount?: boolean;
 };

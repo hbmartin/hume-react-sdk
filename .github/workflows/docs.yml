@@ -49,6 +49,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build documentation
         run: pnpm docs:build
+      # First-time setup must select GitHub Actions in Settings > Pages.
+      # Automatic enablement requires a credential other than GITHUB_TOKEN.
       - name: Configure GitHub Pages
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5

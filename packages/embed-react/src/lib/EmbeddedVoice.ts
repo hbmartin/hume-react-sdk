@@ -2,6 +2,7 @@ import {
   type CloseHandler,
   EmbeddedVoice as EA,
   type EmbeddedVoiceConfig,
+  type ReadyHandler,
   type TranscriptMessageHandler,
 } from '@humeai/voice-embed';
 import { useEffect, useRef } from 'react';
@@ -18,6 +19,8 @@ export type EmbeddedVoiceProps = Partial<EmbeddedVoiceConfig> &
     onMessage?: TranscriptMessageHandler;
     /** Called when the user collapses the widget. */
     onClose?: CloseHandler;
+    /** Called after the current widget iframe reports that it is ready. */
+    onReady?: ReadyHandler;
     /**
      * Opens the widget when true. Changing this to false cancels an open that
      * is still waiting for iframe readiness, but does not collapse an open
@@ -68,6 +71,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     onMessage,
     isEmbedOpen,
     onClose,
+    onReady,
     openOnMount = false,
     ...config
   } = props;
@@ -76,14 +80,15 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const previousIsEmbedOpen = useRef(isEmbedOpen);
   const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
   const onCloseHandler = useRef<CloseHandler | undefined>();
-  const initialOpenOnMount = useRef(openOnMount);
-  const initialOpenOnMountPending = useRef(initialOpenOnMount.current);
+  const onReadyHandler = useRef<ReadyHandler | undefined>();
+  const initialOpenOnMountPending = useRef(openOnMount);
   const configSignature = getConfigSignature(config);
 
   useEffect(() => {
     onMessageHandler.current = onMessage;
     onCloseHandler.current = onClose;
-  }, [onClose, onMessage]);
+    onReadyHandler.current = onReady;
+  }, [onClose, onMessage, onReady]);
 
   useEffect(() => {
     const applyInitialOpenOnMount = initialOpenOnMountPending.current;
@@ -96,13 +101,13 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
         onCloseHandler.current?.();
       },
       onReady: () => {
-        if (
-          applyInitialOpenOnMount &&
-          readyInstance !== null &&
-          embeddedVoice.current === readyInstance
-        ) {
+        if (readyInstance === null || embeddedVoice.current !== readyInstance) {
+          return;
+        }
+        if (applyInitialOpenOnMount) {
           initialOpenOnMountPending.current = false;
         }
+        onReadyHandler.current?.();
       },
       openOnMount: applyInitialOpenOnMount,
       ...config,
@@ -133,6 +138,7 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
     } else if (wasEmbedOpen) {
       controlledOpenInstance.current?.cancelPendingOpen();
       controlledOpenInstance.current = null;
+      initialOpenOnMountPending.current = false;
     }
   }, [isEmbedOpen, configSignature]);
 
