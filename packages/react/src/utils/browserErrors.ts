@@ -6,12 +6,12 @@ export const getBrowserErrorName = (error: unknown): string | null => {
   return typeof error.name === 'string' ? error.name : null;
 };
 
-/** Return the message carried by a browser error, including cross-realm errors. */
+/** Return a useful message carried by a browser error, including cross-realm errors. */
 export const getBrowserErrorMessage = (error: unknown): string | null => {
   if (typeof error !== 'object' || error === null || !('message' in error)) {
     return null;
   }
-  return typeof error.message === 'string' && error.message.length > 0
+  return typeof error.message === 'string' && error.message.trim().length > 0
     ? error.message
     : null;
 };
@@ -21,11 +21,10 @@ export const normalizeBrowserError = (
   error: unknown,
   fallbackMessage: string,
 ): Error => {
-  if (error instanceof Error) return error;
+  const message = getBrowserErrorMessage(error);
+  if (error instanceof Error && message !== null) return error;
 
-  const normalized = new Error(
-    getBrowserErrorMessage(error) ?? fallbackMessage,
-  );
+  const normalized = new Error(message ?? fallbackMessage);
   const name = getBrowserErrorName(error);
   if (name !== null) normalized.name = name;
   return normalized;

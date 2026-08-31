@@ -10,7 +10,7 @@ import {
   getBrowserErrorName,
   isMicrophonePermissionDeniedError,
   normalizeBrowserError,
-} from './browserErrors';
+} from '../utils/browserErrors';
 
 /** Options for {@link useAudioDevices}. */
 export interface UseAudioDevicesOptions {

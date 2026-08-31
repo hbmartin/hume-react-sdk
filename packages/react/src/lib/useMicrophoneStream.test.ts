@@ -197,6 +197,37 @@ describe('useGetMicrophoneStream', () => {
     expect(finalTrackStop).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a retained stream owned when a later stream is acquired', async () => {
+    const retainedTrackStop = vi.fn().mockImplementationOnce(() => {
+      throw new Error('Retained stream failed to stop');
+    });
+    const currentTrackStop = vi.fn();
+    const retainedStream = {
+      getTracks: () => [{ stop: retainedTrackStop }],
+    } as unknown as MediaStream;
+    const currentStream = {
+      getTracks: () => [{ stop: currentTrackStop }],
+    } as unknown as MediaStream;
+    getUserMediaMock
+      .mockResolvedValueOnce(retainedStream)
+      .mockResolvedValueOnce(currentStream);
+    const { result } = renderHook(() => useMicrophoneStream());
+    await result.current.getStream({});
+
+    expect(() => result.current.stopStream()).toThrow(
+      'Retained stream failed to stop',
+    );
+    await result.current.getStream({});
+    result.current.stopStream();
+
+    expect(retainedTrackStop).toHaveBeenCalledTimes(2);
+    expect(currentTrackStop).toHaveBeenCalledOnce();
+
+    result.current.stopStream();
+    expect(retainedTrackStop).toHaveBeenCalledTimes(2);
+    expect(currentTrackStop).toHaveBeenCalledOnce();
+  });
+
   it('retains the owned stream when track enumeration fails', async () => {
     const trackStop = vi.fn();
     const getTracks = vi

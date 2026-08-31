@@ -1352,6 +1352,33 @@ describe('useSoundPlayer', () => {
     expect(closeAudioContext).not.toHaveBeenCalled();
   });
 
+  it('preserves a cross-realm-shaped sink-selection message', async () => {
+    const sinkFailure = {
+      message: 'speaker is unavailable',
+      name: 'NotFoundError',
+    };
+    const setSinkId = vi.fn().mockRejectedValue(sinkFailure);
+    const context = Object.assign(new AudioContext(), { setSinkId });
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await expect(
+      result.current.initPlayer('missing-speaker', context),
+    ).resolves.toBe(true);
+
+    expect(onError).toHaveBeenCalledWith(
+      'Failed to set speaker device: speaker is unavailable',
+      'audio_player_initialization_failure',
+    );
+  });
+
   it('rejects a sink selection that finishes after player reinitialization', async () => {
     const deferredSink = createDeferred<void>();
     const setSinkId = vi.fn(() => deferredSink.promise);
