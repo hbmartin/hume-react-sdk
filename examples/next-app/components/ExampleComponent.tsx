@@ -6,9 +6,11 @@ import {
   useCallDurationTimestamp,
   useVoice,
 } from '@humeai/voice-react';
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { match } from 'ts-pattern';
+import { z } from 'zod';
 
+import { HUME_ACCESS_TOKEN_ENDPOINT, HUME_VOICE_HOSTNAME } from '../utils/hume';
 import { ChatConnected } from './ChatConnected';
 import {
   Select,
@@ -29,13 +31,18 @@ const fromDeviceValue = (value: string) =>
     ? null
     : value.slice(DEVICE_VALUE_PREFIX.length);
 
-export const ExampleComponent = ({
-  accessToken,
-  configId,
-}: {
-  accessToken: string;
-  configId?: string;
-}) => {
+const ACCESS_TOKEN_RETRY_DELAY_MS = 60 * 1000;
+const MINIMUM_ACCESS_TOKEN_REFRESH_DELAY_MS = 1000;
+const AccessTokenResponseSchema = z.object({
+  accessToken: z.string().min(1),
+  refreshAt: z.number().int().positive(),
+});
+const AccessTokenErrorResponseSchema = z.object({
+  error: z.string().min(1),
+});
+type AccessTokenResponse = z.infer<typeof AccessTokenResponseSchema>;
+
+export const ExampleComponent = ({ configId }: { configId?: string }) => {
   const {
     activeInputDeviceId,
     activeOutputDeviceId,
@@ -51,6 +58,16 @@ export const ExampleComponent = ({
   const [deviceSwitchError, setDeviceSwitchError] = useState<Error | null>(
     null,
   );
+  const [accessToken, setAccessToken] = useState<AccessTokenResponse | null>(
+    null,
+  );
+  const [accessTokenError, setAccessTokenError] = useState<string | null>(null);
+  const [connectionAttemptError, setConnectionAttemptError] = useState<
+    string | null
+  >(null);
+  const [isAccessTokenLoading, setIsAccessTokenLoading] = useState(true);
+  const accessTokenRequestRef =
+    useRef<Promise<AccessTokenResponse | null> | null>(null);
   const {
     inputDevices: audioInputDevices,
     outputDevices: audioOutputDevices,
@@ -75,6 +92,102 @@ export const ExampleComponent = ({
     status.value === 'connected' ? activeInputDeviceId : selectedMicrophoneId;
   const displayedSpeakerId =
     status.value === 'connected' ? activeOutputDeviceId : selectedSpeakerId;
+
+  const refreshAccessToken = useCallback(() => {
+    if (accessTokenRequestRef.current !== null) {
+      return accessTokenRequestRef.current;
+    }
+
+    setIsAccessTokenLoading(true);
+    setAccessToken(null);
+    setAccessTokenError(null);
+
+    const request = (async (): Promise<AccessTokenResponse | null> => {
+      try {
+        const response = await fetch(HUME_ACCESS_TOKEN_ENDPOINT, {
+          method: 'POST',
+          cache: 'no-store',
+        });
+
+        let responseBody: unknown;
+        try {
+          responseBody = await response.json();
+        } catch {
+          throw new Error('The access-token endpoint returned invalid JSON.');
+        }
+
+        if (!response.ok) {
+          const errorResponse =
+            AccessTokenErrorResponseSchema.safeParse(responseBody);
+          throw new Error(
+            errorResponse.success
+              ? errorResponse.data.error
+              : 'The server could not create a Hume access token.',
+          );
+        }
+
+        const tokenResponse = AccessTokenResponseSchema.safeParse(responseBody);
+        if (!tokenResponse.success) {
+          throw new Error(
+            'The access-token endpoint returned an invalid response.',
+          );
+        }
+
+        setAccessToken(tokenResponse.data);
+        return tokenResponse.data;
+      } catch (error) {
+        setAccessToken(null);
+        setAccessTokenError(
+          error instanceof Error && error.message !== ''
+            ? error.message
+            : 'The server could not create a Hume access token.',
+        );
+        return null;
+      }
+    })();
+
+    accessTokenRequestRef.current = request;
+    void request.finally(() => {
+      if (accessTokenRequestRef.current === request) {
+        accessTokenRequestRef.current = null;
+        setIsAccessTokenLoading(false);
+      }
+    });
+
+    return request;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let refreshTimer: number | undefined;
+
+    const refreshAndSchedule = async () => {
+      const tokenResponse = await refreshAccessToken();
+      if (cancelled) {
+        return;
+      }
+
+      const refreshDelay =
+        tokenResponse === null
+          ? ACCESS_TOKEN_RETRY_DELAY_MS
+          : Math.max(
+              tokenResponse.refreshAt - Date.now(),
+              MINIMUM_ACCESS_TOKEN_REFRESH_DELAY_MS,
+            );
+      refreshTimer = window.setTimeout(() => {
+        void refreshAndSchedule();
+      }, refreshDelay);
+    };
+
+    void refreshAndSchedule();
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer !== undefined) {
+        window.clearTimeout(refreshTimer);
+      }
+    };
+  }, [refreshAccessToken]);
 
   const selectInputDevice = async (value: string) => {
     const deviceId = fromDeviceValue(value);
@@ -122,16 +235,8 @@ export const ExampleComponent = ({
     }
   };
 
-  const voiceHostname = process.env.NEXT_PUBLIC_HUME_VOICE_HOSTNAME;
-  const connectArgs = {
-    auth: {
-      type: 'accessToken' as const,
-      value: accessToken,
-    },
-    hostname:
-      voiceHostname === undefined || voiceHostname === ''
-        ? 'api.hume.ai'
-        : voiceHostname,
+  const connectOptions = {
+    hostname: HUME_VOICE_HOSTNAME,
     ...(configId !== undefined && configId !== ''
       ? {
           configId,
@@ -150,6 +255,47 @@ export const ExampleComponent = ({
         : { speakerDeviceId: selectedSpeakerId }),
     },
   };
+
+  const connectToVoice = async () => {
+    setDeviceSwitchError(null);
+    setConnectionAttemptError(null);
+
+    const usableAccessToken =
+      accessToken !== null && accessToken.refreshAt > Date.now()
+        ? accessToken
+        : await refreshAccessToken();
+    if (usableAccessToken === null) {
+      return;
+    }
+
+    try {
+      await connect({
+        ...connectOptions,
+        auth: {
+          type: 'accessToken',
+          value: usableAccessToken.accessToken,
+        },
+      });
+    } catch (error) {
+      setConnectionAttemptError(
+        error instanceof Error && error.message !== ''
+          ? error.message
+          : 'The voice connection could not be started.',
+      );
+    }
+  };
+
+  const hasUsableAccessToken = accessToken !== null;
+  const connectionFeedback = (
+    <>
+      {accessTokenError === null ? null : (
+        <div className="text-sm text-red-500">{accessTokenError}</div>
+      )}
+      {connectionAttemptError === null ? null : (
+        <div className="text-sm text-red-500">{connectionAttemptError}</div>
+      )}
+    </>
+  );
 
   const deviceSelectors = (
     <div className="flex max-w-2xl flex-col gap-4">
@@ -260,13 +406,15 @@ export const ExampleComponent = ({
 
   const connectButton = (
     <button
-      className="max-w-sm rounded border border-neutral-500 p-2"
+      className="max-w-sm rounded border border-neutral-500 p-2 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={isAccessTokenLoading && !hasUsableAccessToken}
       onClick={() => {
-        setDeviceSwitchError(null);
-        void connect(connectArgs);
+        void connectToVoice();
       }}
     >
-      Connect to voice
+      {isAccessTokenLoading && !hasUsableAccessToken
+        ? 'Preparing access token...'
+        : 'Connect to voice'}
     </button>
   );
 
@@ -303,6 +451,7 @@ export const ExampleComponent = ({
                 {callDuration}
                 {deviceSelectors}
                 {connectButton}
+                {connectionFeedback}
               </div>
             ))
             .with('connecting', () => (
@@ -336,6 +485,7 @@ export const ExampleComponent = ({
                 {callDuration}
                 {deviceSelectors}
                 {connectButton}
+                {connectionFeedback}
                 <div>
                   <span className="text-red-500">{status.reason}</span>
                 </div>
