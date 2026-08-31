@@ -1,5 +1,5 @@
 import type { Hume } from 'hume';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useReducer, useRef } from 'react';
 
 import type {
   AssistantProsodyMessage,
@@ -11,6 +11,162 @@ import type {
 import { keepLastN } from '../utils';
 import type { CloseEvent, ConnectionMessage } from './connection-message';
 
+type StoredMessage = JSONMessage | ConnectionMessage;
+
+type MessageStoreState = {
+  messages: StoredMessage[];
+  lastVoiceMessage: AssistantTranscriptMessage | null;
+  lastUserMessage: UserTranscriptMessage | null;
+  lastAssistantProsodyMessage: AssistantProsodyMessage | null;
+  chatMetadata: ChatMetadataMessage | null;
+};
+
+type MessageStoreAction =
+  | {
+      type: 'append_connection_message';
+      message: ConnectionMessage;
+      messageHistoryLimit: number;
+    }
+  | {
+      type: 'receive_message';
+      message: JSONMessage;
+      messageHistoryLimit: number;
+    }
+  | {
+      type: 'receive_user_message';
+      message: UserTranscriptMessage;
+      messageHistoryLimit: number;
+    }
+  | {
+      type: 'receive_assistant_prosody';
+      message: AssistantProsodyMessage;
+      messageHistoryLimit: number;
+    }
+  | {
+      type: 'receive_chat_metadata';
+      message: ChatMetadataMessage;
+      messageHistoryLimit: number;
+    }
+  | {
+      type: 'play_voice_message';
+      message: AssistantTranscriptMessage;
+      messageHistoryLimit: number;
+    }
+  | { type: 'clear' };
+
+const createInitialMessageStoreState = (): MessageStoreState => ({
+  messages: [],
+  lastVoiceMessage: null,
+  lastUserMessage: null,
+  lastAssistantProsodyMessage: null,
+  chatMetadata: null,
+});
+
+const addMessageKeepingInterimLast = (
+  messages: StoredMessage[],
+  messageToAdd: JSONMessage,
+  messageHistoryLimit: number,
+) => {
+  const last = messages[messages.length - 1];
+
+  if (last?.type === 'user_message' && last.interim === true) {
+    const result = messages.slice(0, -1);
+    result.push(messageToAdd, last);
+    return keepLastN(messageHistoryLimit, result);
+  }
+
+  return keepLastN(messageHistoryLimit, messages.concat([messageToAdd]));
+};
+
+const addUserMessage = (
+  messages: StoredMessage[],
+  message: UserTranscriptMessage,
+  messageHistoryLimit: number,
+) => {
+  const last = messages[messages.length - 1];
+
+  if (last?.type === 'user_message' && last.interim === true) {
+    return keepLastN(
+      messageHistoryLimit,
+      messages.slice(0, -1).concat([message]),
+    );
+  }
+
+  return keepLastN(messageHistoryLimit, messages.concat([message]));
+};
+
+const messageStoreReducer = (
+  state: MessageStoreState,
+  action: MessageStoreAction,
+): MessageStoreState => {
+  switch (action.type) {
+    case 'append_connection_message':
+      return {
+        ...state,
+        messages: keepLastN(
+          action.messageHistoryLimit,
+          state.messages.concat([action.message]),
+        ),
+        ...(action.message.type === 'socket_connected'
+          ? { chatMetadata: null }
+          : undefined),
+      };
+    case 'receive_message':
+      return {
+        ...state,
+        messages: addMessageKeepingInterimLast(
+          state.messages,
+          action.message,
+          action.messageHistoryLimit,
+        ),
+      };
+    case 'receive_user_message':
+      return {
+        ...state,
+        messages: addUserMessage(
+          state.messages,
+          action.message,
+          action.messageHistoryLimit,
+        ),
+        ...(action.message.interim === false
+          ? { lastUserMessage: action.message }
+          : undefined),
+      };
+    case 'receive_assistant_prosody':
+      return {
+        ...state,
+        messages: addMessageKeepingInterimLast(
+          state.messages,
+          action.message,
+          action.messageHistoryLimit,
+        ),
+        lastAssistantProsodyMessage: action.message,
+      };
+    case 'receive_chat_metadata':
+      return {
+        ...state,
+        messages: addMessageKeepingInterimLast(
+          state.messages,
+          action.message,
+          action.messageHistoryLimit,
+        ),
+        chatMetadata: action.message,
+      };
+    case 'play_voice_message':
+      return {
+        ...state,
+        messages: addMessageKeepingInterimLast(
+          state.messages,
+          action.message,
+          action.messageHistoryLimit,
+        ),
+        lastVoiceMessage: action.message,
+      };
+    case 'clear':
+      return createInitialMessageStoreState();
+  }
+};
+
 export const useMessages = ({
   sendMessageToParent,
   messageHistoryLimit,
@@ -21,88 +177,50 @@ export const useMessages = ({
   const voiceMessageMapRef = useRef<Record<string, AssistantTranscriptMessage>>(
     {},
   );
-
-  const [messages, setMessages] = useState<
-    Array<JSONMessage | ConnectionMessage>
-  >([]);
-
-  const [lastVoiceMessage, setLastVoiceMessage] =
-    useState<AssistantTranscriptMessage | null>(null);
-  const [lastUserMessage, setLastUserMessage] =
-    useState<UserTranscriptMessage | null>(null);
-  const [lastAssistantProsodyMessage, setLastAssistantProsodyMessage] =
-    useState<AssistantProsodyMessage | null>(null);
-
-  const [chatMetadata, setChatMetadata] = useState<ChatMetadataMessage | null>(
-    null,
+  const [state, dispatch] = useReducer(
+    messageStoreReducer,
+    undefined,
+    createInitialMessageStoreState,
   );
 
   const createConnectMessage = useCallback(() => {
-    setChatMetadata(null);
-    setMessages((prev) =>
-      keepLastN(
-        messageHistoryLimit,
-        prev.concat([
-          {
-            type: 'socket_connected',
-            receivedAt: new Date(),
-          },
-        ]),
-      ),
-    );
+    dispatch({
+      type: 'append_connection_message',
+      message: {
+        type: 'socket_connected',
+        receivedAt: new Date(),
+      },
+      messageHistoryLimit,
+    });
   }, [messageHistoryLimit]);
 
   const createSessionSettingsMessage = useCallback(
     (sessionSettings: Hume.empathicVoice.SessionSettings) => {
-      setMessages((prev) =>
-        keepLastN(
-          messageHistoryLimit,
-          prev.concat([
-            {
-              type: 'session_settings',
-              sessionSettings,
-              receivedAt: new Date(),
-            },
-          ]),
-        ),
-      );
+      dispatch({
+        type: 'append_connection_message',
+        message: {
+          type: 'session_settings',
+          sessionSettings,
+          receivedAt: new Date(),
+        },
+        messageHistoryLimit,
+      });
     },
     [messageHistoryLimit],
   );
 
   const createDisconnectMessage = useCallback(
     (event: CloseEvent) => {
-      setMessages((prev) =>
-        keepLastN(
-          messageHistoryLimit,
-          prev.concat([
-            {
-              type: 'socket_disconnected',
-              code: event.code,
-              reason: event.reason,
-              receivedAt: new Date(),
-            },
-          ]),
-        ),
-      );
-    },
-    [messageHistoryLimit],
-  );
-
-  const addMessageKeepingInterimLast = useCallback(
-    (
-      prev: Array<JSONMessage | ConnectionMessage>,
-      messageToAdd: JSONMessage,
-    ) => {
-      const last = prev[prev.length - 1];
-
-      if (last && last.type === 'user_message' && last.interim === true) {
-        const result = prev.slice(0, -1);
-        result.push(messageToAdd, last);
-        return keepLastN(messageHistoryLimit, result);
-      }
-
-      return keepLastN(messageHistoryLimit, prev.concat([messageToAdd]));
+      dispatch({
+        type: 'append_connection_message',
+        message: {
+          type: 'socket_disconnected',
+          code: event.code,
+          reason: event.reason,
+          receivedAt: new Date(),
+        },
+        messageHistoryLimit,
+      });
     },
     [messageHistoryLimit],
   );
@@ -118,27 +236,12 @@ export const useMessages = ({
           }
           break;
         case 'user_message':
-          sendMessageToParent?.(message);
-
-          if (message.interim === false) {
-            setLastUserMessage(message);
-          }
-
-          setMessages((prev) => {
-            if (prev.length === 0) {
-              return keepLastN(messageHistoryLimit, [message]);
-            }
-
-            const last = prev[prev.length - 1];
-
-            if (last && last.type === 'user_message' && last.interim === true) {
-              const result = prev.slice(0, -1);
-              result.push(message);
-              return keepLastN(messageHistoryLimit, result);
-            }
-
-            return keepLastN(messageHistoryLimit, prev.concat([message]));
+          dispatch({
+            type: 'receive_user_message',
+            message,
+            messageHistoryLimit,
           });
+          sendMessageToParent?.(message);
 
           break;
         case 'user_interruption':
@@ -148,50 +251,53 @@ export const useMessages = ({
         case 'tool_error':
         case 'assistant_end':
         case 'session_settings':
+          dispatch({ type: 'receive_message', message, messageHistoryLimit });
           sendMessageToParent?.(message);
-          setMessages((prev) => addMessageKeepingInterimLast(prev, message));
           break;
         case 'assistant_prosody':
-          setLastAssistantProsodyMessage(message);
+          dispatch({
+            type: 'receive_assistant_prosody',
+            message,
+            messageHistoryLimit,
+          });
           sendMessageToParent?.(message);
-          setMessages((prev) => addMessageKeepingInterimLast(prev, message));
           break;
         case 'chat_metadata':
+          dispatch({
+            type: 'receive_chat_metadata',
+            message,
+            messageHistoryLimit,
+          });
           sendMessageToParent?.(message);
-          setMessages((prev) => addMessageKeepingInterimLast(prev, message));
-          setChatMetadata(message);
           break;
         default:
           break;
       }
     },
-    [addMessageKeepingInterimLast, messageHistoryLimit, sendMessageToParent],
+    [messageHistoryLimit, sendMessageToParent],
   );
 
   const onPlayAudio = useCallback(
     (id: string) => {
       const matchingTranscript = voiceMessageMapRef.current[id];
       if (matchingTranscript) {
-        sendMessageToParent?.(matchingTranscript);
-        setLastVoiceMessage(matchingTranscript);
-        setMessages((prev) =>
-          addMessageKeepingInterimLast(prev, matchingTranscript),
-        );
-
-        // Remove from the map to ensure we don't push it more than once
+        dispatch({
+          type: 'play_voice_message',
+          message: matchingTranscript,
+          messageHistoryLimit,
+        });
+        // Remove the message before notifying application code so a throwing
+        // callback cannot cause the transcript to be published twice.
         delete voiceMessageMapRef.current[id];
+        sendMessageToParent?.(matchingTranscript);
       }
     },
-    [sendMessageToParent, addMessageKeepingInterimLast],
+    [messageHistoryLimit, sendMessageToParent],
   );
 
   const clearMessages = useCallback(() => {
-    setMessages([]);
-    setLastVoiceMessage(null);
-    setLastUserMessage(null);
-    setLastAssistantProsodyMessage(null);
     voiceMessageMapRef.current = {};
-    setChatMetadata(null);
+    dispatch({ type: 'clear' });
   }, []);
 
   return useMemo(
@@ -202,11 +308,11 @@ export const useMessages = ({
       onMessage,
       onPlayAudio,
       clearMessages,
-      messages,
-      lastVoiceMessage,
-      lastUserMessage,
-      lastAssistantProsodyMessage,
-      chatMetadata,
+      messages: state.messages,
+      lastVoiceMessage: state.lastVoiceMessage,
+      lastUserMessage: state.lastUserMessage,
+      lastAssistantProsodyMessage: state.lastAssistantProsodyMessage,
+      chatMetadata: state.chatMetadata,
     }),
     [
       createConnectMessage,
@@ -215,11 +321,11 @@ export const useMessages = ({
       onMessage,
       onPlayAudio,
       clearMessages,
-      messages,
-      lastVoiceMessage,
-      lastUserMessage,
-      lastAssistantProsodyMessage,
-      chatMetadata,
+      state.messages,
+      state.lastVoiceMessage,
+      state.lastUserMessage,
+      state.lastAssistantProsodyMessage,
+      state.chatMetadata,
     ],
   );
 };

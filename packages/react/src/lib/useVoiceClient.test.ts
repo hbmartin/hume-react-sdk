@@ -133,6 +133,7 @@ describe('useVoiceClient', () => {
     act(() => {
       secondConnect = result.current.connect(config, undefined, 22);
     });
+    expect(firstSocket.close).toHaveBeenCalledOnce();
     act(() => {
       secondSocket.handlers.get('message')?.({
         type: 'chat_metadata',
@@ -161,6 +162,31 @@ describe('useVoiceClient', () => {
       true,
       22,
     );
+  });
+
+  it('closes the active socket and ignores late messages on unmount', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onMessage = vi.fn<MessageHandler>();
+    const rendered = renderHook(() => useVoiceClient({ onMessage }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = rendered.result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await expect(connecting).resolves.toBe(VoiceReadyState.OPEN);
+    onMessage.mockClear();
+
+    rendered.unmount();
+
+    expect(socket.close).toHaveBeenCalledOnce();
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'user_message' } as never);
+    });
+    expect(onMessage).not.toHaveBeenCalled();
   });
 
   it('rejects when the active socket closes before opening', async () => {

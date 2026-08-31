@@ -1,5 +1,5 @@
 import { Hume, HumeClient } from 'hume';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Simplify } from 'type-fest';
 
 import type {
@@ -101,6 +101,7 @@ export type SessionSettingsUpdate = Omit<
 >;
 
 type ActiveConnection = {
+  close: () => void;
   consumerInitiated: boolean;
   socket: Hume.empathicVoice.chat.ChatSocket;
 };
@@ -255,8 +256,19 @@ export const useVoiceClient = (props: {
       const resolvedConnectionGeneration =
         connectionGeneration ?? --generatedConnectionGeneration.current;
 
-      // Abort previous attempt if any
+      // Retire the previous connection before replacing its refs. This closes
+      // an already-open socket as well as an in-flight attempt, while ensuring
+      // delayed events from the retired socket cannot affect the new session.
+      const previousConnection = activeConnection.current;
+      if (previousConnection !== null) {
+        previousConnection.consumerInitiated = true;
+        activeConnection.current = null;
+        if (client.current === previousConnection.socket) {
+          client.current = null;
+        }
+      }
       connectAbortController.current?.abort();
+      previousConnection?.close();
 
       const controller = new AbortController();
       const signal = controller.signal;
@@ -311,7 +323,13 @@ export const useVoiceClient = (props: {
         });
 
         client.current = socket;
+        let closeRequested = false;
         const connection: ActiveConnection = {
+          close: () => {
+            if (closeRequested) return;
+            closeRequested = true;
+            socket.close();
+          },
           consumerInitiated: false,
           socket,
         };
@@ -324,7 +342,7 @@ export const useVoiceClient = (props: {
 
         const abortHandler = () => {
           connection.consumerInitiated = true;
-          socket.close();
+          connection.close();
           reject(new Error('Connection attempt has been aborted'));
         };
 
@@ -708,8 +726,25 @@ export const useVoiceClient = (props: {
     connectAbortController.current?.abort();
     connectAbortController.current = null;
     setReadyState(VoiceReadyState.IDLE);
-    connection?.socket.close();
+    connection?.close();
   }, []);
+
+  useEffect(
+    () => () => {
+      const connection = activeConnection.current;
+      activeConnection.current = null;
+      if (connection !== null) {
+        connection.consumerInitiated = true;
+        if (client.current === connection.socket) {
+          client.current = null;
+        }
+      }
+      connectAbortController.current?.abort();
+      connectAbortController.current = null;
+      connection?.close();
+    },
+    [],
+  );
 
   const sendSessionSettings = useCallback(
     (sessionSettings: SessionSettingsUpdate) => {
