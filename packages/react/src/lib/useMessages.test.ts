@@ -8,7 +8,9 @@ import type { Hume } from 'hume';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  AssistantProsodyMessage,
   AssistantTranscriptMessage,
+  ChatMetadataMessage,
   JSONMessage,
   UserTranscriptMessage,
 } from '../models/messages';
@@ -115,6 +117,8 @@ describe('useMessages hook', () => {
     expect(hook.result.current.messages).toEqual([]);
     expect(hook.result.current.lastVoiceMessage).toBeNull();
     expect(hook.result.current.lastUserMessage).toBeNull();
+    expect(hook.result.current.lastAssistantProsodyMessage).toBeNull();
+    expect(hook.result.current.chatMetadata).toBeNull();
   });
 
   it('should handle connection message creation', () => {
@@ -256,12 +260,33 @@ describe('useMessages hook', () => {
       code: 1000,
       reason: 'Normal closure',
     });
+    const assistantProsodyMessage = fromPartial<AssistantProsodyMessage>({
+      type: 'assistant_prosody',
+      receivedAt: new Date(2),
+    });
+    const chatMetadataMessage = fromPartial<ChatMetadataMessage>({
+      type: 'chat_metadata',
+      chatId: 'chat-id',
+      receivedAt: new Date(3),
+    });
 
     // First, add some messages and states
     act(() => {
       hook.result.current.createConnectMessage();
       hook.result.current.createDisconnectMessage(closeEvent);
+      hook.result.current.onMessage(userMessage);
+      hook.result.current.onMessage(agentMessage);
+      hook.result.current.onPlayAudio(agentMessage.id ?? '');
+      hook.result.current.onMessage(assistantProsodyMessage);
+      hook.result.current.onMessage(chatMetadataMessage);
     });
+
+    expect(hook.result.current.lastVoiceMessage).toMatchObject(agentMessage);
+    expect(hook.result.current.lastUserMessage).toMatchObject(userMessage);
+    expect(hook.result.current.lastAssistantProsodyMessage).toMatchObject(
+      assistantProsodyMessage,
+    );
+    expect(hook.result.current.chatMetadata).toMatchObject(chatMetadataMessage);
 
     // Then, disconnect
     act(() => {
@@ -271,6 +296,65 @@ describe('useMessages hook', () => {
     expect(hook.result.current.messages).toHaveLength(0);
     expect(hook.result.current.lastVoiceMessage).toBeNull();
     expect(hook.result.current.lastUserMessage).toBeNull();
+    expect(hook.result.current.lastAssistantProsodyMessage).toBeNull();
+    expect(hook.result.current.chatMetadata).toBeNull();
+  });
+
+  it('commits user message state before notifying a throwing consumer callback', () => {
+    const callbackError = new Error('consumer callback failed');
+    const throwingCallback = vi.fn(() => {
+      throw callbackError;
+    });
+    const throwingHook = renderHook(() =>
+      useMessages({
+        messageHistoryLimit: 100,
+        sendMessageToParent: throwingCallback,
+      }),
+    );
+
+    act(() => {
+      expect(() => throwingHook.result.current.onMessage(userMessage)).toThrow(
+        callbackError,
+      );
+    });
+
+    expect(throwingHook.result.current.lastUserMessage).toMatchObject(
+      userMessage,
+    );
+    expect(throwingHook.result.current.messages).toEqual([userMessage]);
+  });
+
+  it('consumes a voice message before notifying a throwing consumer callback', () => {
+    const callbackError = new Error('consumer callback failed');
+    const throwingCallback = vi.fn(() => {
+      throw callbackError;
+    });
+    const throwingHook = renderHook(() =>
+      useMessages({
+        messageHistoryLimit: 100,
+        sendMessageToParent: throwingCallback,
+      }),
+    );
+
+    act(() => {
+      throwingHook.result.current.onMessage(agentMessage);
+    });
+    act(() => {
+      expect(() =>
+        throwingHook.result.current.onPlayAudio(agentMessage.id ?? ''),
+      ).toThrow(callbackError);
+    });
+
+    expect(throwingHook.result.current.lastVoiceMessage).toMatchObject(
+      agentMessage,
+    );
+    expect(throwingHook.result.current.messages).toEqual([agentMessage]);
+
+    act(() => {
+      throwingHook.result.current.onPlayAudio(agentMessage.id ?? '');
+    });
+    expect(throwingCallback).toHaveBeenCalledOnce();
+    expect(throwingHook.result.current.messages).toEqual([agentMessage]);
   });
 
   it('should not assign interim user messages to `lastUserMessage`, but does call `sendMessageToParent`', () => {
