@@ -2,8 +2,8 @@
 import { checkForAudioTracks } from 'hume';
 import { useCallback, useRef, useState } from 'react';
 
+import { isMicrophonePermissionDeniedError } from '../utils/browserErrors';
 import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
-import { isMicrophonePermissionDeniedError } from './browserErrors';
 
 /**
  * Browser microphone permission state reported by {@link useMicrophoneStream}.
@@ -56,7 +56,7 @@ const stopTracksAfterValidationFailure = (stream: MediaStream): void => {
 export const useMicrophoneStream = () => {
   const [permission, setPermission] =
     useState<MicrophonePermissionStatus>('prompt');
-  const currentStream = useRef<MediaStream | null>(null);
+  const ownedStreams = useRef(new Set<MediaStream>());
 
   const getStream = useCallback(
     async (audioConstraints: MediaTrackConstraints) => {
@@ -80,20 +80,34 @@ export const useMicrophoneStream = () => {
         throw e;
       }
 
-      currentStream.current = stream;
+      ownedStreams.current.add(stream);
 
       return stream;
     },
     [],
   );
 
-  const stopStream = useCallback((stream = currentStream.current) => {
-    if (stream) {
-      stopMediaStreamTracks(stream);
-      if (currentStream.current === stream) {
-        currentStream.current = null;
+  const stopStream = useCallback((stream?: MediaStream | null) => {
+    let streams: MediaStream[];
+    if (stream === undefined) {
+      streams = [...ownedStreams.current];
+    } else if (stream === null) {
+      streams = [];
+    } else {
+      streams = [stream];
+    }
+    let firstFailure: { error: unknown } | null = null;
+
+    for (const ownedStream of streams) {
+      try {
+        stopMediaStreamTracks(ownedStream);
+        ownedStreams.current.delete(ownedStream);
+      } catch (error) {
+        firstFailure ??= { error };
       }
     }
+
+    if (firstFailure !== null) throw firstFailure.error;
   }, []);
 
   return {

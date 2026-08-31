@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   clientConnect: vi.fn(),
   clientDisconnect: vi.fn(),
   clientSendAudio: vi.fn(),
+  clientSendUserInput: vi.fn(),
   contextClose: vi.fn(),
   getStream: vi.fn(),
   micStart: vi.fn(),
@@ -103,7 +104,7 @@ vi.mock('./useVoiceClient', async () => {
         sendResumeAssistantMessage: vi.fn(),
         sendSessionSettings: vi.fn(),
         sendToolMessage: vi.fn(),
-        sendUserInput: vi.fn(),
+        sendUserInput: mocks.clientSendUserInput,
       };
     },
   };
@@ -919,7 +920,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('disconnected');
   });
 
-  it('retries stream cleanup after a server close cleanup fails', async () => {
+  it('retries stream cleanup within a server-close teardown', async () => {
     const { result } = renderHook(() => useVoice(), {
       wrapper: ({ children }) => (
         <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
@@ -942,13 +943,9 @@ describe('VoiceProvider close lifecycle', () => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
     });
     await waitFor(() => expect(mocks.contextClose).toHaveBeenCalledOnce());
-    expect(mocks.stopStream).toHaveBeenCalledOnce();
-
-    await act(() => result.current.disconnect());
-
-    expect(mocks.micStop).toHaveBeenCalledTimes(2);
     expect(mocks.stopStream).toHaveBeenCalledTimes(2);
-    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
+    expect(mocks.micStop).toHaveBeenCalledOnce();
+    expect(mocks.clientDisconnect).not.toHaveBeenCalled();
     expect(result.current.status.value).toBe('disconnected');
   });
 
@@ -1192,55 +1189,64 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
-  it('starts teardown when a connect settles while still owning resources', async () => {
-    const microphoneStartError = {
-      message: 'microphone start failed',
-      name: 'NotSupportedError',
-    };
-    mocks.micStart.mockImplementationOnce(() => {
-      throw microphoneStartError;
-    });
-    const onError = vi.fn(() => {
-      throw new Error('consumer error callback failed');
-    });
-    const { result } = renderHook(() => useVoice(), {
-      wrapper: ({ children }) => (
-        <VoiceProvider diagnostics={false} onError={onError}>
-          {children}
-        </VoiceProvider>
-      ),
-    });
-
-    let firstConnect = Promise.resolve();
-    act(() => {
-      firstConnect = result.current.connect({
-        auth: { type: 'accessToken', value: 'first-token' },
-      });
-    });
-    await act(async () => {
-      await expect(firstConnect).rejects.toThrow(
-        'consumer error callback failed',
-      );
-    });
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    ['native', () => new Error('microphone start failed')],
+    [
+      'cross-realm-shaped',
+      () => ({
         message: 'microphone start failed',
-        reason: 'mic_initialization_failure',
+        name: 'NotSupportedError',
       }),
-    );
-
-    let retry = Promise.resolve();
-    act(() => {
-      retry = result.current.connect({
-        auth: { type: 'accessToken', value: 'second-token' },
+    ],
+  ])(
+    'starts teardown when a connect settles with a %s microphone failure',
+    async (_label, makeMicrophoneStartError) => {
+      const microphoneStartError = makeMicrophoneStartError();
+      mocks.micStart.mockImplementationOnce(() => {
+        throw microphoneStartError;
       });
-    });
-    await act(() => retry);
+      const onError = vi.fn(() => {
+        throw new Error('consumer error callback failed');
+      });
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false} onError={onError}>
+            {children}
+          </VoiceProvider>
+        ),
+      });
 
-    expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
-    expect(mocks.clientConnect).toHaveBeenCalledTimes(2);
-    expect(result.current.status.value).toBe('connected');
-  });
+      let firstConnect = Promise.resolve();
+      act(() => {
+        firstConnect = result.current.connect({
+          auth: { type: 'accessToken', value: 'first-token' },
+        });
+      });
+      await act(async () => {
+        await expect(firstConnect).rejects.toThrow(
+          'consumer error callback failed',
+        );
+      });
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'microphone start failed',
+          reason: 'mic_initialization_failure',
+        }),
+      );
+
+      let retry = Promise.resolve();
+      act(() => {
+        retry = result.current.connect({
+          auth: { type: 'accessToken', value: 'second-token' },
+        });
+      });
+      await act(() => retry);
+
+      expect(mocks.clientDisconnect).toHaveBeenCalledOnce();
+      expect(mocks.clientConnect).toHaveBeenCalledTimes(2);
+      expect(result.current.status.value).toBe('connected');
+    },
+  );
 
   it('joins the active attempt when later non-auth options differ', async () => {
     const stream = createDeferred<MediaStream>();
@@ -1324,40 +1330,46 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('error');
   });
 
-  it('preserves player initialization errors when attempt cleanup fails', async () => {
-    mocks.playerInit.mockRejectedValueOnce({
-      message: 'player init failed',
-      name: 'NotSupportedError',
-    });
-    mocks.playerStopForContext.mockRejectedValueOnce(
-      new Error('player cleanup failed'),
-    );
-    const onError = vi.fn();
-    const { result } = renderHook(() => useVoice(), {
-      wrapper: ({ children }) => (
-        <VoiceProvider diagnostics={false} onError={onError}>
-          {children}
-        </VoiceProvider>
-      ),
-    });
+  it.each([
+    ['native', () => new Error('player init failed')],
+    [
+      'cross-realm-shaped',
+      () => ({ message: 'player init failed', name: 'NotSupportedError' }),
+    ],
+  ])(
+    'preserves a %s player initialization error when attempt cleanup fails',
+    async (_label, makePlayerInitError) => {
+      mocks.playerInit.mockRejectedValueOnce(makePlayerInitError());
+      mocks.playerStopForContext.mockRejectedValueOnce(
+        new Error('player cleanup failed'),
+      );
+      const onError = vi.fn();
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false} onError={onError}>
+            {children}
+          </VoiceProvider>
+        ),
+      });
 
-    await act(() =>
-      result.current.connect({
-        auth: { type: 'accessToken', value: 'test-token' },
-      }),
-    );
+      await act(() =>
+        result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
 
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: 'player init failed',
-        reason: 'audio_player_initialization_failure',
-      }),
-    );
-    expect(result.current.status).toEqual({
-      value: 'error',
-      reason: 'player init failed',
-    });
-  });
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'player init failed',
+          reason: 'audio_player_initialization_failure',
+        }),
+      );
+      expect(result.current.status).toEqual({
+        value: 'error',
+        reason: 'player init failed',
+      });
+    },
+  );
 
   it('retries cleanup when a finalizer fails', async () => {
     const { result } = renderHook(() => useVoice(), {
@@ -1517,40 +1529,49 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('disconnected');
   });
 
-  it('releases the microphone stream when AudioContext construction throws', async () => {
-    const onError = vi.fn();
-    const contextError = {
-      message: 'context unavailable',
-      name: 'NotSupportedError',
-    };
-    globalThis.AudioContext = vi.fn(() => {
-      throw contextError;
-    }) as unknown as typeof AudioContext;
-    const stream = { id: 'captured-stream' } as unknown as MediaStream;
-    mocks.getStream.mockResolvedValueOnce(stream);
-    const { result } = renderHook(() => useVoice(), {
-      wrapper: ({ children }) => (
-        <VoiceProvider onError={onError}>{children}</VoiceProvider>
-      ),
-    });
+  it.each([
+    [
+      'native DOMException',
+      () => new DOMException('context unavailable', 'NotSupportedError'),
+    ],
+    [
+      'cross-realm-shaped error',
+      () => ({ message: 'context unavailable', name: 'NotSupportedError' }),
+    ],
+  ])(
+    'releases the microphone stream when AudioContext construction throws a %s',
+    async (_label, makeContextError) => {
+      const onError = vi.fn();
+      const contextError = makeContextError();
+      globalThis.AudioContext = vi.fn(() => {
+        throw contextError;
+      }) as unknown as typeof AudioContext;
+      const stream = { id: 'captured-stream' } as unknown as MediaStream;
+      mocks.getStream.mockResolvedValueOnce(stream);
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider onError={onError}>{children}</VoiceProvider>
+        ),
+      });
 
-    await act(() =>
-      result.current.connect({
-        auth: { type: 'accessToken', value: 'test-token' },
-      }),
-    );
+      await act(() =>
+        result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
 
-    await waitFor(() => expect(result.current.status.value).toBe('error'));
-    expect(mocks.stopStream).toHaveBeenCalledWith(stream);
-    expect(mocks.playerInit).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: 'context unavailable',
-        reason: 'audio_player_initialization_failure',
-        type: 'audio_error',
-      }),
-    );
-  });
+      await waitFor(() => expect(result.current.status.value).toBe('error'));
+      expect(mocks.stopStream).toHaveBeenCalledWith(stream);
+      expect(mocks.playerInit).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'context unavailable',
+          reason: 'audio_player_initialization_failure',
+          type: 'audio_error',
+        }),
+      );
+    },
+  );
 
   it('does not publish an AudioContext error from a canceled connection', async () => {
     const onError = vi.fn();
@@ -2056,6 +2077,72 @@ describe('VoiceProvider close lifecycle', () => {
       });
     },
   );
+
+  it('preserves a microphone replacement failure when candidate cleanup also fails', async () => {
+    const replacementFailure = {
+      message: 'replacement recorder failed',
+      name: 'NotSupportedError',
+    };
+    const cleanupFailure = {
+      message: 'candidate stream cleanup failed',
+      name: 'AbortError',
+    };
+    const candidateStream = { id: 'candidate' } as unknown as MediaStream;
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.getStream.mockResolvedValueOnce(candidateStream);
+    mocks.micReplace.mockRejectedValueOnce(replacementFailure);
+    mocks.stopStream.mockImplementationOnce(() => {
+      throw cleanupFailure;
+    });
+
+    const switchError = await result.current
+      .setInputDevice('next-mic')
+      .catch((error: unknown) => error);
+
+    expect(switchError).toMatchObject({
+      cause: replacementFailure,
+      kind: 'audioinput',
+      reason: 'switch_failed',
+    });
+    expect(mocks.stopStream).toHaveBeenCalledWith(candidateStream);
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.value).toBe('connected');
+  });
+
+  it('preserves a cross-realm-shaped socket send message', async () => {
+    const sendFailure = {
+      message: 'socket is no longer writable',
+      name: 'InvalidStateError',
+    };
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+    mocks.clientSendUserInput.mockImplementationOnce(() => {
+      throw sendFailure;
+    });
+
+    act(() => result.current.sendUserInput('hello'));
+
+    await waitFor(() =>
+      expect(result.current.error).toMatchObject({
+        message: 'socket is no longer writable',
+        reason: 'failed_to_send_message',
+        type: 'socket_error',
+      }),
+    );
+  });
 
   it('maps unsupported output switching without disrupting playback', async () => {
     const unsupportedError = new DOMException(

@@ -27,15 +27,15 @@ import type {
   UserTranscriptMessage,
 } from '../models/messages';
 import {
+  getBrowserErrorMessage,
+  getBrowserErrorName,
+  isMicrophonePermissionDeniedError,
+} from '../utils/browserErrors';
+import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
 } from '../utils/closeAudioContextWithTimeout';
 import { getAuthStrategyError } from './auth';
-import {
-  getBrowserErrorMessage,
-  getBrowserErrorName,
-  isMicrophonePermissionDeniedError,
-} from './browserErrors';
 import type { ConnectionMessage } from './connection-message';
 import {
   createVoiceDiagnosticsReporter,
@@ -174,7 +174,7 @@ const getDeviceSwitchReason = (
   error: unknown,
 ): AudioDeviceSwitchErrorReason => {
   const name = getBrowserErrorName(error);
-  if (isMicrophonePermissionDeniedError(error)) {
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
     return 'permission_denied';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
@@ -1159,6 +1159,21 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const playerIsPlayingRef = useLatestRef(player.isPlaying);
 
   const { getStream, stopStream } = useMicrophoneStream();
+  const stopOwnedMicrophoneStreams = useCallback(() => {
+    try {
+      stopStream();
+    } catch (firstFailure) {
+      try {
+        stopStream();
+      } catch (retryFailure) {
+        const firstDetail =
+          getBrowserErrorMessage(firstFailure) ?? 'Unknown error';
+        const retryDetail =
+          getBrowserErrorMessage(retryFailure) ?? 'Unknown error';
+        throw new Error(`${firstDetail}; cleanup retry failed: ${retryDetail}`);
+      }
+    }
+  }, [stopStream]);
 
   const runForcedCleanup = useCallback(
     async (
@@ -1486,7 +1501,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
           if (closeCleanupStillOwnsResources()) {
             try {
-              stopStream();
+              stopOwnedMicrophoneStreams();
               microphoneStreamStopped = true;
             } catch (failure) {
               failures.push(getBrowserErrorMessage(failure) ?? 'Unknown error');
@@ -1552,7 +1567,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
                     {
                       label: 'Microphone stream cleanup failed',
                       run: () => {
-                        stopStream();
+                        stopOwnedMicrophoneStreams();
                         microphoneStreamStopped = true;
                       },
                     },
@@ -1590,7 +1605,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         setErrorStatus,
         isCurrentLifecycleGeneration,
         markAllResourcesDisconnected,
-        stopStream,
+        stopOwnedMicrophoneStreams,
         stopTimer,
         toolStatusClearStore,
         trackResourceCleanup,
@@ -1706,15 +1721,32 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
 
           const candidateStream = await getStream(candidateConstraints);
+          const stopCandidateStream = () => {
+            try {
+              stopStream(candidateStream);
+            } catch (cleanupError) {
+              diagnostics.emit({
+                level: 'warn',
+                category: 'microphone',
+                name: 'resource.cleanup_failed',
+                details: {
+                  resource: 'microphone',
+                  message:
+                    'Failed to release an uncommitted input-device stream.',
+                  error: cleanupError,
+                },
+              });
+            }
+          };
           if (!isCurrent()) {
-            stopStream(candidateStream);
+            stopCandidateStream();
             throw createDeviceSwitchError('audioinput', 'interrupted');
           }
 
           try {
             await micReplace(candidateStream, sharedContext);
           } catch (cause) {
-            stopStream(candidateStream);
+            stopCandidateStream();
             throw createDeviceSwitchError('audioinput', 'switch_failed', cause);
           }
 
@@ -1843,7 +1875,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         details: { control: 'assistant_pause', value: true },
       });
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
+      const message = getBrowserErrorMessage(e) ?? 'Unknown error';
       updateError({
         type: 'socket_error',
         reason: 'failed_to_send_message',
@@ -1864,7 +1896,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         details: { control: 'assistant_pause', value: false },
       });
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Unknown error';
+      const message = getBrowserErrorMessage(e) ?? 'Unknown error';
       updateError({
         type: 'socket_error',
         reason: 'failed_to_send_message',
@@ -2508,7 +2540,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           await attempt('Microphone cleanup failed', micStop);
           if (!rawCleanupStillOwnsLifecycle()) return;
           releaseMicrophoneFlush();
-          await attempt('Microphone stream cleanup failed', stopStream);
+          await attempt(
+            'Microphone stream cleanup failed',
+            stopOwnedMicrophoneStreams,
+          );
           if (!rawCleanupStillOwnsLifecycle()) return;
 
           // Shut down the websocket before the audio player.
@@ -2560,7 +2595,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             sharedContextToClose,
             [
               { label: 'Call timer cleanup failed', run: stopTimer },
-              { label: 'Microphone stream cleanup failed', run: stopStream },
+              {
+                label: 'Microphone stream cleanup failed',
+                run: stopOwnedMicrophoneStreams,
+              },
               ...(clientReadyStateRef.current !== VoiceReadyState.CLOSED
                 ? [
                     {
@@ -2606,7 +2644,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       isCurrentLifecycleGeneration,
       markAllResourcesDisconnected,
       stopTimer,
-      stopStream,
+      stopOwnedMicrophoneStreams,
       micStop,
       clientReadyStateRef,
       clientDisconnect,
@@ -2778,7 +2816,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       try {
         clientSendUserInput(text);
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         updateError({
           type: 'socket_error',
           reason: 'failed_to_send_message',
@@ -2809,7 +2847,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       try {
         clientSendAssistantInput(text);
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         updateError({
           type: 'socket_error',
           reason: 'failed_to_send_message',
@@ -2838,7 +2876,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       try {
         clientSendSessionSettings(sessionSettings);
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         updateError({
           type: 'socket_error',
           reason: 'failed_to_send_message',
@@ -2873,7 +2911,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       try {
         clientSendToolMessage(message);
       } catch (e) {
-        const errorMessage = e instanceof Error ? e.message : 'Unknown error';
+        const errorMessage = getBrowserErrorMessage(e) ?? 'Unknown error';
         updateError({
           type: 'socket_error',
           reason: 'failed_to_send_message',

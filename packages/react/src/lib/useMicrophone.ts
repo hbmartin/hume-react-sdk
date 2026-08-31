@@ -2,6 +2,7 @@
 import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { getBrowserErrorMessage } from '../utils/browserErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
 import {
@@ -218,8 +219,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           tracksToStop = streamToStop.getTracks();
         } catch (error) {
           tracksEnumerated = false;
-          const message =
-            error instanceof Error ? error.message : 'Unknown error';
+          const message = getBrowserErrorMessage(error) ?? 'Unknown error';
           failures.push(`Media track enumeration failed: ${message}`);
         }
       }
@@ -325,8 +325,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           }
           if (errorName !== 'InvalidStateError') {
             recorderStopped = false;
-            const message =
-              error instanceof Error ? error.message : 'Unknown error';
+            const message = getBrowserErrorMessage(error) ?? 'Unknown error';
             failures.push(`Recorder cleanup failed: ${message}`);
             if (!restoreOnFailure) {
               removeDataHandler();
@@ -405,8 +404,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             track.stop();
           } catch (error) {
             tracksStopped = false;
-            const message =
-              error instanceof Error ? error.message : 'Unknown error';
+            const message = getBrowserErrorMessage(error) ?? 'Unknown error';
             failures.push(
               `Media track ${index + 1} cleanup failed: ${message}`,
             );
@@ -462,7 +460,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const reportClosureFailure = useCallback(
     (message: string, error: unknown) => {
-      const detail = error instanceof Error ? error.message : 'Unknown error';
+      const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
       onErrorRef.current?.(`${message}: ${detail}`, 'mic_closure_failure');
     },
     [onErrorRef],
@@ -512,7 +510,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         startFftAnalyzer(stream);
       } catch (e: unknown) {
         stopFftAnalyzer();
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         diagnostics.current?.emit({
           level: 'warn',
           category: 'microphone',
@@ -735,8 +733,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         startFftAnalyzer(stream);
       } catch (error) {
         stopFftAnalyzer();
-        const message =
-          error instanceof Error ? error.message : 'Unknown error';
+        const message = getBrowserErrorMessage(error) ?? 'Unknown error';
         diagnostics.current?.emit({
           level: 'warn',
           category: 'microphone',

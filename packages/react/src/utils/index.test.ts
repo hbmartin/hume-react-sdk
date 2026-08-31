@@ -63,10 +63,9 @@ describe('requestAudioDevicePermission', () => {
     }
   });
 
-  it('attempts every track before reporting a cleanup failure', async () => {
-    const cleanupFailure = new Error('First track failed to stop');
+  it('retries every track without reporting cleanup as a permission failure', async () => {
     const firstTrackStop = vi.fn(() => {
-      throw cleanupFailure;
+      throw new Error('First track failed to stop');
     });
     const finalTrackStop = vi.fn();
     Object.defineProperty(navigator, 'mediaDevices', {
@@ -79,8 +78,8 @@ describe('requestAudioDevicePermission', () => {
       },
     });
 
-    await expect(requestAudioDevicePermission()).rejects.toBe(cleanupFailure);
-    expect(firstTrackStop).toHaveBeenCalledOnce();
-    expect(finalTrackStop).toHaveBeenCalledOnce();
+    await expect(requestAudioDevicePermission()).resolves.toBeUndefined();
+    expect(firstTrackStop).toHaveBeenCalledTimes(2);
+    expect(finalTrackStop).toHaveBeenCalledTimes(2);
   });
 });

@@ -6,7 +6,7 @@ import {
   useCallDurationTimestamp,
   useVoice,
 } from '@humeai/voice-react';
-import { type ReactNode, useState } from 'react';
+import { useState } from 'react';
 import { match } from 'ts-pattern';
 
 import { ChatConnected } from './ChatConnected';
@@ -70,31 +70,11 @@ export const ExampleComponent = ({
   const selectableOutputDevices = audioOutputDevices.filter(
     (device) => device.deviceId !== '',
   );
+  const displayedDeviceError = permissionError ?? deviceError;
   const displayedMicrophoneId =
     status.value === 'connected' ? activeInputDeviceId : selectedMicrophoneId;
   const displayedSpeakerId =
     status.value === 'connected' ? activeOutputDeviceId : selectedSpeakerId;
-  let deviceAccessFeedback: ReactNode = null;
-  if (deviceError !== null) {
-    deviceAccessFeedback = (
-      <div className="text-sm text-red-500">{deviceError.message}</div>
-    );
-  }
-  if (permissionDenied) {
-    deviceAccessFeedback = (
-      <div className="text-sm text-amber-700">
-        Microphone permission was denied. You can still connect using the
-        browser default device.
-      </div>
-    );
-  }
-  if (permissionError !== null) {
-    deviceAccessFeedback = (
-      <div className="text-sm text-red-500">
-        Microphone access is blocked or unavailable. {permissionError.message}
-      </div>
-    );
-  }
 
   const selectInputDevice = async (value: string) => {
     const deviceId = fromDeviceValue(value);
@@ -256,7 +236,20 @@ export const ExampleComponent = ({
           ? 'Refreshing devices...'
           : 'Enable device selection'}
       </button>
-      {deviceAccessFeedback}
+      {permissionDenied ? (
+        <div className="text-sm text-amber-700">
+          Microphone permission was denied. You can still connect using the
+          browser default device.
+        </div>
+      ) : null}
+      {displayedDeviceError ? (
+        <div className="text-sm text-red-500">
+          {permissionError !== null
+            ? 'Microphone access is blocked or unavailable. '
+            : null}
+          {displayedDeviceError.message}
+        </div>
+      ) : null}
       {status.value === 'connected' && deviceSwitchError ? (
         <div className="text-sm text-red-500">
           {deviceSwitchError.message} The call is still connected.

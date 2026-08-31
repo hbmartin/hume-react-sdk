@@ -2,6 +2,7 @@ import { convertBase64ToBlob } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { AudioOutputMessage } from '../models/messages';
+import { getBrowserErrorMessage } from '../utils/browserErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
@@ -186,8 +187,7 @@ const useSoundPlayerImplementation = (
         try {
           action();
         } catch (error) {
-          const detail =
-            error instanceof Error ? error.message : 'Unknown error';
+          const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
           failures.push(`${label}: ${detail}`);
         }
       };
@@ -474,7 +474,7 @@ const useSoundPlayerImplementation = (
               return await abandonInitialization();
             }
             onError.current(
-              `Failed to set speaker device: ${e instanceof Error ? e.message : 'Unknown error'}`,
+              `Failed to set speaker device: ${getBrowserErrorMessage(e) ?? 'Unknown error'}`,
               'audio_player_initialization_failure',
             );
             // Continue initialization even if setSinkId fails
@@ -743,7 +743,7 @@ const useSoundPlayerImplementation = (
           }
         }
       } catch (e) {
-        const eMessage = e instanceof Error ? e.message : 'Unknown error';
+        const eMessage = getBrowserErrorMessage(e) ?? 'Unknown error';
         onError.current(
           `Failed to add clip to queue: ${eMessage}`,
           'malformed_audio',
@@ -898,8 +898,7 @@ const useSoundPlayerImplementation = (
         try {
           action();
         } catch (error) {
-          const detail =
-            error instanceof Error ? error.message : 'Unknown error';
+          const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
           failures.push(`${label}: ${detail}`);
         }
       };
@@ -942,7 +941,7 @@ const useSoundPlayerImplementation = (
           await disposePlayerResources(resourcesToStop);
         } catch (error) {
           failures.push(
-            error instanceof Error ? error.message : 'Unknown cleanup error',
+            getBrowserErrorMessage(error) ?? 'Unknown cleanup error',
           );
         }
       }
@@ -1017,7 +1016,7 @@ const useSoundPlayerImplementation = (
       try {
         await stopAllTracked(expectedContext);
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         onError.current?.(
           `Failed to stop audio player: ${message}`,
           'audio_player_closure_failure',
@@ -1042,7 +1041,7 @@ const useSoundPlayerImplementation = (
       try {
         resources?.worklet?.port.postMessage({ type: 'fadeAndClear' });
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Unknown error';
+        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         onError.current?.(
           `Failed to clear audio worklet queue: ${message}`,
           'audio_player_closure_failure',

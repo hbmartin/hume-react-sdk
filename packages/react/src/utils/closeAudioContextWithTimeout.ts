@@ -1,3 +1,5 @@
+import { normalizeBrowserError } from './browserErrors';
+
 /** Keep teardown from indefinitely blocking errors, replacement, or stop. */
 const AUDIO_CONTEXT_CLOSE_TIMEOUT_MS = 1_000;
 
@@ -9,20 +11,8 @@ export type AudioContextCloseResult =
       reason: 'rejected' | 'timeout';
     };
 
-const toError = (error: unknown): Error => {
-  if (error instanceof Error) {
-    return error;
-  }
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return new Error(error.message);
-  }
-  return new Error('Unknown audio context error');
-};
+const toError = (error: unknown): Error =>
+  normalizeBrowserError(error, 'Unknown audio context error');
 
 export const closeAudioContextWithTimeout = async (
   context: AudioContext,

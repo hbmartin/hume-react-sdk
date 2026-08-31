@@ -48,6 +48,25 @@ describe('closeAudioContextWithTimeout', () => {
     expect(rejectedResult.reason).toBe('rejected');
   });
 
+  it('normalizes an empty cross-realm-shaped rejection', async () => {
+    const close = vi.fn().mockRejectedValue({
+      message: ' \n ',
+      name: 'InvalidStateError',
+    });
+
+    const result = await closeAudioContextWithTimeout(createContext(close));
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error('Expected audio context close to fail.');
+    }
+    expect(result.error).toMatchObject({
+      message: 'Unknown audio context error',
+      name: 'InvalidStateError',
+    });
+    expect(result.reason).toBe('rejected');
+  });
+
   it('resolves after one second when close never settles', async () => {
     vi.useFakeTimers();
     const close = vi.fn(() => new Promise<void>(() => {}));

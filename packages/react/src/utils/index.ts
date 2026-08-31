@@ -59,7 +59,19 @@ export const requestAudioDevicePermission = async (): Promise<void> => {
     throw error;
   }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  stopMediaStreamTracks(stream);
+  try {
+    stopMediaStreamTracks(stream);
+  } catch {
+    // Permission was granted successfully. Track cleanup is best effort here
+    // because reporting it as a capture failure would misstate permission state.
+    try {
+      stopMediaStreamTracks(stream);
+    } catch {
+      // MediaStreamTrack.stop() is idempotent and does not normally throw. If a
+      // nonstandard implementation still fails, there is no stream to return to
+      // the caller for further cleanup.
+    }
+  }
 };
 
 /**
