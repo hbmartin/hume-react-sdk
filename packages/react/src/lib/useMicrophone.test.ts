@@ -373,6 +373,118 @@ describe('useMicrophone', () => {
     expect(onStopRecording).toHaveBeenCalledOnce();
   });
 
+  it('retries a failed previous-stream cleanup before committing a replacement', async () => {
+    const firstFailure = new Error('old track was temporarily busy');
+    const oldTrackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw firstFailure;
+      })
+      .mockImplementationOnce(() => undefined);
+    const candidateTrackStop = vi.fn();
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(
+      createStream([
+        { enabled: true, stop: oldTrackStop } as unknown as MediaStreamTrack,
+      ]),
+      context,
+    );
+
+    await act(() =>
+      result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: candidateTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      ),
+    );
+
+    expect(oldTrackStop).toHaveBeenCalledTimes(2);
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+
+    await act(() => result.current.stop());
+    expect(oldTrackStop).toHaveBeenCalledTimes(2);
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    consoleWarn.mockRestore();
+  });
+
+  it('retries a retained stream during the next replacement', async () => {
+    const firstFailure = new Error('old track cleanup failed');
+    const retryFailure = new DOMException(
+      'old track cleanup retry failed',
+      'AbortError',
+    );
+    const oldTrackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw firstFailure;
+      })
+      .mockImplementationOnce(() => {
+        throw retryFailure;
+      })
+      .mockImplementationOnce(() => undefined);
+    const candidateTrackStop = vi.fn();
+    const nextCandidateTrackStop = vi.fn();
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(
+      createStream([
+        { enabled: true, stop: oldTrackStop } as unknown as MediaStreamTrack,
+      ]),
+      context,
+    );
+
+    await act(() =>
+      result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: candidateTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      ),
+    );
+
+    expect(oldTrackStop).toHaveBeenCalledTimes(2);
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+    const cleanupEvent = consoleWarn.mock.calls[0]?.[1] as unknown as
+      | VoiceDiagnosticEvent
+      | undefined;
+    const cleanupError = cleanupEvent?.details['error'];
+    expect(cleanupError).toMatchObject({
+      name: 'AggregateError',
+      message: 'Failed to retire previous microphone resources after retry.',
+    });
+
+    await act(() =>
+      result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: nextCandidateTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      ),
+    );
+    expect(oldTrackStop).toHaveBeenCalledTimes(3);
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(nextCandidateTrackStop).not.toHaveBeenCalled();
+
+    await act(() => result.current.stop());
+    expect(nextCandidateTrackStop).toHaveBeenCalledOnce();
+    consoleWarn.mockRestore();
+  });
+
   it('preserves mute state across a replacement', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const oldTrack = {

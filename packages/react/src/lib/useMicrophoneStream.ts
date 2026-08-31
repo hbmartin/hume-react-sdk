@@ -87,6 +87,15 @@ export const useMicrophoneStream = () => {
     [],
   );
 
+  /**
+   * Stops microphone streams and releases ownership of each owned stream that
+   * stops successfully. An owned stream that fails to stop remains available
+   * for a later cleanup attempt.
+   *
+   * @param stream - Omit to stop every owned stream. Pass a stream to stop only
+   * that stream, whether or not it is owned. Pass `null` to stop nothing, which
+   * lets callers safely forward a nullable stream reference.
+   */
   const stopStream = useCallback((stream?: MediaStream | null) => {
     let streams: MediaStream[];
     if (stream === undefined) {

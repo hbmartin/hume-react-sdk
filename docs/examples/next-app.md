@@ -12,15 +12,19 @@ message history, and FFT visualization.
 This page is a tour of what each part demonstrates and which guide covers it.
 For setup and environment variables, see the [example's README][readme].
 
-## Minting a token on the server
+## Minting and refreshing a token on the server
 
-`app/page.tsx` is a server component. It calls `fetchAccessToken` with the API
-key and secret key, then passes only the short-lived token to the client — so
-the long-lived secret never reaches the browser.
+`app/page.tsx` is a server component. It checks that the API key and secret key
+exist and renders a setup screen when they do not, which is why the app is safe
+to start before filling in `.env.local`.
 
-It also degrades rather than crashing: with no keys configured it renders a
-setup screen, which is why the app is safe to start before filling in
-`.env.local`.
+The credentials themselves live behind a module marked `server-only`.
+`app/api/access-token/route.ts` calls `fetchAccessToken`, validates the result,
+and returns only the short-lived token through a private, non-cacheable
+response. The server reuses a token for at most 25 minutes, while
+`components/ExampleComponent.tsx` calls the route again before that window
+ends. A tab can therefore reconnect after the original token expires without
+ever receiving the long-lived API key or secret key.
 
 → [`@humeai/voice-react` guide](../guide/voice-react)
 
@@ -53,7 +57,9 @@ present.
 
 `components/ExampleComponent.tsx` matches exhaustively over `status.value` with
 `ts-pattern`'s `.exhaustive()`, so a new status becomes a type error rather than
-a silently unhandled branch — a pattern worth copying.
+a silently unhandled branch. It also validates token-route responses and shows
+token or connection failures beside the connect control rather than allowing an
+unhandled promise rejection.
 
 ## Audio devices
 

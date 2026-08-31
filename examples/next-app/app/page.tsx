@@ -1,14 +1,10 @@
-import { fetchAccessToken } from 'hume';
-
 import { Voice } from '../components/Voice';
+import { hasHumeCredentials } from '../utils/get-hume-access-token';
 
-export default async function Home() {
-  if (
-    process.env['HUME_API_KEY'] === undefined ||
-    process.env['HUME_API_KEY'] === '' ||
-    process.env['HUME_SECRET_KEY'] === undefined ||
-    process.env['HUME_SECRET_KEY'] === ''
-  ) {
+export const dynamic = 'force-dynamic';
+
+export default function Home() {
+  if (!hasHumeCredentials()) {
     return (
       <div className={'p-6'}>
         <h1 className={'my-4 text-lg font-medium'}>Hume EVI React Example</h1>
@@ -18,20 +14,12 @@ export default async function Home() {
       </div>
     );
   }
-  const accessToken = await fetchAccessToken({
-    apiKey: process.env['HUME_API_KEY'],
-    secretKey: process.env['HUME_SECRET_KEY'],
-  });
-
   const configId = process.env['HUME_CONFIG_ID'];
 
   return (
     <div className={'p-6'}>
       <h1 className={'my-4 text-lg font-medium'}>Hume EVI React Example</h1>
-      <Voice
-        accessToken={accessToken}
-        {...(configId === undefined ? {} : { configId })}
-      />
+      <Voice {...(configId === undefined ? {} : { configId })} />
     </div>
   );
 }

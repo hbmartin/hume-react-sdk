@@ -5,13 +5,7 @@ import { z } from 'zod';
 
 import { ExampleComponent } from './ExampleComponent';
 
-export const Voice = ({
-  accessToken,
-  configId,
-}: {
-  accessToken: string;
-  configId?: string;
-}) => {
+export const Voice = ({ configId }: { configId?: string }) => {
   const [enableAudioWorklet, setEnableAudioWorklet] = useState(true);
 
   const onToolCall = useCallback<ToolCallHandler>(
@@ -161,10 +155,7 @@ export const Voice = ({
           }
         }}
       >
-        <ExampleComponent
-          accessToken={accessToken}
-          {...(configId === undefined ? {} : { configId })}
-        />
+        <ExampleComponent {...(configId === undefined ? {} : { configId })} />
       </VoiceProvider>
     </>
   );
