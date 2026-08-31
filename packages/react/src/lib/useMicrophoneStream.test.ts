@@ -9,6 +9,8 @@ vi.mock('hume', () => ({
 }));
 
 const getUserMediaMock = vi.fn<() => Promise<MediaStream>>();
+const createStream = (tracks: MediaStreamTrack[] = []) =>
+  ({ getTracks: () => tracks }) as unknown as MediaStream;
 const originalMediaDevices = Object.getOwnPropertyDescriptor(
   window.navigator,
   'mediaDevices',
@@ -226,6 +228,46 @@ describe('useGetMicrophoneStream', () => {
     result.current.stopStream();
     expect(retainedTrackStop).toHaveBeenCalledTimes(2);
     expect(currentTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('reports failures from every owned stream in one cleanup pass', async () => {
+    const firstFailure = new Error('First owned stream failed');
+    const secondFailure = new Error('Second owned stream failed');
+    const firstTrackStop = vi.fn(() => {
+      throw firstFailure;
+    });
+    const secondTrackStop = vi.fn(() => {
+      throw secondFailure;
+    });
+    getUserMediaMock
+      .mockResolvedValueOnce(
+        createStream([{ stop: firstTrackStop } as unknown as MediaStreamTrack]),
+      )
+      .mockResolvedValueOnce(
+        createStream([
+          { stop: secondTrackStop } as unknown as MediaStreamTrack,
+        ]),
+      );
+    const { result } = renderHook(() => useMicrophoneStream());
+    await result.current.getStream({});
+    await result.current.getStream({});
+
+    const cleanupError = (() => {
+      try {
+        result.current.stopStream();
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(cleanupError).toBeInstanceOf(AggregateError);
+    expect((cleanupError as AggregateError).errors).toEqual([
+      firstFailure,
+      secondFailure,
+    ]);
+    expect(firstTrackStop).toHaveBeenCalledOnce();
+    expect(secondTrackStop).toHaveBeenCalledOnce();
   });
 
   it('retains the owned stream when track enumeration fails', async () => {

@@ -24,6 +24,11 @@ Use `fetchAccessToken` from the `hume` package, which is a dependency of
 `@humeai/voice-react`, and call it somewhere the secret key is safe — a server
 component, a route handler, or your own backend.
 
+If you use a route handler, authenticate and authorize the application user
+before minting or returning a cached token. A same-origin URL, CORS policy, or
+`Origin` header is not user authentication; callers that can reach an open
+route can otherwise spend the Hume account associated with your credentials.
+
 ```tsx
 // app/page.tsx — a React Server Component
 import { fetchAccessToken } from 'hume';

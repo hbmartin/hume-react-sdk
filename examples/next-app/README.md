@@ -29,15 +29,24 @@ pnpm install
 pnpm --filter example-next-app dev
 ```
 
-Then open <http://localhost:3003>. (`pnpm dev` from the root starts this app
-alongside every package and the other examples.)
+Then open <http://localhost:3003>. The example binds to the loopback interface,
+so other machines cannot reach its development token endpoint. (`pnpm dev` from
+the root starts this app alongside every package and the other examples.)
 
 If the API key or secret key is missing, the app renders a short setup screen
 instead of failing — so it is safe to start before filling in `.env.local`.
 Once configured, the browser requests a short-lived access token from the
 same-origin `/api/access-token` route. The route never exposes the API key or
-secret key, reuses each token for at most 25 minutes, and the client refreshes
-it before the token's 30-minute lifetime ends.
+secret key. It reads the OAuth response's actual expiration duration, reuses a
+token for five-sixths of that duration, and tells the client when to refresh
+using relative durations so server and browser clock skew cannot affect it.
+
+This repository has no application user or session model, so the route is
+deliberately local-development-only and returns `403` in production. Before
+deploying, replace `isHumeAccessTokenRequestAuthorized()` with a server-verified
+session and authorization check. Run that check before consulting the shared
+token cache. CORS, `Origin` checks, and a secret shipped to the browser are not
+substitutes for authenticating the user.
 
 ## Environment variables
 
@@ -64,7 +73,7 @@ connection.
 | File                              | Shows                                                                                                                                                                                                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app/page.tsx`                    | Detecting missing server credentials and rendering a setup screen without making an OAuth request                                                                                                                                                          |
-| `app/api/access-token/route.ts`   | Returning a validated, short-lived access token through a private, non-cacheable same-origin response                                                                                                                                                      |
+| `app/api/access-token/route.ts`   | Authorizing a local request before returning a measured, short-lived access-token lease through a private, non-cacheable response                                                                                                                          |
 | `components/Voice.tsx`            | `VoiceProvider` with every lifecycle callback, `messageHistoryLimit`, an `enableAudioWorklet` toggle, and a complete `ToolCallHandler` — a weather tool that resolves a location to coordinates, calls `api.weather.gov`, and validates every hop with zod |
 | `components/ExampleComponent.tsx` | Access-token refresh, exhaustive `status.value` handling, live microphone and speaker switching during a call, and `AudioDeviceSwitchError` handling                                                                                                       |
 | `components/ChatConnected.tsx`    | Mute, pause and resume, volume, text input as user or assistant, `chatMetadata`, `readyState`, and prosody                                                                                                                                                 |

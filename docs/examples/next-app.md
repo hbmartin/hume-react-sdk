@@ -19,12 +19,17 @@ exist and renders a setup screen when they do not, which is why the app is safe
 to start before filling in `.env.local`.
 
 The credentials themselves live behind a module marked `server-only`.
-`app/api/access-token/route.ts` calls `fetchAccessToken`, validates the result,
-and returns only the short-lived token through a private, non-cacheable
-response. The server reuses a token for at most 25 minutes, while
-`components/ExampleComponent.tsx` calls the route again before that window
-ends. A tab can therefore reconnect after the original token expires without
-ever receiving the long-lived API key or secret key.
+`app/api/access-token/route.ts` authorizes the local-development request before
+exchanging the credentials, validates both the token and its OAuth expiration,
+and returns a relative token lease through a private, non-cacheable response.
+The server reuses a token for five-sixths of its measured lifetime, while
+`components/ExampleComponent.tsx` refreshes it using a monotonic client clock.
+A tab can therefore reconnect without receiving the long-lived API key or
+secret key and without relying on synchronized server and browser clocks.
+
+The repository has no application user model, so this authorization seam fails
+closed in production. A deployment must replace it with its own server-verified
+session and authorization policy before enabling the route.
 
 → [`@humeai/voice-react` guide](../guide/voice-react)
 

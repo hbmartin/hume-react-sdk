@@ -10,6 +10,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
 
+import {
+  createAccessTokenLease,
+  isAccessTokenLeaseUsable,
+  type AccessTokenLease,
+  type ScheduledAccessTokenLease,
+} from '../utils/access-token-lifecycle';
 import { HUME_ACCESS_TOKEN_ENDPOINT, HUME_VOICE_HOSTNAME } from '../utils/hume';
 import { ChatConnected } from './ChatConnected';
 import {
@@ -35,12 +41,14 @@ const ACCESS_TOKEN_RETRY_DELAY_MS = 60 * 1000;
 const MINIMUM_ACCESS_TOKEN_REFRESH_DELAY_MS = 1000;
 const AccessTokenResponseSchema = z.object({
   accessToken: z.string().min(1),
-  refreshAt: z.number().int().positive(),
+  expiresAfterMs: z.number().int().positive(),
+  refreshAfterMs: z.number().int().nonnegative(),
 });
 const AccessTokenErrorResponseSchema = z.object({
   error: z.string().min(1),
 });
-type AccessTokenResponse = z.infer<typeof AccessTokenResponseSchema>;
+
+const getMonotonicTime = () => performance.now();
 
 export const ExampleComponent = ({ configId }: { configId?: string }) => {
   const {
@@ -58,16 +66,14 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   const [deviceSwitchError, setDeviceSwitchError] = useState<Error | null>(
     null,
   );
-  const [accessToken, setAccessToken] = useState<AccessTokenResponse | null>(
-    null,
-  );
+  const [accessToken, setAccessToken] = useState<AccessTokenLease | null>(null);
   const [accessTokenError, setAccessTokenError] = useState<string | null>(null);
   const [connectionAttemptError, setConnectionAttemptError] = useState<
     string | null
   >(null);
   const [isAccessTokenLoading, setIsAccessTokenLoading] = useState(true);
   const accessTokenRequestRef =
-    useRef<Promise<AccessTokenResponse | null> | null>(null);
+    useRef<Promise<ScheduledAccessTokenLease | null> | null>(null);
   const {
     inputDevices: audioInputDevices,
     outputDevices: audioOutputDevices,
@@ -99,10 +105,10 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     }
 
     setIsAccessTokenLoading(true);
-    setAccessToken(null);
     setAccessTokenError(null);
 
-    const request = (async (): Promise<AccessTokenResponse | null> => {
+    const requestStartedAt = getMonotonicTime();
+    const request = (async (): Promise<ScheduledAccessTokenLease | null> => {
       try {
         const response = await fetch(HUME_ACCESS_TOKEN_ENDPOINT, {
           method: 'POST',
@@ -133,10 +139,24 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
           );
         }
 
-        setAccessToken(tokenResponse.data);
-        return tokenResponse.data;
+        const receivedToken = createAccessTokenLease(
+          tokenResponse.data,
+          requestStartedAt,
+          getMonotonicTime(),
+        );
+        if (receivedToken === null) {
+          throw new Error(
+            'The access-token endpoint returned an expired token.',
+          );
+        }
+
+        setAccessToken(receivedToken.lease);
+        return receivedToken;
       } catch (error) {
-        setAccessToken(null);
+        const now = getMonotonicTime();
+        setAccessToken((currentToken) =>
+          isAccessTokenLeaseUsable(currentToken, now) ? currentToken : null,
+        );
         setAccessTokenError(
           error instanceof Error && error.message !== ''
             ? error.message
@@ -171,7 +191,7 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
         tokenResponse === null
           ? ACCESS_TOKEN_RETRY_DELAY_MS
           : Math.max(
-              tokenResponse.refreshAt - Date.now(),
+              tokenResponse.refreshAfterMs,
               MINIMUM_ACCESS_TOKEN_REFRESH_DELAY_MS,
             );
       refreshTimer = window.setTimeout(() => {
@@ -260,10 +280,12 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     setDeviceSwitchError(null);
     setConnectionAttemptError(null);
 
-    const usableAccessToken =
-      accessToken !== null && accessToken.refreshAt > Date.now()
-        ? accessToken
-        : await refreshAccessToken();
+    const usableAccessToken = isAccessTokenLeaseUsable(
+      accessToken,
+      getMonotonicTime(),
+    )
+      ? accessToken
+      : ((await refreshAccessToken())?.lease ?? null);
     if (usableAccessToken === null) {
       return;
     }
@@ -285,7 +307,10 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     }
   };
 
-  const hasUsableAccessToken = accessToken !== null;
+  const hasUsableAccessToken = isAccessTokenLeaseUsable(
+    accessToken,
+    getMonotonicTime(),
+  );
   const connectionFeedback = (
     <>
       {accessTokenError === null ? null : (

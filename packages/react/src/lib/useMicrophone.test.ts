@@ -485,6 +485,75 @@ describe('useMicrophone', () => {
     consoleWarn.mockRestore();
   });
 
+  it('does not retry an older retained stream twice when the current stream also fails', async () => {
+    const retainedTrackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('retained stream still busy');
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('retained stream still busy');
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('retained stream still busy');
+      })
+      .mockImplementationOnce(() => undefined);
+    const currentTrackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('current stream temporarily busy');
+      })
+      .mockImplementationOnce(() => undefined);
+    const candidateTrackStop = vi.fn();
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(
+      createStream([
+        {
+          enabled: true,
+          stop: retainedTrackStop,
+        } as unknown as MediaStreamTrack,
+      ]),
+      context,
+    );
+
+    await act(() =>
+      result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: currentTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      ),
+    );
+    expect(retainedTrackStop).toHaveBeenCalledTimes(2);
+
+    await act(() =>
+      result.current.replace(
+        createStream([
+          {
+            enabled: true,
+            stop: candidateTrackStop,
+          } as unknown as MediaStreamTrack,
+        ]),
+        context,
+      ),
+    );
+
+    expect(retainedTrackStop).toHaveBeenCalledTimes(3);
+    expect(currentTrackStop).toHaveBeenCalledTimes(2);
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+
+    await act(() => result.current.stop());
+    expect(retainedTrackStop).toHaveBeenCalledTimes(4);
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    consoleWarn.mockRestore();
+  });
+
   it('preserves mute state across a replacement', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const oldTrack = {
