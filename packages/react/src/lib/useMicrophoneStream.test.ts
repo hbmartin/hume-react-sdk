@@ -170,8 +170,8 @@ describe('useGetMicrophoneStream', () => {
     expect(finalTrackStop).toHaveBeenCalledOnce();
   });
 
-  it('attempts every track and releases the owned stream when stopping fails', async () => {
-    const firstTrackStop = vi.fn(() => {
+  it('attempts every track and retains the owned stream for a cleanup retry', async () => {
+    const firstTrackStop = vi.fn().mockImplementationOnce(() => {
       throw new Error('First track failed to stop');
     });
     const finalTrackStop = vi.fn();
@@ -189,7 +189,36 @@ describe('useGetMicrophoneStream', () => {
     expect(finalTrackStop).toHaveBeenCalledOnce();
 
     result.current.stopStream();
-    expect(firstTrackStop).toHaveBeenCalledOnce();
-    expect(finalTrackStop).toHaveBeenCalledOnce();
+    expect(firstTrackStop).toHaveBeenCalledTimes(2);
+    expect(finalTrackStop).toHaveBeenCalledTimes(2);
+
+    result.current.stopStream();
+    expect(firstTrackStop).toHaveBeenCalledTimes(2);
+    expect(finalTrackStop).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the owned stream when track enumeration fails', async () => {
+    const trackStop = vi.fn();
+    const getTracks = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('Track enumeration failed');
+      })
+      .mockReturnValue([{ stop: trackStop }]);
+    const stream = { getTracks } as unknown as MediaStream;
+    getUserMediaMock.mockResolvedValueOnce(stream);
+    const { result } = renderHook(() => useMicrophoneStream());
+    await result.current.getStream({});
+
+    expect(() => result.current.stopStream()).toThrow(
+      'Track enumeration failed',
+    );
+    result.current.stopStream();
+
+    expect(getTracks).toHaveBeenCalledTimes(2);
+    expect(trackStop).toHaveBeenCalledOnce();
+
+    result.current.stopStream();
+    expect(getTracks).toHaveBeenCalledTimes(2);
   });
 });

@@ -147,6 +147,22 @@ describe('useAudioDevices', () => {
     expect(result.current.isLoading).toBe(false);
   });
 
+  it('preserves cross-realm-shaped enumeration error details', async () => {
+    vi.mocked(getAllAudioDevices).mockRejectedValueOnce({
+      message: 'Device enumeration failed',
+      name: 'NotReadableError',
+    });
+
+    const { result } = renderHook(() => useAudioDevices());
+
+    await waitFor(() =>
+      expect(result.current.error).toMatchObject({
+        message: 'Device enumeration failed',
+        name: 'NotReadableError',
+      }),
+    );
+  });
+
   it('enumerates without requesting permission by default', async () => {
     const { result } = renderHook(() => useAudioDevices());
 

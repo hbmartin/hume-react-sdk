@@ -2,6 +2,7 @@
 import { checkForAudioTracks } from 'hume';
 import { useCallback, useRef, useState } from 'react';
 
+import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
 import { isMicrophonePermissionDeniedError } from './browserErrors';
 
 /**
@@ -38,25 +39,10 @@ const getAudioStream = async (
   });
 };
 
-/** Stop every track and report the first cleanup failure after all were attempted. */
-const stopTracks = (stream: MediaStream): void => {
-  const tracks = stream.getTracks();
-  let firstFailure: { error: unknown } | null = null;
-  for (const track of tracks) {
-    try {
-      track.stop();
-    } catch (error) {
-      firstFailure ??= { error };
-    }
-  }
-
-  if (firstFailure !== null) throw firstFailure.error;
-};
-
 /** Stop as many tracks as possible without replacing the acquisition failure. */
 const stopTracksAfterValidationFailure = (stream: MediaStream): void => {
   try {
-    stopTracks(stream);
+    stopMediaStreamTracks(stream);
   } catch {
     // The validation error is the actionable failure; cleanup is best effort.
   }
@@ -103,12 +89,9 @@ export const useMicrophoneStream = () => {
 
   const stopStream = useCallback((stream = currentStream.current) => {
     if (stream) {
-      try {
-        stopTracks(stream);
-      } finally {
-        if (currentStream.current === stream) {
-          currentStream.current = null;
-        }
+      stopMediaStreamTracks(stream);
+      if (currentStream.current === stream) {
+        currentStream.current = null;
       }
     }
   }, []);
