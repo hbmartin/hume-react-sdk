@@ -11,7 +11,9 @@ export const getBrowserErrorMessage = (error: unknown): string | null => {
   if (typeof error !== 'object' || error === null || !('message' in error)) {
     return null;
   }
-  return typeof error.message === 'string' ? error.message : null;
+  return typeof error.message === 'string' && error.message.length > 0
+    ? error.message
+    : null;
 };
 
 /** Normalize a browser failure without discarding cross-realm name or message fields. */

@@ -64,9 +64,9 @@ rendering, `useVoice()` also exposes `isError`, `isSocketError`,
 `isMicrophoneError`, and `isAudioError` as convenient booleans.
 
 ```tsx
-const { error, isSocketError } = useVoice();
+const { error } = useVoice();
 
-if (isSocketError && error) {
+if (error?.type === 'socket_error') {
   console.error(error.reason);
 }
 ```

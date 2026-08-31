@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getAllAudioDevices, keepLastN } from '.';
+import { getAllAudioDevices, keepLastN, requestAudioDevicePermission } from '.';
 
 describe('keepLastN', () => {
   it.each([50, 100, 1000])(
@@ -46,5 +46,41 @@ describe('getAllAudioDevices', () => {
       inputDevices: [{ deviceId: '', kind: 'audioinput', label: 'Microphone' }],
       outputDevices: [{ deviceId: '', kind: 'audiooutput', label: 'Speaker' }],
     });
+  });
+});
+
+describe('requestAudioDevicePermission', () => {
+  const originalMediaDevices = Object.getOwnPropertyDescriptor(
+    navigator,
+    'mediaDevices',
+  );
+
+  afterEach(() => {
+    if (originalMediaDevices) {
+      Object.defineProperty(navigator, 'mediaDevices', originalMediaDevices);
+    } else {
+      Reflect.deleteProperty(navigator, 'mediaDevices');
+    }
+  });
+
+  it('attempts every track before reporting a cleanup failure', async () => {
+    const cleanupFailure = new Error('First track failed to stop');
+    const firstTrackStop = vi.fn(() => {
+      throw cleanupFailure;
+    });
+    const finalTrackStop = vi.fn();
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        enumerateDevices: vi.fn(),
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [{ stop: firstTrackStop }, { stop: finalTrackStop }],
+        }),
+      },
+    });
+
+    await expect(requestAudioDevicePermission()).rejects.toBe(cleanupFailure);
+    expect(firstTrackStop).toHaveBeenCalledOnce();
+    expect(finalTrackStop).toHaveBeenCalledOnce();
   });
 });

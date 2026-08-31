@@ -108,7 +108,7 @@ intact — a failed switch never interrupts a conversation.
 | `reason`            | What happened                                                                    |
 | ------------------- | -------------------------------------------------------------------------------- |
 | `not_connected`     | No live session; connect first, or set the device through `connect({ devices })` |
-| `permission_denied` | The browser refused microphone access                                            |
+| `permission_denied` | The user denied access or a browser/document policy blocked the microphone       |
 | `device_not_found`  | The requested device is gone, or its constraints cannot be met                   |
 | `unsupported`       | The browser does not implement output selection (`AudioContext.setSinkId`)       |
 | `interrupted`       | The call or device changed while the switch was in flight                        |

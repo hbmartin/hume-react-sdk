@@ -3,6 +3,7 @@ import type {
   AudioDeviceKind,
   AudioDevices,
 } from '../models/connect-options';
+import { stopMediaStreamTracks } from './stopMediaStreamTracks';
 
 export const keepLastN = <T>(n: number, arr: T[]): T[] => {
   if (arr.length <= n) {
@@ -58,7 +59,7 @@ export const requestAudioDevicePermission = async (): Promise<void> => {
     throw error;
   }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  stream.getTracks().forEach((track) => track.stop());
+  stopMediaStreamTracks(stream);
 };
 
 /**

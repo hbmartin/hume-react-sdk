@@ -174,7 +174,7 @@ const getDeviceSwitchReason = (
   error: unknown,
 ): AudioDeviceSwitchErrorReason => {
   const name = getBrowserErrorName(error);
-  if (name === 'NotAllowedError' || name === 'SecurityError') {
+  if (isMicrophonePermissionDeniedError(error)) {
     return 'permission_denied';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
@@ -1174,9 +1174,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           await step.run();
         } catch (failure) {
           failures.push(
-            `${step.label}: ${
-              failure instanceof Error ? failure.message : 'Unknown error'
-            }`,
+            `${step.label}: ${getBrowserErrorMessage(failure) ?? 'Unknown error'}`,
           );
         }
       };
@@ -1213,11 +1211,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           ]);
           if (playerResult.status === 'rejected') {
             failures.push(
-              `Audio player cleanup failed: ${
-                playerResult.failure instanceof Error
-                  ? playerResult.failure.message
-                  : 'Unknown error'
-              }`,
+              `Audio player cleanup failed: ${getBrowserErrorMessage(playerResult.failure) ?? 'Unknown error'}`,
             );
           } else if (playerResult.status === 'pending') {
             failures.push(
@@ -1487,9 +1481,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             try {
               await micStopFnRef.current?.();
             } catch (failure) {
-              failures.push(
-                failure instanceof Error ? failure.message : 'Unknown error',
-              );
+              failures.push(getBrowserErrorMessage(failure) ?? 'Unknown error');
             }
           }
           if (closeCleanupStillOwnsResources()) {
@@ -1497,9 +1489,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               stopStream();
               microphoneStreamStopped = true;
             } catch (failure) {
-              failures.push(
-                failure instanceof Error ? failure.message : 'Unknown error',
-              );
+              failures.push(getBrowserErrorMessage(failure) ?? 'Unknown error');
             }
           }
           if (failures.length > 0) {
@@ -1526,9 +1516,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           const cleanupFailures = results.flatMap((result) =>
             result.status === 'rejected'
               ? [
-                  result.reason instanceof Error
-                    ? result.reason.message
-                    : 'Unknown cleanup error',
+                  getBrowserErrorMessage(result.reason) ??
+                    'Unknown cleanup error',
                 ]
               : [],
           );
@@ -1644,7 +1633,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         try {
           clientSendAudio(arrayBuffer);
         } catch (e) {
-          const message = e instanceof Error ? e.message : 'Unknown error';
+          const message = getBrowserErrorMessage(e) ?? 'Unknown error';
           updateError({
             type: 'socket_error',
             reason: 'failed_to_send_audio',
@@ -2027,9 +2016,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           return null;
         } catch (cleanupError) {
           const detail =
-            cleanupError instanceof Error
-              ? cleanupError.message
-              : 'Unknown error';
+            getBrowserErrorMessage(cleanupError) ?? 'Unknown error';
           diagnostics.emit({
             level: 'warn',
             category: 'microphone',
@@ -2073,9 +2060,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           type: 'audio_error',
           reason: 'audio_player_initialization_failure',
           message:
-            e instanceof Error
-              ? e.message
-              : 'We could not create an audio context. Please try again.',
+            getBrowserErrorMessage(e) ??
+            'We could not create an audio context. Please try again.',
         });
         return;
       }
@@ -2095,11 +2081,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               await playerStopAllForContext(sharedCtx);
             } catch (cleanupError) {
               failures.push(
-                `Audio player cleanup failed: ${
-                  cleanupError instanceof Error
-                    ? cleanupError.message
-                    : 'Unknown error'
-                }`,
+                `Audio player cleanup failed: ${getBrowserErrorMessage(cleanupError) ?? 'Unknown error'}`,
               );
             }
           }
@@ -2171,9 +2153,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           type: 'audio_error',
           reason: 'audio_player_initialization_failure',
           message:
-            e instanceof Error
-              ? e.message
-              : 'We could not connect to the audio player. Please try again.',
+            getBrowserErrorMessage(e) ??
+            'We could not connect to the audio player. Please try again.',
         };
         // Keep this attempt exclusive until its scoped cleanup settles. The
         // disconnected socket also suppresses cleanup errors from replacing the
@@ -2300,9 +2281,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           type: 'mic_error',
           reason: 'mic_initialization_failure',
           message:
-            e instanceof Error
-              ? e.message
-              : 'We could not connect to the microphone. Please try again.',
+            getBrowserErrorMessage(e) ??
+            'We could not connect to the microphone. Please try again.',
         });
         return;
       }
@@ -2442,8 +2422,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const rawCleanupStillOwnsLifecycle = () =>
         !cleanupTimedOut && cleanupStillOwnsLifecycle();
       const recordFailure = (label: string, failure: unknown) => {
-        const detail =
-          failure instanceof Error ? failure.message : 'Unknown error';
+        const detail = getBrowserErrorMessage(failure) ?? 'Unknown error';
         failures.push(`${label}: ${detail}`);
       };
       const attempt = async (

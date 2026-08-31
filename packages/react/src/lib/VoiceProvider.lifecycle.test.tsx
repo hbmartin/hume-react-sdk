@@ -919,7 +919,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('disconnected');
   });
 
-  it('retries cleanup after a server close backstop fails', async () => {
+  it('retries stream cleanup after a server close cleanup fails', async () => {
     const { result } = renderHook(() => useVoice(), {
       wrapper: ({ children }) => (
         <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
@@ -930,7 +930,13 @@ describe('VoiceProvider close lifecycle', () => {
         auth: { type: 'accessToken', value: 'test-token' },
       }),
     );
-    mocks.micStop.mockRejectedValueOnce(new Error('microphone stop failed'));
+    const streamStopError = {
+      message: 'microphone stream stop failed',
+      name: 'AbortError',
+    };
+    mocks.stopStream.mockImplementationOnce(() => {
+      throw streamStopError;
+    });
 
     act(() => {
       void mocks.onCloseHandler?.({ code: 1006 } as CloseEvent, false);
@@ -1187,8 +1193,12 @@ describe('VoiceProvider close lifecycle', () => {
   });
 
   it('starts teardown when a connect settles while still owning resources', async () => {
+    const microphoneStartError = {
+      message: 'microphone start failed',
+      name: 'NotSupportedError',
+    };
     mocks.micStart.mockImplementationOnce(() => {
-      throw new Error('microphone start failed');
+      throw microphoneStartError;
     });
     const onError = vi.fn(() => {
       throw new Error('consumer error callback failed');
@@ -1212,6 +1222,12 @@ describe('VoiceProvider close lifecycle', () => {
         'consumer error callback failed',
       );
     });
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'microphone start failed',
+        reason: 'mic_initialization_failure',
+      }),
+    );
 
     let retry = Promise.resolve();
     act(() => {
@@ -1309,7 +1325,10 @@ describe('VoiceProvider close lifecycle', () => {
   });
 
   it('preserves player initialization errors when attempt cleanup fails', async () => {
-    mocks.playerInit.mockRejectedValueOnce(new Error('player init failed'));
+    mocks.playerInit.mockRejectedValueOnce({
+      message: 'player init failed',
+      name: 'NotSupportedError',
+    });
     mocks.playerStopForContext.mockRejectedValueOnce(
       new Error('player cleanup failed'),
     );
@@ -1500,8 +1519,12 @@ describe('VoiceProvider close lifecycle', () => {
 
   it('releases the microphone stream when AudioContext construction throws', async () => {
     const onError = vi.fn();
+    const contextError = {
+      message: 'context unavailable',
+      name: 'NotSupportedError',
+    };
     globalThis.AudioContext = vi.fn(() => {
-      throw new DOMException('context unavailable', 'NotSupportedError');
+      throw contextError;
     }) as unknown as typeof AudioContext;
     const stream = { id: 'captured-stream' } as unknown as MediaStream;
     mocks.getStream.mockResolvedValueOnce(stream);
@@ -1522,6 +1545,7 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.playerInit).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
+        message: 'context unavailable',
         reason: 'audio_player_initialization_failure',
         type: 'audio_error',
       }),
@@ -1974,36 +1998,41 @@ describe('VoiceProvider close lifecycle', () => {
     expect(result.current.status.value).toBe('disconnected');
   });
 
-  it('maps input permission failures without replacing the active microphone', async () => {
-    const permissionError = {
-      message: 'blocked by document policy',
-      name: 'SecurityError',
-    };
-    const { result } = renderHook(() => useVoice(), {
-      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
-    });
-    await act(() =>
-      result.current.connect({
-        auth: { type: 'accessToken', value: 'test-token' },
-      }),
-    );
-    mocks.getStream.mockRejectedValueOnce(permissionError);
+  it.each([
+    ['NotAllowedError', 'denied'],
+    ['SecurityError', 'blocked by document policy'],
+  ] as const)(
+    'maps an input %s without replacing the active microphone',
+    async (name, message) => {
+      const permissionError =
+        name === 'NotAllowedError'
+          ? new DOMException(message, name)
+          : { message, name };
+      const { result } = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+      });
+      await act(() =>
+        result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        }),
+      );
+      mocks.getStream.mockRejectedValueOnce(permissionError);
 
-    const switchError = await result.current
-      .setInputDevice('blocked')
-      .catch((error: unknown) => error);
+      const switchError = await result.current
+        .setInputDevice('blocked')
+        .catch((error: unknown) => error);
 
-    expect(switchError).toMatchObject({
-      cause: permissionError,
-      kind: 'audioinput',
-      message:
-        'Permission to switch the audio input was denied. blocked by document policy',
-      reason: 'permission_denied',
-    });
-    expect(mocks.micReplace).not.toHaveBeenCalled();
-    expect(result.current.error).toBeNull();
-    expect(result.current.status.value).toBe('connected');
-  });
+      expect(switchError).toMatchObject({
+        cause: permissionError,
+        kind: 'audioinput',
+        message: `Permission to switch the audio input was denied. ${message}`,
+        reason: 'permission_denied',
+      });
+      expect(mocks.micReplace).not.toHaveBeenCalled();
+      expect(result.current.error).toBeNull();
+      expect(result.current.status.value).toBe('connected');
+    },
+  );
 
   it.each(['NotAllowedError', 'SecurityError'])(
     'maps a name-only %s during connect to microphone permission denial',

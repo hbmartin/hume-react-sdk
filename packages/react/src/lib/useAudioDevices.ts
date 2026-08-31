@@ -6,7 +6,11 @@ import {
   isAudioDeviceEnumerationSupported,
   requestAudioDevicePermission,
 } from '../utils';
-import { getBrowserErrorName, normalizeBrowserError } from './browserErrors';
+import {
+  getBrowserErrorName,
+  isMicrophonePermissionDeniedError,
+  normalizeBrowserError,
+} from './browserErrors';
 
 /** Options for {@link useAudioDevices}. */
 export interface UseAudioDevicesOptions {
@@ -148,11 +152,7 @@ export const useAudioDevices = ({
       setError(null);
     } catch (e) {
       if (sequence !== refetchSequence.current || !isMounted.current) return;
-      setError(
-        e instanceof Error
-          ? e
-          : new Error('Failed to enumerate audio devices.'),
-      );
+      setError(normalizeBrowserError(e, 'Failed to enumerate audio devices.'));
     } finally {
       if (sequence === refetchSequence.current && isMounted.current) {
         setIsLoading(false);
@@ -174,12 +174,10 @@ export const useAudioDevices = ({
         }
       } catch (e) {
         const browserErrorName = getBrowserErrorName(e);
-        const permissionFailure =
-          browserErrorName === 'NotAllowedError' ||
-          browserErrorName === 'SecurityError';
+        const permissionFailure = isMicrophonePermissionDeniedError(e);
         if (isMounted.current) {
           let nextPermissionError: Error | null = null;
-          if (!permissionFailure || browserErrorName === 'SecurityError') {
+          if (browserErrorName !== 'NotAllowedError') {
             nextPermissionError = normalizeBrowserError(
               e,
               'Failed to request microphone permission.',
