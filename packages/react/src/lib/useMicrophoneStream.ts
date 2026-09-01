@@ -3,6 +3,10 @@ import { checkForAudioTracks } from 'hume';
 import { useCallback, useRef, useState } from 'react';
 
 import { isMicrophonePermissionDeniedError } from '../utils/browserErrors';
+import {
+  appendCleanupFailures,
+  throwCleanupFailures,
+} from '../utils/cleanupErrors';
 import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
 
 /**
@@ -45,14 +49,6 @@ const stopTracksAfterValidationFailure = (stream: MediaStream): void => {
     stopMediaStreamTracks(stream);
   } catch {
     // The validation error is the actionable failure; cleanup is best effort.
-  }
-};
-
-const appendCleanupFailures = (failures: unknown[], error: unknown) => {
-  if (error instanceof AggregateError) {
-    failures.push(...(error.errors as unknown[]));
-  } else {
-    failures.push(error);
   }
 };
 
@@ -124,14 +120,10 @@ export const useMicrophoneStream = () => {
       }
     }
 
-    if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) {
-      throw new AggregateError(
-        failures,
-        `${failures.length} microphone stream cleanup operations failed.`,
-        { cause: failures[0] },
-      );
-    }
+    throwCleanupFailures(
+      failures,
+      `${failures.length} microphone stream cleanup operations failed.`,
+    );
   }, []);
 
   return {

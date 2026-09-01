@@ -29,7 +29,7 @@ pnpm install
 pnpm --filter example-next-app dev
 ```
 
-Then open <http://localhost:3003>. The example binds to the loopback interface,
+Then open <http://127.0.0.1:3003>. The example binds to the IPv4 loopback interface,
 so other machines cannot reach its development token endpoint. (`pnpm dev` from
 the root starts this app alongside every package and the other examples.)
 
@@ -54,6 +54,7 @@ substitutes for authenticating the user.
 | --------------------------------- | -------- | ----------------------------------------------------------------- |
 | `HUME_API_KEY`                    | yes      | Server-side only. Used to mint an access token.                   |
 | `HUME_SECRET_KEY`                 | yes      | Server-side only. Used to mint an access token.                   |
+| `HUME_TOKEN_HOSTNAME`             | no       | Trusted server-side OAuth host. Defaults to `api.hume.ai`.        |
 | `HUME_CONFIG_ID`                  | no       | A non-secret EVI configuration ID. Enables tools in this example. |
 | `NEXT_PUBLIC_HUME_VOICE_HOSTNAME` | no       | Defaults to `api.hume.ai`.                                        |
 | `NEXT_PUBLIC_GEOCODE_API_KEY`     | no       | Only used by the weather tool.                                    |
@@ -64,9 +65,11 @@ server component, exposes it to the client as a prop, and passes it to
 `connect()` when configuration is required. Anything prefixed `NEXT_PUBLIC_`
 is embedded in the client bundle and is public.
 
-`NEXT_PUBLIC_HUME_VOICE_HOSTNAME` is intentionally public and is the single
-hostname used for both the server-side token exchange and the client-side EVI
-connection.
+`NEXT_PUBLIC_HUME_VOICE_HOSTNAME` is intentionally public and controls only the
+client-side EVI connection. The server sends the API key and secret key only to
+`HUME_TOKEN_HOSTNAME`, which is server-only and defaults to `api.hume.ai`. When
+using another trusted Hume environment, set both hosts explicitly; never
+derive `HUME_TOKEN_HOSTNAME` from browser input or another public setting.
 
 ## What this demonstrates
 

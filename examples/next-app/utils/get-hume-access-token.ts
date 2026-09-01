@@ -3,17 +3,19 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-import { HUME_VOICE_HOSTNAME } from './hume';
+import { DEFAULT_HUME_HOSTNAME, normalizeHumeHostname } from './hume-hostname';
 
 const TOKEN_REUSE_NUMERATOR = 5;
 const TOKEN_REUSE_DENOMINATOR = 6;
+const TOKEN_REQUEST_TIMEOUT_MS = 10_000;
+const HUME_ACCESS_TOKEN_LIFETIME_SECONDS = 30 * 60;
 const OAuthAccessTokenSchema = z.object({
   access_token: z.string().trim().min(1),
   expires_in: z
     .number()
     .int()
     .positive()
-    .max(Math.floor(Number.MAX_SAFE_INTEGER / 1000)),
+    .max(HUME_ACCESS_TOKEN_LIFETIME_SECONDS),
 });
 
 type HumeCredentials = {
@@ -51,13 +53,31 @@ const readHumeCredentials = (): HumeCredentials => {
   return { apiKey, secretKey };
 };
 
-const getCredentialIdentity = ({ apiKey, secretKey }: HumeCredentials) =>
+const readHumeTokenHostname = () => {
+  const configuredHostname = process.env['HUME_TOKEN_HOSTNAME']?.trim();
+  if (configuredHostname === undefined || configuredHostname === '') {
+    return DEFAULT_HUME_HOSTNAME;
+  }
+
+  const normalizedHostname = normalizeHumeHostname(configuredHostname);
+  if (normalizedHostname === null) {
+    throw new Error(
+      'HUME_TOKEN_HOSTNAME must be a hostname with an optional port and without a scheme, credentials, path, query, or fragment.',
+    );
+  }
+  return normalizedHostname;
+};
+
+const getCredentialIdentity = (
+  { apiKey, secretKey }: HumeCredentials,
+  tokenHostname: string,
+) =>
   createHash('sha256')
     .update(apiKey)
     .update('\0')
     .update(secretKey)
     .update('\0')
-    .update(HUME_VOICE_HOSTNAME)
+    .update(tokenHostname)
     .digest('base64url');
 
 const toAccessTokenResponse = (
@@ -72,25 +92,24 @@ const toAccessTokenResponse = (
 const fetchHumeAccessToken = async (
   credentials: HumeCredentials,
   credentialIdentity: string,
+  tokenHostname: string,
 ): Promise<CachedAccessToken> => {
   const auth = Buffer.from(
     `${credentials.apiKey}:${credentials.secretKey}`,
     'utf8',
   ).toString('base64');
-  const response = await fetch(
-    `https://${HUME_VOICE_HOSTNAME}/oauth2-cc/token`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-      }).toString(),
-      cache: 'no-store',
+  const response = await fetch(`https://${tokenHostname}/oauth2-cc/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
-  );
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+    }).toString(),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
+  });
 
   if (!response.ok) {
     throw new Error(
@@ -140,7 +159,8 @@ export const hasHumeCredentials = () =>
 
 export const getHumeAccessToken = async (): Promise<HumeAccessToken> => {
   const credentials = readHumeCredentials();
-  const credentialIdentity = getCredentialIdentity(credentials);
+  const tokenHostname = readHumeTokenHostname();
+  const credentialIdentity = getCredentialIdentity(credentials, tokenHostname);
   const now = Date.now();
 
   if (
@@ -156,7 +176,11 @@ export const getHumeAccessToken = async (): Promise<HumeAccessToken> => {
     return toAccessTokenResponse(await pendingAccessToken, Date.now());
   }
 
-  const request = fetchHumeAccessToken(credentials, credentialIdentity);
+  const request = fetchHumeAccessToken(
+    credentials,
+    credentialIdentity,
+    tokenHostname,
+  );
   pendingAccessTokens.set(credentialIdentity, request);
 
   try {

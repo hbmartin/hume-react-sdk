@@ -1,3 +1,5 @@
+import { throwCleanupFailures } from './cleanupErrors';
+
 /** Stop every track and report every cleanup failure after all were attempted. */
 export const stopMediaStreamTracks = (stream: MediaStream): void => {
   const tracks = stream.getTracks();
@@ -11,12 +13,8 @@ export const stopMediaStreamTracks = (stream: MediaStream): void => {
     }
   }
 
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) {
-    throw new AggregateError(
-      failures,
-      `${failures.length} media tracks failed to stop.`,
-      { cause: failures[0] },
-    );
-  }
+  throwCleanupFailures(
+    failures,
+    `${failures.length} media tracks failed to stop.`,
+  );
 };

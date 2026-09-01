@@ -13,6 +13,7 @@
     "utils/**/*.tsx",
     "types/**/*.d.ts",
     "*.config.ts",
+    "*.config.mts",
     ".next/types/**/*.ts"
   ],
   "exclude": ["dist", "coverage", "node_modules"]
