@@ -1,21 +1,31 @@
 import { getDataProperty } from './aggregateErrors';
 
+const nativeDomExceptionStringGetters = (() => {
+  const getters: Partial<
+    Record<'message' | 'name', (this: object) => unknown>
+  > = {};
+  try {
+    if (typeof DOMException === 'undefined') return getters;
+    for (const key of ['message', 'name'] as const) {
+      // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
+      const getter = Object.getOwnPropertyDescriptor(
+        DOMException.prototype,
+        key,
+      )?.get;
+      if (getter !== undefined) getters[key] = getter;
+    }
+  } catch {
+    // A partial DOMException implementation may not expose a usable prototype.
+  }
+  return getters;
+})();
+
 const getNativeDomExceptionString = (
   error: object,
   key: 'message' | 'name',
 ): string | null => {
   try {
-    if (
-      typeof DOMException === 'undefined' ||
-      !(error instanceof DOMException)
-    ) {
-      return null;
-    }
-    // oxlint-disable-next-line typescript/unbound-method -- invoked with the validated DOMException receiver below
-    const getter = Object.getOwnPropertyDescriptor(
-      DOMException.prototype,
-      key,
-    )?.get;
+    const getter = nativeDomExceptionStringGetters[key];
     if (getter === undefined) return null;
     const value: unknown = getter.call(error);
     return typeof value === 'string' ? value : null;
@@ -23,6 +33,12 @@ const getNativeDomExceptionString = (
     return null;
   }
 };
+
+/** Recognize same- and cross-realm native DOMException objects safely. */
+export const isNativeDomException = (error: unknown): error is DOMException =>
+  typeof error === 'object' &&
+  error !== null &&
+  getNativeDomExceptionString(error, 'name') !== null;
 
 /** Read a browser error string without invoking user-defined accessors. */
 export const getBrowserErrorString = (

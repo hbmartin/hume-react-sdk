@@ -536,7 +536,7 @@ describe('useMicrophone', () => {
           cause: { name: 'Error', message: 'old track cleanup failed' },
         },
         {
-          name: 'Error',
+          name: 'AbortError',
           message:
             'Retired media stream cleanup failed: old track cleanup retry failed',
           cause: {

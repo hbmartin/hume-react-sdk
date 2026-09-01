@@ -51,6 +51,31 @@ describe('browser error normalization', () => {
     expect(accessor).not.toHaveBeenCalled();
   });
 
+  it('reads native DOMException accessors across realms', () => {
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    try {
+      const ForeignDOMException = (
+        frame.contentWindow as unknown as {
+          DOMException?: typeof DOMException;
+        } | null
+      )?.DOMException;
+      if (ForeignDOMException === undefined) {
+        throw new Error('Expected an iframe DOMException constructor.');
+      }
+      const error = new ForeignDOMException(
+        'Microphone denied in iframe',
+        'NotAllowedError',
+      );
+
+      expect(error).not.toBeInstanceOf(DOMException);
+      expect(getBrowserErrorName(error)).toBe('NotAllowedError');
+      expect(getBrowserErrorMessage(error)).toBe('Microphone denied in iframe');
+    } finally {
+      frame.remove();
+    }
+  });
+
   it('does not invoke accessors on browser-shaped failures', () => {
     const accessor = vi.fn(() => 'unsafe');
     const error = {};

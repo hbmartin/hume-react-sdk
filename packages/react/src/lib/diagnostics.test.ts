@@ -6,6 +6,7 @@ import {
   type VoiceDiagnosticEvent,
   type VoiceDiagnosticValue,
   type VoiceDiagnosticsOptions,
+  type VoiceDiagnosticsReporter,
   type VoiceLogger,
 } from './diagnostics';
 
@@ -204,6 +205,27 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('does not snapshot correlation when failure diagnostics are disabled', () => {
+    const emit = vi.fn();
+    const getCorrelation = vi.fn(() => Object.freeze({}));
+    const isEnabled = vi.fn(() => false);
+    const reporter: VoiceDiagnosticsReporter = {
+      addRedactionValue: vi.fn(),
+      beginConnection: vi.fn(() => 'connection'),
+      clearConnection: vi.fn(),
+      emit,
+      getCorrelation,
+      isEnabled,
+      setChatId: vi.fn(),
+    };
+
+    invokeIsolatedConsumerCallback(reporter, 'onClose', () => undefined);
+
+    expect(isEnabled).toHaveBeenCalledWith('warn');
+    expect(getCorrelation).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('redacts secrets and protected fields from default events', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -270,13 +292,18 @@ describe('voice diagnostics reporter', () => {
 
     expect(accessor).not.toHaveBeenCalled();
     expect(events[0]?.details).toEqual({
-      nested: { safe: 'nested value' },
+      __humeDiagnosticTruncated: true,
+      nested: {
+        __humeDiagnosticTruncated: true,
+        safe: 'nested value',
+      },
       safe: 'top-level value',
       values: [null],
     });
+    expect(events[0]?.detailsTruncated).toBe(true);
   });
 
-  it('marks details incomplete when sanitization fails', () => {
+  it('marks details incomplete when top-level enumeration fails', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -294,7 +321,37 @@ describe('voice diagnostics reporter', () => {
     expect(() => reporter.emit({ ...input, details })).not.toThrow();
 
     expect(events[0]?.detailsTruncated).toBe(true);
-    expect(events[0]?.details).toEqual({ sanitizationFailed: true });
+    expect(events[0]?.details).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
+  it('isolates nested property enumeration failures', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const hostile = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error('Failed to enumerate nested diagnostic details');
+        },
+      },
+    );
+
+    reporter.emit({
+      ...input,
+      details: { before: 'preserved', hostile, after: 'also preserved' },
+    });
+
+    expect(events[0]?.details).toEqual({
+      before: 'preserved',
+      hostile: { __humeDiagnosticTruncated: true },
+      after: 'also preserved',
+    });
+    expect(events[0]?.detailsTruncated).toBe(true);
   });
 
   it('keeps values whose sanitized object keys collide', () => {
@@ -435,6 +492,58 @@ describe('voice diagnostics reporter', () => {
       throw new Error('Expected serialized error details.');
     }
     expect(serializedError['stack']).toContain('Track cleanup failed');
+  });
+
+  it('preserves trusted Error stacks exposed by a prototype accessor', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const error = new Error('Prototype stack failure');
+    // oxlint-disable-next-line typescript/unbound-method -- reinstalled as a getter and invoked with the original Error receiver
+    const ownStackGetter = Object.getOwnPropertyDescriptor(error, 'stack')?.get;
+    // oxlint-disable-next-line typescript/unbound-method -- reinstalled as a getter and invoked with the original Error receiver
+    const prototypeStackGetter = Object.getOwnPropertyDescriptor(
+      Error.prototype,
+      'stack',
+    )?.get;
+    const getter = ownStackGetter ?? prototypeStackGetter;
+    if (getter === undefined) return;
+    Reflect.deleteProperty(error, 'stack');
+    const prototype = Object.create(Error.prototype) as object;
+    Object.defineProperty(prototype, 'stack', {
+      configurable: true,
+      get: getter,
+    });
+    Object.setPrototypeOf(error, prototype);
+
+    reporter.emit({ ...input, details: { error } });
+
+    const serializedError = events[0]?.details['error'];
+    if (!isDiagnosticObject(serializedError)) {
+      throw new Error('Expected serialized error details.');
+    }
+    expect(serializedError['stack']).toContain('Prototype stack failure');
+  });
+
+  it('serializes invalid dates without discarding sibling details', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: { before: 'preserved', invalidDate: new Date(Number.NaN) },
+    });
+
+    expect(events[0]?.details).toMatchObject({
+      before: 'preserved',
+      invalidDate: 'Invalid Date',
+    });
+    expect(events[0]?.detailsTruncated).toBeUndefined();
   });
 
   it('sanitizes diagnostic objects when AggregateError is unavailable', () => {
@@ -766,6 +875,34 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('bounds priority discovery work across repeated object references', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let descriptorReads = 0;
+    const probe = new Proxy(
+      Object.fromEntries(
+        Array.from({ length: 128 }, (_, index) => [`value-${index}`, index]),
+      ),
+      {
+        getOwnPropertyDescriptor(target, key) {
+          descriptorReads += 1;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+    const details = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`entry-${index}`, probe]),
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(descriptorReads).toBeLessThan(20_000);
+  });
+
   it('keeps AggregateError errors array-shaped when its budget is exhausted', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -921,5 +1058,28 @@ describe('voice diagnostics reporter', () => {
 
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(JSON.stringify(events[0]?.details).length).toBeLessThan(350_000);
+  });
+
+  it('stops before exhausted string budget erases later property names', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details: Record<string, unknown> = {};
+    for (let index = 0; index < 8; index += 1) {
+      details[String(index).padEnd(16_384, 'k')] = 'v'.repeat(16_384);
+    }
+    details['later'] = 'must not lose its name';
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details).toMatchObject({
+      __humeDiagnosticTruncated: true,
+    });
+    expect(Object.hasOwn(events[0]?.details ?? {}, '')).toBe(false);
+    expect(Object.hasOwn(events[0]?.details ?? {}, '#2')).toBe(false);
+    expect(Object.hasOwn(events[0]?.details ?? {}, 'later')).toBe(false);
   });
 });
