@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createVoiceDiagnosticsReporter,
   type VoiceDiagnosticEvent,
+  type VoiceDiagnosticValue,
   type VoiceDiagnosticsOptions,
   type VoiceLogger,
 } from './diagnostics';
@@ -230,6 +231,28 @@ describe('voice diagnostics reporter', () => {
     expect(JSON.stringify(events)).not.toContain('secret-token');
   });
 
+  it('preserves positions for unsupported AggregateError failures', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: {
+        error: new AggregateError(
+          [undefined, () => undefined, Symbol('cleanup failure')],
+          'Cleanup failed',
+        ),
+      },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      errors: [null, null, null],
+    });
+  });
+
   it('preserves repeated AggregateError references outside actual cycles', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -272,6 +295,31 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('preserves fallback aggregate failures when AggregateError is unavailable', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const fallbackAggregate = new Error('Multiple cleanup operations failed');
+    fallbackAggregate.name = 'AggregateError';
+    Object.defineProperty(fallbackAggregate, 'errors', {
+      value: [new Error('Track cleanup failed')],
+    });
+    vi.stubGlobal('AggregateError', undefined);
+
+    reporter.emit({
+      ...input,
+      details: { error: fallbackAggregate },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'AggregateError',
+      message: 'Multiple cleanup operations failed',
+      errors: [{ message: 'Track cleanup failed' }],
+    });
+  });
+
   it('preserves nested Error and DOMException causes', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -301,6 +349,56 @@ describe('voice diagnostics reporter', () => {
         cause: { message: 'Device disappeared' },
       },
     });
+  });
+
+  it('ignores inherited causes without invoking prototype getters', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const inheritedCauseGetter = vi.fn(() => new Error('Prototype data'));
+    const addInheritedCause = <ErrorValue extends Error>(
+      error: ErrorValue,
+      basePrototype: object,
+    ) => {
+      const prototype = {};
+      Object.setPrototypeOf(prototype, basePrototype);
+      Object.defineProperty(prototype, 'cause', {
+        get: inheritedCauseGetter,
+      });
+      Object.setPrototypeOf(error, prototype);
+      return error;
+    };
+
+    reporter.emit({
+      ...input,
+      details: {
+        errors: [
+          addInheritedCause(new Error('Standard failure'), Error.prototype),
+          addInheritedCause(
+            new DOMException('DOM failure', 'AbortError'),
+            DOMException.prototype,
+          ),
+          addInheritedCause(
+            new AggregateError([], 'Aggregate failure'),
+            AggregateError.prototype,
+          ),
+        ],
+      },
+    });
+
+    const errors = events[0]?.details['errors'];
+    expect(inheritedCauseGetter).not.toHaveBeenCalled();
+    expect(Array.isArray(errors)).toBe(true);
+    expect(
+      (errors as readonly VoiceDiagnosticValue[]).every(
+        (error) =>
+          error !== null &&
+          typeof error === 'object' &&
+          !Object.hasOwn(error, 'cause'),
+      ),
+    ).toBe(true);
   });
 
   it('preserves non-enumerable DOMException details', () => {
@@ -377,5 +475,23 @@ describe('voice diagnostics reporter', () => {
     ).not.toThrow();
     expect(() => JSON.stringify(events)).not.toThrow();
     expect(events[0]?.details['circular']).toEqual(['[Circular]']);
+  });
+
+  it('bounds sanitization of deeply shared object graphs', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let shared: Record<string, unknown> = { failure: 'track cleanup failed' };
+    for (let depth = 0; depth < 20; depth += 1) {
+      shared = { first: shared, second: shared };
+    }
+
+    reporter.emit({ ...input, details: { shared } });
+
+    const serialized = JSON.stringify(events[0]?.details);
+    expect(serialized).toContain('[Truncated]');
+    expect(serialized.length).toBeLessThan(100_000);
   });
 });

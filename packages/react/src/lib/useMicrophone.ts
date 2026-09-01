@@ -505,7 +505,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
               error: callbackError,
             },
           });
-          throw callbackError;
+          failures.push(
+            createContextualCleanupFailure(
+              'onStopRecording callback failed',
+              callbackError,
+            ),
+          );
         }
       }
 
@@ -790,7 +795,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
           }
           if (retryFailures.length > 0) {
             diagnosticError = createCleanupError(
-              [cleanupError, ...retryFailures],
+              [
+                cleanupError,
+                ...retryFailures.map((error) =>
+                  createContextualCleanupFailure(
+                    'Retired media stream cleanup failed',
+                    error,
+                  ),
+                ),
+              ],
               'Failed to retire previous microphone resources after retry.',
             );
           }

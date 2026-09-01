@@ -33,6 +33,7 @@ export default defineConfig({
     lineNumbers: true,
   },
   outDir: '.vitepress/dist',
+  srcExclude: ['guide/snippets/**'],
   themeConfig: {
     externalLinkIcon: true,
     footer: {

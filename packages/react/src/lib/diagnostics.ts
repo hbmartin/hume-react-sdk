@@ -227,6 +227,8 @@ const LEVEL_PRIORITY: Record<VoiceDiagnosticLevel, number> = {
 };
 
 const REDACTED = '[REDACTED]';
+const TRUNCATED = '[Truncated]';
+const MAX_SANITIZED_OBJECTS = 1_000;
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -271,10 +273,30 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
   return sanitized;
 };
 
+const getAggregateErrorFailures = (
+  value: object,
+): Readonly<{ error: Error; failures: readonly unknown[] }> | null => {
+  if (
+    typeof AggregateError !== 'undefined' &&
+    value instanceof AggregateError
+  ) {
+    return { error: value, failures: value.errors as unknown[] };
+  }
+  if (!(value instanceof Error) || value.name !== 'AggregateError') return null;
+  try {
+    if (!('errors' in value)) return null;
+    const errors: unknown = value.errors;
+    return Array.isArray(errors) ? { error: value, failures: errors } : null;
+  } catch {
+    return null;
+  }
+};
+
 const sanitizeValue = (
   value: unknown,
   secrets: ReadonlySet<string>,
   seen: WeakSet<object>,
+  budget: { remainingObjects: number },
 ): VoiceDiagnosticValue | undefined => {
   if (
     value === null ||
@@ -301,39 +323,38 @@ const sanitizeValue = (
   if (value instanceof Date) {
     return value.toISOString();
   }
-  if (
-    typeof AggregateError !== 'undefined' &&
-    value instanceof AggregateError
-  ) {
+  if (typeof value === 'object') {
     if (seen.has(value)) return '[Circular]';
-    seen.add(value);
+    if (budget.remainingObjects === 0) return TRUNCATED;
+    budget.remainingObjects -= 1;
+  }
+  const aggregate = getAggregateErrorFailures(value);
+  if (aggregate !== null) {
+    seen.add(aggregate.error);
     try {
-      const errors = sanitizeValue(value.errors, secrets, seen);
-      const cause =
-        'cause' in value
-          ? sanitizeValue(value.cause, secrets, seen)
-          : undefined;
+      const errors = sanitizeValue(aggregate.failures, secrets, seen, budget);
+      const cause = Object.hasOwn(aggregate.error, 'cause')
+        ? sanitizeValue(aggregate.error.cause, secrets, seen, budget)
+        : undefined;
       return {
-        name: redactSecrets(value.name, secrets),
-        message: redactSecrets(value.message, secrets),
-        ...(value.stack !== undefined && value.stack !== ''
-          ? { stack: redactSecrets(value.stack, secrets) }
+        name: redactSecrets(aggregate.error.name, secrets),
+        message: redactSecrets(aggregate.error.message, secrets),
+        ...(aggregate.error.stack !== undefined && aggregate.error.stack !== ''
+          ? { stack: redactSecrets(aggregate.error.stack, secrets) }
           : undefined),
         errors: errors ?? [],
         ...(cause === undefined ? undefined : { cause }),
       };
     } finally {
-      seen.delete(value);
+      seen.delete(aggregate.error);
     }
   }
   if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
-    if (seen.has(value)) return '[Circular]';
     seen.add(value);
     try {
-      const cause =
-        'cause' in value
-          ? sanitizeValue(value.cause, secrets, seen)
-          : undefined;
+      const cause = Object.hasOwn(value, 'cause')
+        ? sanitizeValue(value.cause, secrets, seen, budget)
+        : undefined;
       return {
         name: redactSecrets(value.name, secrets),
         message: redactSecrets(value.message, secrets),
@@ -347,13 +368,11 @@ const sanitizeValue = (
     }
   }
   if (value instanceof Error) {
-    if (seen.has(value)) return '[Circular]';
     seen.add(value);
     try {
-      const cause =
-        'cause' in value
-          ? sanitizeValue(value.cause, secrets, seen)
-          : undefined;
+      const cause = Object.hasOwn(value, 'cause')
+        ? sanitizeValue(value.cause, secrets, seen, budget)
+        : undefined;
       return {
         name: redactSecrets(value.name, secrets),
         message: redactSecrets(value.message, secrets),
@@ -374,22 +393,16 @@ const sanitizeValue = (
     return REDACTED;
   }
   if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return '[Circular]';
-    }
     seen.add(value);
     try {
-      return value
-        .map((item) => sanitizeValue(item, secrets, seen))
-        .filter((item): item is VoiceDiagnosticValue => item !== undefined);
+      return value.map(
+        (item) => sanitizeValue(item, secrets, seen, budget) ?? null,
+      );
     } finally {
       seen.delete(value);
     }
   }
   if (typeof value === 'object') {
-    if (seen.has(value)) {
-      return '[Circular]';
-    }
     seen.add(value);
     try {
       const result: Record<string, VoiceDiagnosticValue> = {};
@@ -398,7 +411,7 @@ const sanitizeValue = (
           result[key] = REDACTED;
           continue;
         }
-        const sanitized = sanitizeValue(entry, secrets, seen);
+        const sanitized = sanitizeValue(entry, secrets, seen, budget);
         if (sanitized !== undefined) {
           result[key] = sanitized;
         }
@@ -427,7 +440,9 @@ const sanitizeDetails = (
   details: Record<string, unknown>,
   secrets: ReadonlySet<string>,
 ): VoiceDiagnosticDetails => {
-  const sanitized = sanitizeValue(details, secrets, new WeakSet());
+  const sanitized = sanitizeValue(details, secrets, new WeakSet(), {
+    remainingObjects: MAX_SANITIZED_OBJECTS,
+  });
   if (
     sanitized !== null &&
     !Array.isArray(sanitized) &&
