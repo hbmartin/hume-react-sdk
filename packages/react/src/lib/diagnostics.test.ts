@@ -204,15 +204,15 @@ describe('voice diagnostics reporter', () => {
     }));
     reporter.beginConnection('secret-token');
 
+    const firstFailure = new Error('First cleanup exposed secret-token');
+    const secondFailure = new Error('Second cleanup failed');
     reporter.emit({
       ...input,
       details: {
         error: new AggregateError(
-          [
-            new Error('First cleanup exposed secret-token'),
-            new Error('Second cleanup failed'),
-          ],
+          [firstFailure, secondFailure],
           'Multiple cleanup operations failed for secret-token',
+          { cause: firstFailure },
         ),
       },
     });
@@ -224,8 +224,64 @@ describe('voice diagnostics reporter', () => {
         { message: 'First cleanup exposed [REDACTED]' },
         { message: 'Second cleanup failed' },
       ],
+      cause: { message: 'First cleanup exposed [REDACTED]' },
     });
     expect(JSON.stringify(events)).not.toContain('secret-token');
+  });
+
+  it('preserves repeated AggregateError references outside actual cycles', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const sharedError = new AggregateError(
+      [new Error('Track cleanup failed')],
+      'Microphone cleanup failed',
+    );
+
+    reporter.emit({
+      ...input,
+      details: { first: sharedError, second: sharedError },
+    });
+
+    expect(events[0]?.details['first']).toMatchObject({
+      errors: [{ message: 'Track cleanup failed' }],
+    });
+    expect(events[0]?.details['second']).toMatchObject({
+      errors: [{ message: 'Track cleanup failed' }],
+    });
+  });
+
+  it('preserves nested Error and DOMException causes', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const deviceFailure = new Error('Device disappeared');
+    const abortFailure = new DOMException(
+      'Cleanup was interrupted',
+      'AbortError',
+    );
+    Object.defineProperty(abortFailure, 'cause', { value: deviceFailure });
+    const cleanupFailure = new Error('Microphone cleanup failed', {
+      cause: abortFailure,
+    });
+
+    reporter.emit({
+      ...input,
+      details: { error: cleanupFailure },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      message: 'Microphone cleanup failed',
+      cause: {
+        name: 'AbortError',
+        message: 'Cleanup was interrupted',
+        cause: { message: 'Device disappeared' },
+      },
+    });
   });
 
   it('preserves non-enumerable DOMException details', () => {

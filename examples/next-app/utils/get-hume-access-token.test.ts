@@ -192,7 +192,7 @@ describe('getHumeAccessToken', () => {
     });
   });
 
-  it("rejects an expiration beyond Hume's documented 30-minute lifetime", async () => {
+  it("clamps an expiration beyond Hume's documented 30-minute lifetime", async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -204,9 +204,29 @@ describe('getHumeAccessToken', () => {
     );
     const { getHumeAccessToken } = await loadTokenModule();
 
-    await expect(getHumeAccessToken()).rejects.toThrow(
-      'without a valid expiration duration',
-    );
+    await expect(getHumeAccessToken()).resolves.toEqual({
+      accessToken: 'token',
+      expiresAfterMs: 1_800_000,
+      refreshAfterMs: 1_500_000,
+    });
+  });
+
+  it('returns integer durations from fractional monotonic timestamps', async () => {
+    now = 1_000_000.25;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      now += 4_000.125;
+      return Promise.resolve(
+        Response.json({ access_token: 'fractional-token', expires_in: 1800 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { getHumeAccessToken } = await loadTokenModule();
+
+    await expect(getHumeAccessToken()).resolves.toEqual({
+      accessToken: 'fractional-token',
+      expiresAfterMs: 1_795_999,
+      refreshAfterMs: 1_495_999,
+    });
   });
 
   it('uses only the canonical server-side token hostname for credentials', async () => {

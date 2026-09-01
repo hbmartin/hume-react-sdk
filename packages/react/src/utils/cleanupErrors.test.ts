@@ -32,6 +32,37 @@ describe('cleanup error helpers', () => {
     expect((error as AggregateError).message).toBe(
       'Two tracks failed. [1] First track failed; [2] Second track failed',
     );
+    expect((error as AggregateError).cause).toBe(firstFailure);
+  });
+
+  it('preserves an explicit cause when reporting flattened failures', () => {
+    const firstFailure = new Error('First track failed');
+    const secondFailure = new Error('Second track failed');
+    const firstAttempt = new AggregateError(
+      [firstFailure],
+      'First cleanup attempt failed',
+    );
+    const error = createCleanupError(
+      [firstFailure, secondFailure],
+      'Cleanup failed after retry.',
+      { cause: firstAttempt },
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).cause).toBe(firstAttempt);
+  });
+
+  it('does not drop a thrown undefined failure', () => {
+    let caught = false;
+
+    try {
+      throwCleanupFailures([undefined], 'Cleanup failed.');
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+
+    expect(caught).toBe(true);
   });
 
   it('flattens aggregate failures for later cleanup reporting', () => {

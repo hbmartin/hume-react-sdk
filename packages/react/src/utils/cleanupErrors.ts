@@ -1,5 +1,9 @@
 import { getBrowserErrorMessage } from './browserErrors';
 
+type CleanupErrorOptions = {
+  cause?: unknown;
+};
+
 /** Append leaf failures while avoiding nested AggregateError wrappers. */
 export const appendCleanupFailures = (
   failures: unknown[],
@@ -23,6 +27,7 @@ const describeCleanupFailure = (failure: unknown): string => {
 export const createCleanupError = (
   failures: readonly unknown[],
   summary: string,
+  options: CleanupErrorOptions = {},
 ): unknown => {
   if (failures.length === 0) return undefined;
   if (failures.length === 1) return failures[0];
@@ -33,7 +38,7 @@ export const createCleanupError = (
     )
     .join('; ');
   return new AggregateError([...failures], `${summary} ${details}`, {
-    cause: failures[0],
+    cause: 'cause' in options ? options.cause : failures[0],
   });
 };
 
@@ -41,7 +46,8 @@ export const createCleanupError = (
 export const throwCleanupFailures = (
   failures: readonly unknown[],
   summary: string,
+  options: CleanupErrorOptions = {},
 ): void => {
-  const error = createCleanupError(failures, summary);
-  if (error !== undefined) throw error;
+  if (failures.length === 0) return;
+  throw createCleanupError(failures, summary, options);
 };

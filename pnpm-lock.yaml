@@ -120,9 +120,6 @@ importers:
       autoprefixer:
         specifier: ^10.0.1
         version: 10.4.19(postcss@8.4.38)
-      jsdom:
-        specifier: ^24.0.0
-        version: 24.1.0(supports-color@8.1.1)
       postcss:
         specifier: ^8
         version: 8.4.38

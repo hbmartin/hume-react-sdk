@@ -42,10 +42,13 @@ describe('HUME_VOICE_HOSTNAME', () => {
     'api.hume.ai#fragment',
     'api.hume.ai\\alternate',
     'api%2ehume.ai',
-  ])('rejects URL-like configured value %j', async (value) => {
+  ])('reports URL-like configured value %j without throwing', async (value) => {
     vi.stubEnv('NEXT_PUBLIC_HUME_VOICE_HOSTNAME', value);
 
-    await expect(loadHumeModule()).rejects.toThrow(
+    const hume = await loadHumeModule();
+
+    expect(hume.HUME_VOICE_HOSTNAME).toBeNull();
+    expect(hume.HUME_VOICE_HOSTNAME_ERROR).toContain(
       'NEXT_PUBLIC_HUME_VOICE_HOSTNAME must be a hostname',
     );
   });

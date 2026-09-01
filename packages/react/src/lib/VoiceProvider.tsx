@@ -33,7 +33,7 @@ import {
 } from '../utils/browserErrors';
 import {
   appendCleanupFailures,
-  createCleanupError,
+  throwCleanupFailures,
 } from '../utils/cleanupErrors';
 import {
   type AudioContextCloseResult,
@@ -1170,16 +1170,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       try {
         stopStream();
       } catch (retryFailure) {
-        const firstDetail =
-          getBrowserErrorMessage(firstFailure) ?? 'Unknown error';
-        const retryDetail =
-          getBrowserErrorMessage(retryFailure) ?? 'Unknown error';
         const failures: unknown[] = [];
         appendCleanupFailures(failures, firstFailure);
         appendCleanupFailures(failures, retryFailure);
-        throw createCleanupError(
+        throwCleanupFailures(
           failures,
-          `Microphone cleanup failed: ${firstDetail}; cleanup retry failed: ${retryDetail}.`,
+          'Microphone cleanup failed after retry.',
+          { cause: firstFailure },
         );
       }
     }

@@ -16,7 +16,11 @@ import {
   type AccessTokenLease,
   type ScheduledAccessTokenLease,
 } from '../utils/access-token-lifecycle';
-import { HUME_ACCESS_TOKEN_ENDPOINT, HUME_VOICE_HOSTNAME } from '../utils/hume';
+import {
+  HUME_ACCESS_TOKEN_ENDPOINT,
+  HUME_VOICE_HOSTNAME,
+  HUME_VOICE_HOSTNAME_ERROR,
+} from '../utils/hume';
 import { ChatConnected } from './ChatConnected';
 import {
   Select,
@@ -71,7 +75,9 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   const [connectionAttemptError, setConnectionAttemptError] = useState<
     string | null
   >(null);
-  const [isAccessTokenLoading, setIsAccessTokenLoading] = useState(true);
+  const [isAccessTokenLoading, setIsAccessTokenLoading] = useState(
+    HUME_VOICE_HOSTNAME !== null,
+  );
   const accessTokenRequestRef =
     useRef<Promise<ScheduledAccessTokenLease | null> | null>(null);
   const {
@@ -100,6 +106,7 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     status.value === 'connected' ? activeOutputDeviceId : selectedSpeakerId;
 
   const refreshAccessToken = useCallback(() => {
+    if (HUME_VOICE_HOSTNAME === null) return Promise.resolve(null);
     if (accessTokenRequestRef.current !== null) {
       return accessTokenRequestRef.current;
     }
@@ -195,6 +202,8 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   }, [accessToken]);
 
   useEffect(() => {
+    if (HUME_VOICE_HOSTNAME === null) return;
+
     let cancelled = false;
     let refreshTimer: number | undefined;
 
@@ -272,30 +281,40 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     }
   };
 
-  const connectOptions = {
-    hostname: HUME_VOICE_HOSTNAME,
-    ...(configId !== undefined && configId !== ''
-      ? {
-          configId,
-          sessionSettings: {
-            type: 'session_settings' as const,
-            builtinTools: [{ name: 'web_search' as const }],
+  const connectOptions =
+    HUME_VOICE_HOSTNAME === null
+      ? null
+      : {
+          hostname: HUME_VOICE_HOSTNAME,
+          ...(configId !== undefined && configId !== ''
+            ? {
+                configId,
+                sessionSettings: {
+                  type: 'session_settings' as const,
+                  builtinTools: [{ name: 'web_search' as const }],
+                },
+              }
+            : {}),
+          devices: {
+            ...(selectedMicrophoneId === null
+              ? {}
+              : { microphoneDeviceId: selectedMicrophoneId }),
+            ...(selectedSpeakerId === null
+              ? {}
+              : { speakerDeviceId: selectedSpeakerId }),
           },
-        }
-      : {}),
-    devices: {
-      ...(selectedMicrophoneId === null
-        ? {}
-        : { microphoneDeviceId: selectedMicrophoneId }),
-      ...(selectedSpeakerId === null
-        ? {}
-        : { speakerDeviceId: selectedSpeakerId }),
-    },
-  };
+        };
 
   const connectToVoice = async () => {
     setDeviceSwitchError(null);
     setConnectionAttemptError(null);
+
+    if (connectOptions === null) {
+      setConnectionAttemptError(
+        HUME_VOICE_HOSTNAME_ERROR ?? 'The Hume voice hostname is invalid.',
+      );
+      return;
+    }
 
     const usableAccessToken = isAccessTokenLeaseUsable(
       accessToken,
@@ -330,6 +349,9 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   );
   const connectionFeedback = (
     <>
+      {HUME_VOICE_HOSTNAME_ERROR === null ? null : (
+        <div className="text-sm text-red-500">{HUME_VOICE_HOSTNAME_ERROR}</div>
+      )}
       {accessTokenError === null ? null : (
         <div
           className={
@@ -459,7 +481,10 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   const connectButton = (
     <button
       className="max-w-sm rounded border border-neutral-500 p-2 disabled:cursor-not-allowed disabled:opacity-50"
-      disabled={isAccessTokenLoading && !hasUsableAccessToken}
+      disabled={
+        HUME_VOICE_HOSTNAME === null ||
+        (isAccessTokenLoading && !hasUsableAccessToken)
+      }
       onClick={() => {
         void connectToVoice();
       }}
