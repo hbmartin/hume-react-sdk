@@ -78,6 +78,41 @@ describe('cleanup error helpers', () => {
     expect(failures).toEqual([firstFailure, secondFailure]);
   });
 
+  it('recursively flattens nested aggregate failures to their leaves', () => {
+    const failures: unknown[] = [];
+    const firstFailure = new Error('First track failed');
+    const secondFailure = new Error('Second track failed');
+    const emptyFailure = new AggregateError(
+      [],
+      'Cleanup failed without details',
+    );
+    const deeplyNestedFailure = new AggregateError(
+      [secondFailure, emptyFailure],
+      'Deep cleanup failed',
+    );
+    const nestedFailure = new AggregateError(
+      [firstFailure, deeplyNestedFailure],
+      'Nested cleanup failed',
+    );
+
+    appendCleanupFailures(
+      failures,
+      new AggregateError([nestedFailure], 'Outer cleanup failed'),
+    );
+
+    expect(failures).toEqual([firstFailure, secondFailure, emptyFailure]);
+  });
+
+  it('retains a cyclic aggregate instead of recursing forever', () => {
+    const failures: unknown[] = [];
+    const failure = new AggregateError([], 'Cyclic cleanup failure');
+    failure.errors.push(failure);
+
+    appendCleanupFailures(failures, failure);
+
+    expect(failures).toEqual([failure]);
+  });
+
   it('retains an empty AggregateError instead of dropping a thrown failure', () => {
     const failures: unknown[] = [];
     const failure = new AggregateError([], 'Cleanup failed without details');

@@ -36,6 +36,7 @@ describe('HUME_VOICE_HOSTNAME', () => {
 
   it.each([
     'https://api.hume.ai',
+    '@api.hume.ai',
     'user@api.hume.ai',
     'api.hume.ai/oauth2-cc/token',
     'api.hume.ai?environment=staging',

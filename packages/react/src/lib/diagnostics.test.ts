@@ -24,6 +24,7 @@ const createLogger = () =>
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('voice diagnostics reporter', () => {
@@ -250,6 +251,24 @@ describe('voice diagnostics reporter', () => {
     });
     expect(events[0]?.details['second']).toMatchObject({
       errors: [{ message: 'Track cleanup failed' }],
+    });
+  });
+
+  it('sanitizes diagnostic objects when AggregateError is unavailable', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    vi.stubGlobal('AggregateError', undefined);
+
+    reporter.emit({
+      ...input,
+      details: { cleanup: { phase: 'microphone', succeeded: false } },
+    });
+
+    expect(events[0]?.details).toEqual({
+      cleanup: { phase: 'microphone', succeeded: false },
     });
   });
 

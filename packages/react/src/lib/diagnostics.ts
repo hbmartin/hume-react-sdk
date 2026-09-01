@@ -301,7 +301,10 @@ const sanitizeValue = (
   if (value instanceof Date) {
     return value.toISOString();
   }
-  if (value instanceof AggregateError) {
+  if (
+    typeof AggregateError !== 'undefined' &&
+    value instanceof AggregateError
+  ) {
     if (seen.has(value)) return '[Circular]';
     seen.add(value);
     try {

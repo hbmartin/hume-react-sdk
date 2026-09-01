@@ -38,6 +38,8 @@ import { VoiceProviders } from '../components/providers';
 import { Call } from '../components/call';
 import { requireHumeAccess } from '../lib/require-hume-access';
 
+export const dynamic = 'force-dynamic';
+
 export default async function Home() {
   await requireHumeAccess();
 
@@ -59,6 +61,14 @@ into the requesting browser. Here, `requireHumeAccess` represents an
 application-owned helper that verifies a signed server-side session and rejects
 or redirects unauthorized users. Protect the page itself and run this check
 before consulting a token cache or minting a token.
+
+The page must perform authorization and decide which token to return at request
+time; do not cache its rendered output. A server-side token cache may reuse a
+Hume token after the per-request authorization check. For the App Router caching
+model used by the reference app, `dynamic = 'force-dynamic'` guarantees
+request-time rendering. If your application enables Next.js Cache Components,
+that segment option is no longer needed or supported; keep authorization and any
+token-bearing result request-bound and do not place them behind `use cache`.
 
 A route handler works equally well if you would rather fetch the token from the
 client on demand — useful when a page is statically rendered, or when a session

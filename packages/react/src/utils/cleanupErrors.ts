@@ -9,11 +9,29 @@ export const appendCleanupFailures = (
   failures: unknown[],
   error: unknown,
 ): void => {
-  if (error instanceof AggregateError && error.errors.length > 0) {
-    failures.push(...(error.errors as unknown[]));
-  } else {
-    failures.push(error);
-  }
+  const aggregateAncestors = new WeakSet<AggregateError>();
+
+  const appendFailure = (failure: unknown): void => {
+    if (
+      !(failure instanceof AggregateError) ||
+      failure.errors.length === 0 ||
+      aggregateAncestors.has(failure)
+    ) {
+      failures.push(failure);
+      return;
+    }
+
+    aggregateAncestors.add(failure);
+    try {
+      for (const nestedFailure of failure.errors as unknown[]) {
+        appendFailure(nestedFailure);
+      }
+    } finally {
+      aggregateAncestors.delete(failure);
+    }
+  };
+
+  appendFailure(error);
 };
 
 const describeCleanupFailure = (failure: unknown): string => {

@@ -14,7 +14,12 @@ export const normalizeHumeHostname = (value: string): string | null => {
     const codePoint = character.codePointAt(0);
     return codePoint !== undefined && (codePoint <= 0x20 || codePoint === 0x7f);
   });
-  if (value === '' || value.includes('%') || hasControlCharacter) {
+  if (
+    value === '' ||
+    value.includes('%') ||
+    value.includes('@') ||
+    hasControlCharacter
+  ) {
     return null;
   }
 
