@@ -309,6 +309,38 @@ describe('useMicrophone', () => {
     expect(onStopRecording).toHaveBeenCalledOnce();
   });
 
+  it('finishes cleanup and reports every failure when onStopRecording throws', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const callbackFailure = new Error('consumer stop callback failed');
+    const onStopRecording = vi.fn(() => {
+      throw callbackFailure;
+    });
+    const trackStop = vi.fn().mockImplementationOnce(() => {
+      throw new Error('track cleanup failed');
+    });
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    stubOwnedAudioContext(contextClose);
+    const { result, onError } = renderMicrophone({ onStopRecording });
+    result.current.start(
+      createStream([
+        { enabled: true, stop: trackStop } as unknown as MediaStreamTrack,
+      ]),
+    );
+
+    await act(() => result.current.stop());
+
+    expect(onStopRecording).toHaveBeenCalledOnce();
+    expect(contextClose).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Media track 1 cleanup failed.*onStopRecording callback failed/,
+      ),
+      'mic_closure_failure',
+    );
+    consoleWarn.mockRestore();
+  });
+
   it('flushes old final audio before buffered replacement audio', async () => {
     const oldFinalBuffer = new Uint8Array([1]).buffer;
     const candidateBuffer = new Uint8Array([2]).buffer;
@@ -463,7 +495,7 @@ describe('useMicrophone', () => {
     expect(cleanupError).toMatchObject({
       name: 'AggregateError',
       message:
-        'Failed to retire previous microphone resources after retry. [1] Media track 1 cleanup failed: old track cleanup failed; [2] old track cleanup retry failed',
+        'Failed to retire previous microphone resources after retry. [1] Media track 1 cleanup failed: old track cleanup failed; [2] Retired media stream cleanup failed: old track cleanup retry failed',
       errors: [
         {
           name: 'Error',
@@ -471,8 +503,13 @@ describe('useMicrophone', () => {
           cause: { name: 'Error', message: 'old track cleanup failed' },
         },
         {
-          name: 'AbortError',
-          message: 'old track cleanup retry failed',
+          name: 'Error',
+          message:
+            'Retired media stream cleanup failed: old track cleanup retry failed',
+          cause: {
+            name: 'AbortError',
+            message: 'old track cleanup retry failed',
+          },
         },
       ],
       cause: {

@@ -230,6 +230,28 @@ describe('voice diagnostics reporter', () => {
     expect(JSON.stringify(events)).not.toContain('secret-token');
   });
 
+  it('preserves positions for unsupported AggregateError failures', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: {
+        error: new AggregateError(
+          [undefined, () => undefined, Symbol('cleanup failure')],
+          'Cleanup failed',
+        ),
+      },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      errors: [null, null, null],
+    });
+  });
+
   it('preserves repeated AggregateError references outside actual cycles', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -269,6 +291,31 @@ describe('voice diagnostics reporter', () => {
 
     expect(events[0]?.details).toEqual({
       cleanup: { phase: 'microphone', succeeded: false },
+    });
+  });
+
+  it('preserves fallback aggregate failures when AggregateError is unavailable', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const fallbackAggregate = new Error('Multiple cleanup operations failed');
+    fallbackAggregate.name = 'AggregateError';
+    Object.defineProperty(fallbackAggregate, 'errors', {
+      value: [new Error('Track cleanup failed')],
+    });
+    vi.stubGlobal('AggregateError', undefined);
+
+    reporter.emit({
+      ...input,
+      details: { error: fallbackAggregate },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'AggregateError',
+      message: 'Multiple cleanup operations failed',
+      errors: [{ message: 'Track cleanup failed' }],
     });
   });
 
@@ -377,5 +424,23 @@ describe('voice diagnostics reporter', () => {
     ).not.toThrow();
     expect(() => JSON.stringify(events)).not.toThrow();
     expect(events[0]?.details['circular']).toEqual(['[Circular]']);
+  });
+
+  it('bounds sanitization of deeply shared object graphs', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let shared: Record<string, unknown> = { failure: 'track cleanup failed' };
+    for (let depth = 0; depth < 20; depth += 1) {
+      shared = { first: shared, second: shared };
+    }
+
+    reporter.emit({ ...input, details: { shared } });
+
+    const serialized = JSON.stringify(events[0]?.details);
+    expect(serialized).toContain('[Truncated]');
+    expect(serialized.length).toBeLessThan(100_000);
   });
 });

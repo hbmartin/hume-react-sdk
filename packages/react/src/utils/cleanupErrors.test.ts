@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   appendCleanupFailures,
@@ -7,6 +7,10 @@ import {
 } from './cleanupErrors';
 
 describe('cleanup error helpers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('preserves the identity of one failure', () => {
     const failure = new Error('Track failed');
 
@@ -120,5 +124,44 @@ describe('cleanup error helpers', () => {
     appendCleanupFailures(failures, failure);
 
     expect(failures).toEqual([failure]);
+  });
+
+  it('combines and flattens failures when AggregateError is unavailable', () => {
+    const firstFailure = new Error('First track failed');
+    const secondFailure = new Error('Second track failed');
+    vi.stubGlobal('AggregateError', undefined);
+
+    const error = createCleanupError(
+      [firstFailure, secondFailure],
+      'Two tracks failed.',
+    ) as Error & { cause: unknown; errors: readonly unknown[] };
+    const flattened: unknown[] = [];
+    appendCleanupFailures(flattened, error);
+
+    expect(error).toMatchObject({
+      name: 'AggregateError',
+      cause: firstFailure,
+      errors: [firstFailure, secondFailure],
+    });
+    expect(flattened).toEqual([firstFailure, secondFailure]);
+  });
+
+  it('bounds flattening of deeply shared aggregate graphs', () => {
+    const leaf = new Error('Track cleanup failed');
+    let shared = new AggregateError([leaf], 'Initial cleanup failed');
+    for (let depth = 0; depth < 20; depth += 1) {
+      shared = new AggregateError(
+        [shared, shared],
+        `Cleanup layer ${depth + 1} failed`,
+      );
+    }
+    const failures: unknown[] = [];
+
+    appendCleanupFailures(failures, shared);
+
+    expect(failures.length).toBeLessThan(1_000);
+    expect(failures.at(-1)).toMatchObject({
+      message: 'Cleanup failure traversal was truncated.',
+    });
   });
 });

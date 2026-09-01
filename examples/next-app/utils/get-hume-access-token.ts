@@ -12,11 +12,7 @@ const TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 const HUME_ACCESS_TOKEN_LIFETIME_SECONDS = 30 * 60;
 const OAuthAccessTokenSchema = z.object({
   access_token: z.string().trim().min(1),
-  expires_in: z
-    .number()
-    .int()
-    .positive()
-    .max(Math.floor(Number.MAX_SAFE_INTEGER / 1000)),
+  expires_in: z.number().int().positive(),
 });
 
 type HumeCredentials = {
