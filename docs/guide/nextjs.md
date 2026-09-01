@@ -53,7 +53,9 @@ export default async function Home() {
 
 A route handler works equally well if you would rather fetch the token from the
 client on demand — useful when a page is statically rendered, or when a session
-outlives the token.
+outlives the token. Authenticate and authorize the application user inside that
+handler before minting or returning a cached token. Do not treat same-origin
+fetching or CORS as authorization.
 
 ::: danger `NEXT_PUBLIC_` means public
 Anything prefixed `NEXT_PUBLIC_` is inlined into the client bundle. `HUME_API_KEY`

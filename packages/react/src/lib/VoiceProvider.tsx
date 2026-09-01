@@ -1170,8 +1170,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           getBrowserErrorMessage(firstFailure) ?? 'Unknown error';
         const retryDetail =
           getBrowserErrorMessage(retryFailure) ?? 'Unknown error';
+        const failures = [firstFailure, retryFailure].flatMap((failure) =>
+          failure instanceof AggregateError
+            ? (failure.errors as unknown[])
+            : [failure],
+        );
         throw new AggregateError(
-          [firstFailure, retryFailure],
+          failures,
           `${firstDetail}; cleanup retry failed: ${retryDetail}`,
           { cause: firstFailure },
         );

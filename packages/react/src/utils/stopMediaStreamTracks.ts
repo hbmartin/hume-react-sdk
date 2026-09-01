@@ -1,15 +1,22 @@
-/** Stop every track and report the first cleanup failure after all were attempted. */
+/** Stop every track and report every cleanup failure after all were attempted. */
 export const stopMediaStreamTracks = (stream: MediaStream): void => {
   const tracks = stream.getTracks();
-  let firstFailure: { error: unknown } | null = null;
+  const failures: unknown[] = [];
 
   for (const track of tracks) {
     try {
       track.stop();
     } catch (error) {
-      firstFailure ??= { error };
+      failures.push(error);
     }
   }
 
-  if (firstFailure !== null) throw firstFailure.error;
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      `${failures.length} media tracks failed to stop.`,
+      { cause: failures[0] },
+    );
+  }
 };

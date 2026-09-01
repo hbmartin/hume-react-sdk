@@ -48,6 +48,14 @@ const stopTracksAfterValidationFailure = (stream: MediaStream): void => {
   }
 };
 
+const appendCleanupFailures = (failures: unknown[], error: unknown) => {
+  if (error instanceof AggregateError) {
+    failures.push(...(error.errors as unknown[]));
+  } else {
+    failures.push(error);
+  }
+};
+
 /**
  * Acquire and release a browser microphone stream.
  *
@@ -105,18 +113,25 @@ export const useMicrophoneStream = () => {
     } else {
       streams = [stream];
     }
-    let firstFailure: { error: unknown } | null = null;
+    const failures: unknown[] = [];
 
     for (const ownedStream of streams) {
       try {
         stopMediaStreamTracks(ownedStream);
         ownedStreams.current.delete(ownedStream);
       } catch (error) {
-        firstFailure ??= { error };
+        appendCleanupFailures(failures, error);
       }
     }
 
-    if (firstFailure !== null) throw firstFailure.error;
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `${failures.length} microphone stream cleanup operations failed.`,
+        { cause: failures[0] },
+      );
+    }
   }, []);
 
   return {

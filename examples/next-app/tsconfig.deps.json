@@ -5,5 +5,12 @@
     "exactOptionalPropertyTypes": false,
     "skipLibCheck": false,
     "types": ["node", "react", "react-dom"]
-  }
+  },
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "dist",
+    "coverage",
+    "node_modules"
+  ]
 }

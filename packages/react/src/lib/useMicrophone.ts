@@ -29,6 +29,14 @@ const createMicrophoneAbortError = () =>
     'AbortError',
   );
 
+const appendCleanupFailures = (failures: unknown[], error: unknown) => {
+  if (error instanceof AggregateError) {
+    failures.push(...(error.errors as unknown[]));
+  } else {
+    failures.push(error);
+  }
+};
+
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
   preserveAudioContext?: boolean;
@@ -115,23 +123,35 @@ export const useMicrophone = (props: MicrophoneProps) => {
     currentAnalyzer.current = null;
   }, []);
 
+  const retryRetiredMicrophoneStream = useCallback(
+    (retiredStream: MediaStream): unknown[] => {
+      const failures: unknown[] = [];
+      if (!retiredStreams.current.has(retiredStream)) return failures;
+
+      try {
+        stopMediaStreamTracks(retiredStream);
+        retiredStreams.current.delete(retiredStream);
+      } catch (error) {
+        appendCleanupFailures(failures, error);
+      }
+
+      return failures;
+    },
+    [],
+  );
+
   const retryRetiredMicrophoneStreams = useCallback(
     (excludedStream: MediaStream | null = null): unknown[] => {
       const failures: unknown[] = [];
 
       for (const retiredStream of retiredStreams.current) {
         if (retiredStream === excludedStream) continue;
-        try {
-          stopMediaStreamTracks(retiredStream);
-          retiredStreams.current.delete(retiredStream);
-        } catch (error) {
-          failures.push(error);
-        }
+        failures.push(...retryRetiredMicrophoneStream(retiredStream));
       }
 
       return failures;
     },
-    [],
+    [retryRetiredMicrophoneStream],
   );
 
   const dataHandler = useCallback(
@@ -742,7 +762,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         let diagnosticError = cleanupError;
         if (currentStream.current === previousStream) {
           retiredStreams.current.add(previousStream);
-          const retryFailures = retryRetiredMicrophoneStreams();
+          const retryFailures = retryRetiredMicrophoneStream(previousStream);
           if (
             !retiredStreams.current.has(previousStream) &&
             currentStream.current === previousStream
@@ -765,7 +785,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
           name: 'resource.cleanup_failed',
           details: {
             resource: 'microphone',
-            message: 'Failed to fully retire previous microphone resources.',
+            message:
+              'Failed to fully retire previous or retained microphone resources.',
             error: diagnosticError,
           },
         });
@@ -812,7 +833,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       disposeMicrophoneResources,
       diagnostics,
       fftStore,
-      retryRetiredMicrophoneStreams,
+      retryRetiredMicrophoneStream,
       sendAudio,
       startFftAnalyzer,
       stopFftAnalyzer,

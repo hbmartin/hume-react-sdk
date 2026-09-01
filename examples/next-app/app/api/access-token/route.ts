@@ -1,3 +1,4 @@
+import { isHumeAccessTokenRequestAuthorized } from '../../../utils/access-token-authorization';
 import {
   getHumeAccessToken,
   MissingHumeCredentialsError,
@@ -7,7 +8,17 @@ const PRIVATE_NO_STORE_HEADERS = {
   'Cache-Control': 'private, no-store',
 };
 
-export async function POST() {
+export async function POST(request: Request) {
+  if (!isHumeAccessTokenRequestAuthorized(request)) {
+    return Response.json(
+      {
+        error:
+          'This reference endpoint is disabled in production until the application adds user authentication and authorization.',
+      },
+      { status: 403, headers: PRIVATE_NO_STORE_HEADERS },
+    );
+  }
+
   try {
     return Response.json(await getHumeAccessToken(), {
       headers: PRIVATE_NO_STORE_HEADERS,

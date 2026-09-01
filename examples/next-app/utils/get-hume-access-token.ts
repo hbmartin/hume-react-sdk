@@ -1,11 +1,20 @@
 import 'server-only';
-import { fetchAccessToken } from 'hume';
+import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { HUME_VOICE_HOSTNAME } from './hume';
 
-const ACCESS_TOKEN_REUSE_MS = 25 * 60 * 1000;
-const AccessTokenSchema = z.string().trim().min(1);
+const TOKEN_REUSE_NUMERATOR = 5;
+const TOKEN_REUSE_DENOMINATOR = 6;
+const OAuthAccessTokenSchema = z.object({
+  access_token: z.string().trim().min(1),
+  expires_in: z
+    .number()
+    .int()
+    .positive()
+    .max(Math.floor(Number.MAX_SAFE_INTEGER / 1000)),
+});
 
 type HumeCredentials = {
   apiKey: string;
@@ -14,15 +23,19 @@ type HumeCredentials = {
 
 export type HumeAccessToken = {
   accessToken: string;
-  refreshAt: number;
+  expiresAfterMs: number;
+  refreshAfterMs: number;
 };
 
-type CachedAccessToken = HumeAccessToken & {
+type CachedAccessToken = {
+  accessToken: string;
   credentialIdentity: string;
+  expiresAt: number;
+  reuseUntil: number;
 };
 
 let cachedAccessToken: CachedAccessToken | undefined;
-const pendingAccessTokens = new Map<string, Promise<HumeAccessToken>>();
+const pendingAccessTokens = new Map<string, Promise<CachedAccessToken>>();
 
 const isPresent = (value: string | undefined): value is string =>
   value !== undefined && value.trim() !== '';
@@ -39,7 +52,80 @@ const readHumeCredentials = (): HumeCredentials => {
 };
 
 const getCredentialIdentity = ({ apiKey, secretKey }: HumeCredentials) =>
-  `${apiKey}\u0000${secretKey}\u0000${HUME_VOICE_HOSTNAME}`;
+  createHash('sha256')
+    .update(apiKey)
+    .update('\0')
+    .update(secretKey)
+    .update('\0')
+    .update(HUME_VOICE_HOSTNAME)
+    .digest('base64url');
+
+const toAccessTokenResponse = (
+  token: CachedAccessToken,
+  now: number,
+): HumeAccessToken => ({
+  accessToken: token.accessToken,
+  expiresAfterMs: Math.max(0, token.expiresAt - now),
+  refreshAfterMs: Math.max(0, token.reuseUntil - now),
+});
+
+const fetchHumeAccessToken = async (
+  credentials: HumeCredentials,
+  credentialIdentity: string,
+): Promise<CachedAccessToken> => {
+  const auth = Buffer.from(
+    `${credentials.apiKey}:${credentials.secretKey}`,
+    'utf8',
+  ).toString('base64');
+  const response = await fetch(
+    `https://${HUME_VOICE_HOSTNAME}/oauth2-cc/token`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+      }).toString(),
+      cache: 'no-store',
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Hume rejected the access-token request with status ${response.status}.`,
+    );
+  }
+
+  let responseBody: unknown;
+  try {
+    responseBody = await response.json();
+  } catch {
+    throw new Error('Hume returned an invalid access-token response.');
+  }
+
+  const tokenResponse = OAuthAccessTokenSchema.safeParse(responseBody);
+  if (!tokenResponse.success) {
+    throw new Error(
+      'Hume returned an access token without a valid expiration duration.',
+    );
+  }
+
+  const issuedAt = Date.now();
+  const expiresInMs = tokenResponse.data.expires_in * 1000;
+  const reuseForMs = Math.max(
+    1,
+    Math.floor((expiresInMs * TOKEN_REUSE_NUMERATOR) / TOKEN_REUSE_DENOMINATOR),
+  );
+
+  return {
+    accessToken: tokenResponse.data.access_token,
+    credentialIdentity,
+    expiresAt: issuedAt + expiresInMs,
+    reuseUntil: issuedAt + reuseForMs,
+  };
+};
 
 export class MissingHumeCredentialsError extends Error {
   constructor() {
@@ -60,39 +146,23 @@ export const getHumeAccessToken = async (): Promise<HumeAccessToken> => {
   if (
     cachedAccessToken !== undefined &&
     cachedAccessToken.credentialIdentity === credentialIdentity &&
-    cachedAccessToken.refreshAt > now
+    cachedAccessToken.reuseUntil > now
   ) {
-    return {
-      accessToken: cachedAccessToken.accessToken,
-      refreshAt: cachedAccessToken.refreshAt,
-    };
+    return toAccessTokenResponse(cachedAccessToken, now);
   }
 
   const pendingAccessToken = pendingAccessTokens.get(credentialIdentity);
   if (pendingAccessToken !== undefined) {
-    return pendingAccessToken;
+    return toAccessTokenResponse(await pendingAccessToken, Date.now());
   }
 
-  const request = (async () => {
-    const accessToken = AccessTokenSchema.parse(
-      await fetchAccessToken({
-        ...credentials,
-        host: HUME_VOICE_HOSTNAME,
-      }),
-    );
-    const result = {
-      accessToken,
-      refreshAt: Date.now() + ACCESS_TOKEN_REUSE_MS,
-    };
-
-    cachedAccessToken = { ...result, credentialIdentity };
-    return result;
-  })();
-
+  const request = fetchHumeAccessToken(credentials, credentialIdentity);
   pendingAccessTokens.set(credentialIdentity, request);
 
   try {
-    return await request;
+    const result = await request;
+    cachedAccessToken = result;
+    return toAccessTokenResponse(result, Date.now());
   } finally {
     pendingAccessTokens.delete(credentialIdentity);
   }
