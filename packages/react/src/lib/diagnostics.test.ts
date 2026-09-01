@@ -277,6 +277,27 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('preserves lazily exposed native Error stacks', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const error = new Error('Track cleanup failed');
+
+    reporter.emit({ ...input, details: { error } });
+
+    const serializedError = events[0]?.details['error'];
+    if (
+      serializedError === null ||
+      typeof serializedError !== 'object' ||
+      Array.isArray(serializedError)
+    ) {
+      throw new Error('Expected serialized error details.');
+    }
+    expect(serializedError['stack']).toContain('Track cleanup failed');
+  });
+
   it('sanitizes diagnostic objects when AggregateError is unavailable', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -318,6 +339,42 @@ describe('voice diagnostics reporter', () => {
       message: 'Multiple cleanup operations failed',
       errors: [{ message: 'Track cleanup failed' }],
     });
+  });
+
+  it('does not invoke AggregateError errors accessors', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const errorsGetter = vi.fn(() => [new Error('Prototype data')]);
+    const inheritedAccessor = new Error('Inherited errors accessor');
+    inheritedAccessor.name = 'AggregateError';
+    const inheritedPrototype = Object.create(Error.prototype) as object;
+    Object.defineProperty(inheritedPrototype, 'errors', { get: errorsGetter });
+    Object.setPrototypeOf(inheritedAccessor, inheritedPrototype);
+    const ownAccessor = new Error('Own errors accessor');
+    ownAccessor.name = 'AggregateError';
+    Object.defineProperty(ownAccessor, 'errors', { get: errorsGetter });
+    const nativeAccessor = new AggregateError([], 'Native errors accessor');
+    Object.defineProperty(nativeAccessor, 'errors', { get: errorsGetter });
+
+    reporter.emit({
+      ...input,
+      details: { errors: [inheritedAccessor, ownAccessor, nativeAccessor] },
+    });
+
+    expect(errorsGetter).not.toHaveBeenCalled();
+    const errors = events[0]?.details['errors'];
+    expect(Array.isArray(errors)).toBe(true);
+    expect(
+      (errors as readonly VoiceDiagnosticValue[]).every(
+        (error) =>
+          error !== null &&
+          typeof error === 'object' &&
+          !Object.hasOwn(error, 'errors'),
+      ),
+    ).toBe(true);
   });
 
   it('preserves nested Error and DOMException causes', () => {
@@ -491,7 +548,166 @@ describe('voice diagnostics reporter', () => {
     reporter.emit({ ...input, details: { shared } });
 
     const serialized = JSON.stringify(events[0]?.details);
-    expect(serialized).toContain('[Truncated]');
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(serialized).toContain('"__humeDiagnosticTruncated":true');
     expect(serialized.length).toBeLessThan(100_000);
+  });
+
+  it('prioritizes primary errors over earlier oversized siblings', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const primaryError = new Error('Primary cleanup failure');
+
+    reporter.emit({
+      ...input,
+      details: {
+        noise: Array.from({ length: 10_000 }, (_, index) => index),
+        error: primaryError,
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'Error',
+      message: 'Primary cleanup failure',
+    });
+  });
+
+  it('keeps AggregateError errors array-shaped when its budget is exhausted', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const aggregate = new AggregateError(
+      [new Error('Nested cleanup failure')],
+      'Aggregate cleanup failure',
+    );
+
+    reporter.emit({
+      ...input,
+      details: {
+        values: [...Array.from({ length: 997 }, () => ({})), aggregate],
+      },
+    });
+
+    const values = events[0]?.details['values'];
+    if (!Array.isArray(values)) throw new Error('Expected diagnostic array.');
+    const serializedAggregate: unknown = values.at(-1);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(serializedAggregate).toMatchObject({
+      name: 'AggregateError',
+      errors: [{ __humeDiagnosticTruncated: true }],
+    });
+    const serializedErrors =
+      serializedAggregate !== null &&
+      typeof serializedAggregate === 'object' &&
+      !Array.isArray(serializedAggregate)
+        ? (serializedAggregate as Record<string, unknown>)['errors']
+        : undefined;
+    expect(Array.isArray(serializedErrors)).toBe(true);
+  });
+
+  it('redacts terminal buffers without consuming recursive object budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: {
+        values: [
+          ...Array.from({ length: 998 }, () => new ArrayBuffer(1)),
+          new Error('Cleanup failure after buffers'),
+        ],
+      },
+    });
+
+    const values = events[0]?.details['values'];
+    if (!Array.isArray(values)) throw new Error('Expected diagnostic array.');
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(values.at(-1)).toMatchObject({
+      message: 'Cleanup failure after buffers',
+    });
+  });
+
+  it('bounds arrays and objects containing primitive entries', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const primitiveEntries = Array.from(
+      { length: 10_000 },
+      (_, index) => index,
+    );
+
+    reporter.emit({
+      ...input,
+      details: { values: primitiveEntries },
+    });
+    reporter.emit({
+      ...input,
+      details: {
+        values: Object.fromEntries(
+          primitiveEntries.map((value) => [`entry-${value}`, value]),
+        ),
+      },
+    });
+
+    for (const event of events) {
+      const serialized = JSON.stringify(event.details);
+      expect(event.detailsTruncated).toBe(true);
+      expect(serialized).toContain('"__humeDiagnosticTruncated":true');
+      expect(serialized.length).toBeLessThan(100_000);
+    }
+    const arrayValues = events[0]?.details['values'];
+    const objectValues = events[1]?.details['values'];
+    if (
+      !Array.isArray(arrayValues) ||
+      objectValues === null ||
+      Array.isArray(objectValues) ||
+      typeof objectValues !== 'object'
+    ) {
+      throw new Error('Expected bounded array and object diagnostic values.');
+    }
+    expect(arrayValues.length).toBeLessThanOrEqual(1_000);
+    expect(Object.keys(objectValues).length).toBeLessThanOrEqual(1_000);
+  });
+
+  it('bounds individual diagnostic strings after redaction', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+    const oversizedKey = `secret-token:${'k'.repeat(20_000)}`;
+
+    reporter.emit({
+      ...input,
+      details: {
+        [oversizedKey]: 'value',
+        message: `secret-token:${'x'.repeat(20_000)}`,
+      },
+    });
+
+    const message = events[0]?.details['message'];
+    expect(typeof message).toBe('string');
+    expect(message).not.toContain('secret-token');
+    expect(message).toHaveLength(16_384);
+    expect(message).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    const sanitizedKey = Object.keys(events[0]?.details ?? {}).find(
+      (key) => key !== 'message',
+    );
+    expect(sanitizedKey).not.toContain('secret-token');
+    expect(sanitizedKey).toHaveLength(16_384);
+    expect(sanitizedKey).toMatch(/\[Truncated\]$/);
   });
 });

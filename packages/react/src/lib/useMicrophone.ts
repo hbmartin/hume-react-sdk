@@ -2,7 +2,10 @@
 import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { getBrowserErrorMessage } from '../utils/browserErrors';
+import {
+  getBrowserErrorMessage,
+  getBrowserErrorName,
+} from '../utils/browserErrors';
 import {
   appendCleanupFailures,
   createCleanupError,
@@ -13,6 +16,7 @@ import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
 import {
   createVoiceDiagnosticsReporter,
+  invokeIsolatedConsumerCallback,
   type VoiceDiagnosticsReporter,
 } from './diagnostics';
 import { FftStore } from './fftStore';
@@ -37,10 +41,23 @@ const createMicrophoneAbortError = () =>
 const createContextualCleanupFailure = (
   context: string,
   cause: unknown,
-): Error =>
-  new Error(`${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`, {
-    cause,
-  });
+): Error => {
+  const failure = new Error(
+    `${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`,
+    {
+      cause,
+    },
+  );
+  const causeName = getBrowserErrorName(cause);
+  if (causeName !== null && causeName !== '') {
+    Object.defineProperty(failure, 'name', {
+      configurable: true,
+      value: causeName,
+      writable: true,
+    });
+  }
+  return failure;
+};
 
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
@@ -493,25 +510,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
           category: 'microphone',
           name: 'microphone.recording_stopped',
         });
-        try {
-          onStopRecordingRef.current?.();
-        } catch (callbackError) {
-          diagnostics.current?.emit({
-            level: 'warn',
-            category: 'consumer',
-            name: 'consumer.callback_failed',
-            details: {
-              callback: 'onStopRecording',
-              error: callbackError,
-            },
-          });
-          failures.push(
-            createContextualCleanupFailure(
-              'onStopRecording callback failed',
-              callbackError,
-            ),
-          );
-        }
+        invokeIsolatedConsumerCallback(
+          diagnostics.current,
+          'onStopRecording',
+          () => onStopRecordingRef.current?.(),
+        );
       }
 
       if (contextToClose && shouldCloseContext && !preserveAudioContext) {

@@ -309,7 +309,7 @@ describe('useMicrophone', () => {
     expect(onStopRecording).toHaveBeenCalledOnce();
   });
 
-  it('finishes cleanup and reports every failure when onStopRecording throws', async () => {
+  it('finishes cleanup and isolates onStopRecording from resource failures', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const callbackFailure = new Error('consumer stop callback failed');
@@ -333,11 +333,44 @@ describe('useMicrophone', () => {
     expect(onStopRecording).toHaveBeenCalledOnce();
     expect(contextClose).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /Media track 1 cleanup failed.*onStopRecording callback failed/,
-      ),
+      expect.stringContaining('Media track 1 cleanup failed'),
       'mic_closure_failure',
     );
+    expect(onError.mock.calls[0]?.[0]).not.toContain(
+      'onStopRecording callback failed',
+    );
+    expect(consoleWarn.mock.calls[0]?.[0]).toBe(
+      '[Hume Voice][consumer] consumer.callback_failed',
+    );
+    const callbackEvent = consoleWarn.mock.calls[0]?.[1] as unknown as
+      | VoiceDiagnosticEvent
+      | undefined;
+    expect(callbackEvent?.details['callback']).toBe('onStopRecording');
+    consoleWarn.mockRestore();
+  });
+
+  it('does not misclassify an isolated onStopRecording failure as cleanup', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onStopRecording = vi.fn(() => {
+      throw new Error('consumer stop callback failed');
+    });
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    stubOwnedAudioContext(contextClose);
+    const { result, onError } = renderMicrophone({ onStopRecording });
+    result.current.start(createStream());
+
+    await act(() => result.current.stop());
+
+    expect(contextClose).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    expect(consoleWarn.mock.calls[0]?.[0]).toBe(
+      '[Hume Voice][consumer] consumer.callback_failed',
+    );
+    const callbackEvent = consoleWarn.mock.calls[0]?.[1] as unknown as
+      | VoiceDiagnosticEvent
+      | undefined;
+    expect(callbackEvent?.details['callback']).toBe('onStopRecording');
     consoleWarn.mockRestore();
   });
 
@@ -503,7 +536,7 @@ describe('useMicrophone', () => {
           cause: { name: 'Error', message: 'old track cleanup failed' },
         },
         {
-          name: 'Error',
+          name: 'AbortError',
           message:
             'Retired media stream cleanup failed: old track cleanup retry failed',
           cause: {

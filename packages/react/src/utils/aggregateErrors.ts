@@ -1,0 +1,54 @@
+export type DataProperty = Readonly<{ value: unknown }>;
+
+/** Read an own data property without invoking an accessor. */
+export const getOwnDataProperty = (
+  value: object,
+  key: PropertyKey,
+): DataProperty | null => {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor
+      ? { value: descriptor.value }
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Read a data property from an object or its prototypes without invoking accessors. */
+export const getDataProperty = (
+  value: object,
+  key: PropertyKey,
+): DataProperty | null => {
+  const visited = new WeakSet<object>();
+  let current: object | null = value;
+
+  try {
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor !== undefined) {
+        return 'value' in descriptor ? { value: descriptor.value } : null;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+export type AggregateErrorDetails = Readonly<{
+  error: object;
+  failures: readonly unknown[];
+}>;
+
+/** Recognize native, cross-realm, and aggregate-shaped errors without invoking accessors. */
+export const getAggregateErrorDetails = (
+  value: unknown,
+): AggregateErrorDetails | null => {
+  if (typeof value !== 'object' || value === null) return null;
+  if (getDataProperty(value, 'name')?.value !== 'AggregateError') return null;
+  const errors = getOwnDataProperty(value, 'errors')?.value;
+  return Array.isArray(errors) ? { error: value, failures: errors } : null;
+};

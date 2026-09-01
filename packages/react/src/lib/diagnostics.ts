@@ -1,4 +1,9 @@
 import packageJson from '../../package.json';
+import {
+  getAggregateErrorDetails,
+  getDataProperty,
+  getOwnDataProperty,
+} from '../utils/aggregateErrors';
 
 /** Severity threshold for diagnostic events. */
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -96,6 +101,8 @@ export type VoiceDiagnosticEvent = Readonly<{
   category: VoiceDiagnosticCategory;
   name: VoiceDiagnosticEventName;
   durationMs?: number;
+  /** Whether one or more detail values were truncated to enforce safety limits. */
+  detailsTruncated?: true;
   details: VoiceDiagnosticDetails;
 }>;
 
@@ -227,8 +234,21 @@ const LEVEL_PRIORITY: Record<VoiceDiagnosticLevel, number> = {
 };
 
 const REDACTED = '[REDACTED]';
-const TRUNCATED = '[Truncated]';
+const TRUNCATED_SUFFIX = '[Truncated]';
+const TRUNCATED_PROPERTY = '__humeDiagnosticTruncated';
+const TRUNCATED_VALUE = Object.freeze({
+  [TRUNCATED_PROPERTY]: true,
+});
+const MAX_SANITIZED_ENTRIES = 1_000;
 const MAX_SANITIZED_OBJECTS = 1_000;
+const MAX_SANITIZED_STRING_LENGTH = 16_384;
+const PRIORITY_DIAGNOSTIC_KEYS = [
+  'error',
+  'errors',
+  'failures',
+  'cause',
+] as const;
+const PRIORITY_DIAGNOSTIC_KEY_SET = new Set<string>(PRIORITY_DIAGNOSTIC_KEYS);
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -273,30 +293,69 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
   return sanitized;
 };
 
-const getAggregateErrorFailures = (
+type SanitizationBudget = {
+  remainingEntries: number;
+  remainingObjects: number;
+  truncated: boolean;
+};
+
+const markTruncated = (budget: SanitizationBudget): VoiceDiagnosticValue => {
+  budget.truncated = true;
+  return TRUNCATED_VALUE;
+};
+
+const truncateDiagnosticString = (
+  value: string,
+  budget: SanitizationBudget,
+) => {
+  if (value.length <= MAX_SANITIZED_STRING_LENGTH) return value;
+  budget.truncated = true;
+  return `${value.slice(
+    0,
+    MAX_SANITIZED_STRING_LENGTH - TRUNCATED_SUFFIX.length,
+  )}${TRUNCATED_SUFFIX}`;
+};
+
+const sanitizeString = (
+  value: string,
+  secrets: ReadonlySet<string>,
+  budget: SanitizationBudget,
+) => truncateDiagnosticString(redactSecrets(value, secrets), budget);
+
+const getStringDataProperty = (
   value: object,
-): Readonly<{ error: Error; failures: readonly unknown[] }> | null => {
-  if (
-    typeof AggregateError !== 'undefined' &&
-    value instanceof AggregateError
-  ) {
-    return { error: value, failures: value.errors as unknown[] };
-  }
-  if (!(value instanceof Error) || value.name !== 'AggregateError') return null;
+  key: PropertyKey,
+  fallback: string,
+) => {
+  const property = getDataProperty(value, key)?.value;
+  return typeof property === 'string' ? property : fallback;
+};
+
+const getErrorStack = (value: object) => {
+  const dataStack = getStringDataProperty(value, 'stack', '');
+  if (dataStack !== '' || !(value instanceof Error)) return dataStack;
+
   try {
-    if (!('errors' in value)) return null;
-    const errors: unknown = value.errors;
-    return Array.isArray(errors) ? { error: value, failures: errors } : null;
+    return typeof value.stack === 'string' ? value.stack : '';
   } catch {
-    return null;
+    return '';
   }
+};
+
+const consumeObjectBudget = (budget: SanitizationBudget) => {
+  if (budget.remainingObjects === 0) {
+    markTruncated(budget);
+    return false;
+  }
+  budget.remainingObjects -= 1;
+  return true;
 };
 
 const sanitizeValue = (
   value: unknown,
   secrets: ReadonlySet<string>,
   seen: WeakSet<object>,
-  budget: { remainingObjects: number },
+  budget: SanitizationBudget,
 ): VoiceDiagnosticValue | undefined => {
   if (
     value === null ||
@@ -308,10 +367,10 @@ const sanitizeValue = (
       : String(value);
   }
   if (typeof value === 'string') {
-    return redactSecrets(value, secrets);
+    return sanitizeString(value, secrets, budget);
   }
   if (typeof value === 'bigint') {
-    return value.toString();
+    return truncateDiagnosticString(value.toString(), budget);
   }
   if (
     typeof value === 'undefined' ||
@@ -323,68 +382,6 @@ const sanitizeValue = (
   if (value instanceof Date) {
     return value.toISOString();
   }
-  if (typeof value === 'object') {
-    if (seen.has(value)) return '[Circular]';
-    if (budget.remainingObjects === 0) return TRUNCATED;
-    budget.remainingObjects -= 1;
-  }
-  const aggregate = getAggregateErrorFailures(value);
-  if (aggregate !== null) {
-    seen.add(aggregate.error);
-    try {
-      const errors = sanitizeValue(aggregate.failures, secrets, seen, budget);
-      const cause = Object.hasOwn(aggregate.error, 'cause')
-        ? sanitizeValue(aggregate.error.cause, secrets, seen, budget)
-        : undefined;
-      return {
-        name: redactSecrets(aggregate.error.name, secrets),
-        message: redactSecrets(aggregate.error.message, secrets),
-        ...(aggregate.error.stack !== undefined && aggregate.error.stack !== ''
-          ? { stack: redactSecrets(aggregate.error.stack, secrets) }
-          : undefined),
-        errors: errors ?? [],
-        ...(cause === undefined ? undefined : { cause }),
-      };
-    } finally {
-      seen.delete(aggregate.error);
-    }
-  }
-  if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
-    seen.add(value);
-    try {
-      const cause = Object.hasOwn(value, 'cause')
-        ? sanitizeValue(value.cause, secrets, seen, budget)
-        : undefined;
-      return {
-        name: redactSecrets(value.name, secrets),
-        message: redactSecrets(value.message, secrets),
-        ...(value.stack !== undefined && value.stack !== ''
-          ? { stack: redactSecrets(value.stack, secrets) }
-          : undefined),
-        ...(cause === undefined ? undefined : { cause }),
-      };
-    } finally {
-      seen.delete(value);
-    }
-  }
-  if (value instanceof Error) {
-    seen.add(value);
-    try {
-      const cause = Object.hasOwn(value, 'cause')
-        ? sanitizeValue(value.cause, secrets, seen, budget)
-        : undefined;
-      return {
-        name: redactSecrets(value.name, secrets),
-        message: redactSecrets(value.message, secrets),
-        ...(value.stack !== undefined && value.stack !== ''
-          ? { stack: redactSecrets(value.stack, secrets) }
-          : undefined),
-        ...(cause === undefined ? undefined : { cause }),
-      };
-    } finally {
-      seen.delete(value);
-    }
-  }
   if (
     value instanceof ArrayBuffer ||
     ArrayBuffer.isView(value) ||
@@ -392,36 +389,163 @@ const sanitizeValue = (
   ) {
     return REDACTED;
   }
-  if (Array.isArray(value)) {
+  if (typeof value === 'object' && seen.has(value)) return '[Circular]';
+
+  const aggregate = getAggregateErrorDetails(value);
+  if (aggregate !== null) {
+    const canTraverse = consumeObjectBudget(budget);
+    seen.add(aggregate.error);
+    try {
+      const sanitizedFailures = canTraverse
+        ? sanitizeValue(aggregate.failures, secrets, seen, budget)
+        : markTruncated(budget);
+      const errors = Array.isArray(sanitizedFailures)
+        ? sanitizedFailures
+        : [sanitizedFailures ?? null];
+      const causeProperty = canTraverse
+        ? getOwnDataProperty(aggregate.error, 'cause')
+        : null;
+      const cause =
+        causeProperty === null
+          ? undefined
+          : sanitizeValue(causeProperty.value, secrets, seen, budget);
+      const stack = getErrorStack(aggregate.error);
+      return {
+        name: sanitizeString(
+          getStringDataProperty(aggregate.error, 'name', 'AggregateError'),
+          secrets,
+          budget,
+        ),
+        message: sanitizeString(
+          getStringDataProperty(aggregate.error, 'message', ''),
+          secrets,
+          budget,
+        ),
+        ...(stack === ''
+          ? undefined
+          : { stack: sanitizeString(stack, secrets, budget) }),
+        errors,
+        ...(cause === undefined ? undefined : { cause }),
+        ...(canTraverse ? undefined : { [TRUNCATED_PROPERTY]: true }),
+      };
+    } finally {
+      seen.delete(aggregate.error);
+    }
+  }
+  if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
+    const canTraverse = consumeObjectBudget(budget);
     seen.add(value);
     try {
-      return value.map(
-        (item) => sanitizeValue(item, secrets, seen, budget) ?? null,
-      );
+      const causeProperty = canTraverse
+        ? getOwnDataProperty(value, 'cause')
+        : null;
+      const cause =
+        causeProperty === null
+          ? undefined
+          : sanitizeValue(causeProperty.value, secrets, seen, budget);
+      return {
+        name: sanitizeString(value.name, secrets, budget),
+        message: sanitizeString(value.message, secrets, budget),
+        ...(value.stack !== undefined && value.stack !== ''
+          ? { stack: sanitizeString(value.stack, secrets, budget) }
+          : undefined),
+        ...(cause === undefined ? undefined : { cause }),
+        ...(canTraverse ? undefined : { [TRUNCATED_PROPERTY]: true }),
+      };
     } finally {
       seen.delete(value);
     }
   }
-  if (typeof value === 'object') {
+  if (value instanceof Error) {
+    const canTraverse = consumeObjectBudget(budget);
     seen.add(value);
     try {
-      const result: Record<string, VoiceDiagnosticValue> = {};
-      for (const [key, entry] of Object.entries(value)) {
-        if (REDACTED_KEYS.has(normalizeKey(key))) {
-          result[key] = REDACTED;
-          continue;
+      const causeProperty = canTraverse
+        ? getOwnDataProperty(value, 'cause')
+        : null;
+      const cause =
+        causeProperty === null
+          ? undefined
+          : sanitizeValue(causeProperty.value, secrets, seen, budget);
+      const stack = getErrorStack(value);
+      return {
+        name: sanitizeString(
+          getStringDataProperty(value, 'name', 'Error'),
+          secrets,
+          budget,
+        ),
+        message: sanitizeString(
+          getStringDataProperty(value, 'message', ''),
+          secrets,
+          budget,
+        ),
+        ...(stack === ''
+          ? undefined
+          : { stack: sanitizeString(stack, secrets, budget) }),
+        ...(cause === undefined ? undefined : { cause }),
+        ...(canTraverse ? undefined : { [TRUNCATED_PROPERTY]: true }),
+      };
+    } finally {
+      seen.delete(value);
+    }
+  }
+  if (typeof value !== 'object') return undefined;
+  if (!consumeObjectBudget(budget)) return markTruncated(budget);
+  if (Array.isArray(value)) {
+    seen.add(value);
+    try {
+      const result: VoiceDiagnosticValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (budget.remainingEntries === 0) {
+          result.push(markTruncated(budget));
+          break;
         }
-        const sanitized = sanitizeValue(entry, secrets, seen, budget);
-        if (sanitized !== undefined) {
-          result[key] = sanitized;
-        }
+        budget.remainingEntries -= 1;
+        result.push(sanitizeValue(value[index], secrets, seen, budget) ?? null);
       }
       return result;
     } finally {
       seen.delete(value);
     }
   }
-  return undefined;
+  seen.add(value);
+  try {
+    const result: Record<string, VoiceDiagnosticValue> = {};
+    const sanitizeEntry = (key: string): boolean => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || descriptor.enumerable !== true)
+        return true;
+      if (budget.remainingEntries === 0) {
+        result[TRUNCATED_PROPERTY] = true;
+        markTruncated(budget);
+        return false;
+      }
+      budget.remainingEntries -= 1;
+      const sanitizedKey = sanitizeString(key, secrets, budget);
+      if (REDACTED_KEYS.has(normalizeKey(key))) {
+        result[sanitizedKey] = REDACTED;
+        return true;
+      }
+      const entry = (value as Record<string, unknown>)[key];
+      const sanitized = sanitizeValue(entry, secrets, seen, budget);
+      if (sanitized !== undefined) {
+        result[sanitizedKey] = sanitized;
+      }
+      return true;
+    };
+
+    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+      if (!sanitizeEntry(key)) return result;
+    }
+    for (const key in value) {
+      if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+      if (!Object.hasOwn(value, key)) continue;
+      if (!sanitizeEntry(key)) break;
+    }
+    return result;
+  } finally {
+    seen.delete(value);
+  }
 };
 
 const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
@@ -439,20 +563,29 @@ const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
 const sanitizeDetails = (
   details: Record<string, unknown>,
   secrets: ReadonlySet<string>,
-): VoiceDiagnosticDetails => {
-  const sanitized = sanitizeValue(details, secrets, new WeakSet(), {
+): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
+  const budget: SanitizationBudget = {
+    remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
-  });
+    truncated: false,
+  };
+  const sanitized = sanitizeValue(details, secrets, new WeakSet(), budget);
   if (
     sanitized !== null &&
     !Array.isArray(sanitized) &&
     typeof sanitized === 'object'
   ) {
-    return freezeDiagnosticValue(
-      sanitized as Record<string, VoiceDiagnosticValue>,
-    );
+    return {
+      details: freezeDiagnosticValue(
+        sanitized as Record<string, VoiceDiagnosticValue>,
+      ),
+      truncated: budget.truncated,
+    };
   }
-  return freezeDiagnosticValue({ value: sanitized ?? null });
+  return {
+    details: freezeDiagnosticValue({ value: sanitized ?? null }),
+    truncated: budget.truncated,
+  };
 };
 
 const getConfiguration = (configuration: DiagnosticConfiguration) => {
@@ -521,8 +654,11 @@ export const createVoiceDiagnosticsReporter = (
         ...(configuration.includeContent ? (input.sensitiveDetails ?? {}) : {}),
       };
       let details: VoiceDiagnosticDetails;
+      let detailsTruncated = false;
       try {
-        details = sanitizeDetails(combinedDetails, secrets);
+        const sanitized = sanitizeDetails(combinedDetails, secrets);
+        details = sanitized.details;
+        detailsTruncated = sanitized.truncated;
       } catch {
         details = Object.freeze({ sanitizationFailed: true });
       }
@@ -555,6 +691,7 @@ export const createVoiceDiagnosticsReporter = (
         ...(input.durationMs === undefined
           ? undefined
           : { durationMs: Math.max(0, input.durationMs) }),
+        ...(detailsTruncated ? { detailsTruncated: true as const } : undefined),
         details,
       }) satisfies VoiceDiagnosticEvent;
 

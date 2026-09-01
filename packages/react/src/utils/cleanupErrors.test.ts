@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   appendCleanupFailures,
@@ -7,10 +7,6 @@ import {
 } from './cleanupErrors';
 
 describe('cleanup error helpers', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it('preserves the identity of one failure', () => {
     const failure = new Error('Track failed');
 
@@ -126,27 +122,30 @@ describe('cleanup error helpers', () => {
     expect(failures).toEqual([failure]);
   });
 
-  it('combines and flattens failures when AggregateError is unavailable', () => {
-    const firstFailure = new Error('First track failed');
-    const secondFailure = new Error('Second track failed');
-    vi.stubGlobal('AggregateError', undefined);
-
-    const error = createCleanupError(
-      [firstFailure, secondFailure],
-      'Two tracks failed.',
-    ) as Error & { cause: unknown; errors: readonly unknown[] };
+  it('flattens aggregate-shaped failures across constructor boundaries', () => {
+    const failure = new Error('Track failed');
+    const aggregate = Object.create({ name: 'AggregateError' }) as object;
+    Object.defineProperty(aggregate, 'errors', { value: [failure] });
     const flattened: unknown[] = [];
-    appendCleanupFailures(flattened, error);
 
-    expect(error).toMatchObject({
-      name: 'AggregateError',
-      cause: firstFailure,
-      errors: [firstFailure, secondFailure],
-    });
-    expect(flattened).toEqual([firstFailure, secondFailure]);
+    appendCleanupFailures(flattened, aggregate);
+
+    expect(flattened).toEqual([failure]);
   });
 
-  it('bounds flattening of deeply shared aggregate graphs', () => {
+  it('does not invoke aggregate-shaped errors accessors', () => {
+    const errorsGetter = vi.fn(() => [new Error('Prototype data')]);
+    const aggregate = Object.create({ name: 'AggregateError' }) as object;
+    Object.defineProperty(aggregate, 'errors', { get: errorsGetter });
+    const failures: unknown[] = [];
+
+    appendCleanupFailures(failures, aggregate);
+
+    expect(errorsGetter).not.toHaveBeenCalled();
+    expect(failures).toEqual([aggregate]);
+  });
+
+  it('expands each aggregate object once in deeply shared graphs', () => {
     const leaf = new Error('Track cleanup failed');
     let shared = new AggregateError([leaf], 'Initial cleanup failed');
     for (let depth = 0; depth < 20; depth += 1) {
@@ -159,9 +158,25 @@ describe('cleanup error helpers', () => {
 
     appendCleanupFailures(failures, shared);
 
-    expect(failures.length).toBeLessThan(1_000);
+    expect(failures).toEqual([leaf]);
+  });
+
+  it('bounds distinct failures and retains the first omitted failure as cause', () => {
+    const nestedFailures = Array.from(
+      { length: 1_100 },
+      (_, index) => new Error(`Track ${index + 1} failed`),
+    );
+    const failures: unknown[] = [];
+
+    appendCleanupFailures(
+      failures,
+      new AggregateError(nestedFailures, 'All tracks failed'),
+    );
+
+    expect(failures).toHaveLength(1_000);
     expect(failures.at(-1)).toMatchObject({
-      message: 'Cleanup failure traversal was truncated.',
+      message: 'Cleanup failure traversal was truncated after 1000 nodes.',
+      cause: nestedFailures[999],
     });
   });
 });
