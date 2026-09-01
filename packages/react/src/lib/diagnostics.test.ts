@@ -1038,6 +1038,55 @@ describe('voice diagnostics reporter', () => {
     expect(sanitizedKey).toMatch(/\[Truncated\]$/);
   });
 
+  it('bounds source processing before repeated redactions shrink the output', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 's'.repeat(128);
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: {
+        message: `${'x'.repeat(8_000)}${secret.repeat(700)}unbounded-tail`,
+      },
+    });
+
+    const message = events[0]?.details['message'];
+    expect(message).not.toContain('unbounded-tail');
+    expect(message).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('redacts a secret that crosses the bounded source cutoff', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 'private-token-value';
+    const cutoffPrefix = 'x'.repeat(16_384 - '[Truncated]'.length - 4);
+    const oversizedValue = `${cutoffPrefix}${secret}tail`;
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: { [oversizedValue]: 'value', message: oversizedValue },
+    });
+
+    const message = events[0]?.details['message'];
+    const sanitizedKey = Object.keys(events[0]?.details ?? {}).find(
+      (key) => key !== 'message',
+    );
+    expect(message).not.toContain(secret.slice(0, 4));
+    expect(message).toMatch(/\[Truncated\]$/);
+    expect(sanitizedKey).not.toContain(secret.slice(0, 4));
+    expect(sanitizedKey).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
   it('bounds aggregate diagnostic string content', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({

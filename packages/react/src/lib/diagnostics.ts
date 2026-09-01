@@ -326,6 +326,60 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
   return sanitized;
 };
 
+type BoundedRedaction = Readonly<{
+  sourceTruncated: boolean;
+  value: string;
+}>;
+
+/**
+ * Redact only the source prefix that can contribute to the bounded output.
+ * Matching against the original value lets a secret that begins before the
+ * input cutoff consume the complete secret instead of exposing its prefix.
+ */
+const redactSecretsWithinLimits = (
+  value: string,
+  secrets: ReadonlySet<string>,
+  maximumInputLength: number,
+  maximumOutputLength: number,
+): BoundedRedaction => {
+  if (maximumInputLength === 0 || maximumOutputLength === 0) {
+    return { sourceTruncated: value.length > 0, value: '' };
+  }
+  if (secrets.size === 0) {
+    return {
+      sourceTruncated: value.length > maximumInputLength,
+      value: value.slice(0, maximumInputLength),
+    };
+  }
+
+  let cursor = 0;
+  let sanitized = '';
+  while (
+    cursor < value.length &&
+    cursor < maximumInputLength &&
+    sanitized.length < maximumOutputLength
+  ) {
+    let matchedSecret = '';
+    for (const secret of secrets) {
+      if (
+        secret.length > matchedSecret.length &&
+        value.startsWith(secret, cursor)
+      ) {
+        matchedSecret = secret;
+      }
+    }
+    if (matchedSecret !== '') {
+      sanitized += REDACTED;
+      cursor += matchedSecret.length;
+    } else {
+      sanitized += value[cursor] ?? '';
+      cursor += 1;
+    }
+  }
+
+  return { sourceTruncated: cursor < value.length, value: sanitized };
+};
+
 type SanitizationBudget = {
   prioritizedKeys: WeakMap<object, Set<string>>;
   remainingEntries: number;
@@ -342,12 +396,13 @@ const markTruncated = (budget: SanitizationBudget): VoiceDiagnosticValue => {
 const truncateDiagnosticString = (
   value: string,
   budget: SanitizationBudget,
+  sourceTruncated = false,
 ) => {
   const maximumLength = Math.min(
     MAX_SANITIZED_STRING_LENGTH,
     budget.remainingStringLength,
   );
-  if (value.length <= maximumLength) {
+  if (!sourceTruncated && value.length <= maximumLength) {
     budget.remainingStringLength -= value.length;
     return value;
   }
@@ -363,25 +418,46 @@ const sanitizeString = (
   value: string,
   secrets: ReadonlySet<string>,
   budget: SanitizationBudget,
-) => truncateDiagnosticString(redactSecrets(value, secrets), budget);
+) => {
+  const maximumLength = Math.min(
+    MAX_SANITIZED_STRING_LENGTH,
+    budget.remainingStringLength,
+  );
+  const redacted = redactSecretsWithinLimits(
+    value,
+    secrets,
+    maximumLength,
+    maximumLength,
+  );
+  return truncateDiagnosticString(
+    redacted.value,
+    budget,
+    redacted.sourceTruncated,
+  );
+};
 
 const sanitizeObjectKey = (
   value: string,
   secrets: ReadonlySet<string>,
   budget: SanitizationBudget,
 ): string | null => {
-  const redacted = redactSecrets(value, secrets);
   const maximumLength = Math.min(
     MAX_SANITIZED_STRING_LENGTH,
     budget.remainingStringLength,
   );
-  if (redacted.length <= maximumLength) {
-    budget.remainingStringLength -= redacted.length;
-    return redacted;
+  const redacted = redactSecretsWithinLimits(
+    value,
+    secrets,
+    maximumLength,
+    maximumLength,
+  );
+  if (!redacted.sourceTruncated && redacted.value.length <= maximumLength) {
+    budget.remainingStringLength -= redacted.value.length;
+    return redacted.value;
   }
   budget.truncated = true;
   if (maximumLength < TRUNCATED_SUFFIX.length) return null;
-  const sanitized = `${redacted.slice(
+  const sanitized = `${redacted.value.slice(
     0,
     maximumLength - TRUNCATED_SUFFIX.length,
   )}${TRUNCATED_SUFFIX}`;
