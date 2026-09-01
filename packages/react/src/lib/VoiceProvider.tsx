@@ -32,6 +32,10 @@ import {
   isMicrophonePermissionDeniedError,
 } from '../utils/browserErrors';
 import {
+  appendCleanupFailures,
+  createCleanupError,
+} from '../utils/cleanupErrors';
+import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
 } from '../utils/closeAudioContextWithTimeout';
@@ -1170,15 +1174,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           getBrowserErrorMessage(firstFailure) ?? 'Unknown error';
         const retryDetail =
           getBrowserErrorMessage(retryFailure) ?? 'Unknown error';
-        const failures = [firstFailure, retryFailure].flatMap((failure) =>
-          failure instanceof AggregateError
-            ? (failure.errors as unknown[])
-            : [failure],
-        );
-        throw new AggregateError(
+        const failures: unknown[] = [];
+        appendCleanupFailures(failures, firstFailure);
+        appendCleanupFailures(failures, retryFailure);
+        throw createCleanupError(
           failures,
-          `${firstDetail}; cleanup retry failed: ${retryDetail}`,
-          { cause: firstFailure },
+          `Microphone cleanup failed: ${firstDetail}; cleanup retry failed: ${retryDetail}.`,
         );
       }
     }

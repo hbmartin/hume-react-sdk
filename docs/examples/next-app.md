@@ -22,6 +22,9 @@ The credentials themselves live behind a module marked `server-only`.
 `app/api/access-token/route.ts` authorizes the local-development request before
 exchanging the credentials, validates both the token and its OAuth expiration,
 and returns a relative token lease through a private, non-cacheable response.
+The server-side `HUME_TOKEN_HOSTNAME` independently controls the trusted OAuth
+destination; the public voice hostname never determines where credentials are
+sent.
 The server reuses a token for five-sixths of its measured lifetime, while
 `components/ExampleComponent.tsx` refreshes it using a monotonic client clock.
 A tab can therefore reconnect without receiving the long-lived API key or
@@ -29,7 +32,9 @@ secret key and without relying on synchronized server and browser clocks.
 
 The repository has no application user model, so this authorization seam fails
 closed in production. A deployment must replace it with its own server-verified
-session and authorization policy before enabling the route.
+session and authorization policy before enabling the route. The development
+check also requires a same-origin browser request as CSRF hardening, but that
+header check is not a substitute for authenticating a production user.
 
 → [`@humeai/voice-react` guide](../guide/voice-react)
 

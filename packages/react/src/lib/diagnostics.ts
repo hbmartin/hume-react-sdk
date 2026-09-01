@@ -301,6 +301,28 @@ const sanitizeValue = (
   if (value instanceof Date) {
     return value.toISOString();
   }
+  if (value instanceof AggregateError) {
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    const errors = sanitizeValue(value.errors, secrets, seen);
+    return {
+      name: redactSecrets(value.name, secrets),
+      message: redactSecrets(value.message, secrets),
+      ...(value.stack !== undefined && value.stack !== ''
+        ? { stack: redactSecrets(value.stack, secrets) }
+        : undefined),
+      errors: errors ?? [],
+    };
+  }
+  if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
+    return {
+      name: redactSecrets(value.name, secrets),
+      message: redactSecrets(value.message, secrets),
+      ...(value.stack !== undefined && value.stack !== ''
+        ? { stack: redactSecrets(value.stack, secrets) }
+        : undefined),
+    };
+  }
   if (value instanceof Error) {
     return {
       name: redactSecrets(value.name, secrets),

@@ -266,6 +266,15 @@ describe('useGetMicrophoneStream', () => {
       firstFailure,
       secondFailure,
     ]);
+    expect((cleanupError as AggregateError).message).toContain(
+      '2 microphone cleanup failures occurred.',
+    );
+    expect((cleanupError as AggregateError).message).toContain(
+      'First owned stream failed',
+    );
+    expect((cleanupError as AggregateError).message).toContain(
+      'Second owned stream failed',
+    );
     expect(firstTrackStop).toHaveBeenCalledOnce();
     expect(secondTrackStop).toHaveBeenCalledOnce();
   });

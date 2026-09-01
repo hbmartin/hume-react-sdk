@@ -45,4 +45,44 @@ describe('access-token lifecycle', () => {
       ),
     ).toBeNull();
   });
+
+  it('clamps a non-monotonic request duration to zero', () => {
+    expect(
+      createAccessTokenLease(
+        {
+          accessToken: 'token',
+          expiresAfterMs: 1_000,
+          refreshAfterMs: 500,
+        },
+        2_000,
+        1_000,
+      ),
+    ).toEqual({
+      lease: {
+        accessToken: 'token',
+        expiresAt: 2_000,
+      },
+      refreshAfterMs: 500,
+    });
+  });
+
+  it('clamps a refresh window consumed in transit to zero', () => {
+    expect(
+      createAccessTokenLease(
+        {
+          accessToken: 'token',
+          expiresAfterMs: 2_000,
+          refreshAfterMs: 500,
+        },
+        1_000,
+        1_750,
+      ),
+    ).toEqual({
+      lease: {
+        accessToken: 'token',
+        expiresAt: 3_000,
+      },
+      refreshAfterMs: 0,
+    });
+  });
 });

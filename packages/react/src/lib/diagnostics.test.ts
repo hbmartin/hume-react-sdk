@@ -196,6 +196,58 @@ describe('voice diagnostics reporter', () => {
     expect(serialized).toContain('[REDACTED]');
   });
 
+  it('preserves and redacts individual AggregateError failures', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+
+    reporter.emit({
+      ...input,
+      details: {
+        error: new AggregateError(
+          [
+            new Error('First cleanup exposed secret-token'),
+            new Error('Second cleanup failed'),
+          ],
+          'Multiple cleanup operations failed for secret-token',
+        ),
+      },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'AggregateError',
+      message: 'Multiple cleanup operations failed for [REDACTED]',
+      errors: [
+        { message: 'First cleanup exposed [REDACTED]' },
+        { message: 'Second cleanup failed' },
+      ],
+    });
+    expect(JSON.stringify(events)).not.toContain('secret-token');
+  });
+
+  it('preserves non-enumerable DOMException details', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: {
+        error: new DOMException('Cleanup was interrupted', 'AbortError'),
+      },
+    });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'AbortError',
+      message: 'Cleanup was interrupted',
+    });
+  });
+
   it('keeps redaction values after correlation is cleared', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({

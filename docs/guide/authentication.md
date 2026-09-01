@@ -20,22 +20,37 @@ Your Hume API key and secret key must never reach the browser. Treat
 
 ## Minting a token on the server
 
-Use `fetchAccessToken` from the `hume` package, which is a dependency of
-`@humeai/voice-react`, and call it somewhere the secret key is safe — a server
-component, a route handler, or your own backend.
+Install the `hume` package as a direct application dependency, then call its
+`fetchAccessToken` helper somewhere the secret key is safe — a server component,
+a route handler, or your own backend. Do not rely on
+`@humeai/voice-react`'s transitive dependency being importable.
 
-If you use a route handler, authenticate and authorize the application user
-before minting or returning a cached token. A same-origin URL, CORS policy, or
-`Origin` header is not user authentication; callers that can reach an open
-route can otherwise spend the Hume account associated with your credentials.
+```sh
+pnpm add hume
+```
+
+At every server entry point, authenticate and authorize the application user
+before minting or returning a cached token. This applies to server components,
+Server Actions, route handlers, `getServerSideProps`, and custom backends. A
+same-origin URL, CORS policy, or `Origin` header is not user authentication;
+callers that can reach an open page or route can otherwise spend the Hume account
+associated with your credentials.
+
+In the example below, `requireHumeAccess` represents an application-owned helper
+that verifies a signed server-side session and rejects or redirects users who
+are not allowed to use Hume. Protect the page itself and run this check before
+consulting a token cache or minting a token.
 
 ```tsx
 // app/page.tsx — a React Server Component
 import { fetchAccessToken } from 'hume';
 
 import { Call } from './call';
+import { requireHumeAccess } from './require-hume-access';
 
 export default async function Home() {
+  await requireHumeAccess();
+
   const accessToken = await fetchAccessToken({
     apiKey: process.env['HUME_API_KEY'],
     secretKey: process.env['HUME_SECRET_KEY'],
@@ -52,6 +67,11 @@ secret key must **not** carry that prefix.
 Degrading gracefully when the keys are missing makes the app much easier to pick
 up; `examples/next-app` renders a short setup screen rather than throwing. See
 the [Next.js reference app](../examples/next-app).
+
+The reference app performs the OAuth POST directly because it also validates
+`expires_in`, bounds it to Hume's documented 30-minute lifetime, and schedules
+cache and browser refresh deadlines from that response. Applications that only
+need a token string can use `fetchAccessToken` as shown above.
 
 ## Passing it to `connect`
 
@@ -76,10 +96,10 @@ as a `socket_error` with reason `socket_connection_failure`. See
 
 ## Refreshing an expired token
 
-Access tokens are short-lived. A token that expires mid-call does not interrupt
-the call — the socket is already authenticated — but the next `connect` with it
-will fail. Fetch a fresh token before reconnecting rather than reusing the one
-you rendered with.
+Access tokens expire after 30 minutes. A token that expires mid-call does not
+interrupt the call — the socket is already authenticated — but the next
+`connect` with it will fail. Fetch a fresh token before reconnecting rather than
+reusing the one you rendered with.
 
 ## Two `connect` calls at once
 

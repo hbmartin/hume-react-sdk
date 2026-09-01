@@ -3,6 +3,10 @@ import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getBrowserErrorMessage } from '../utils/browserErrors';
+import {
+  appendCleanupFailures,
+  createCleanupError,
+} from '../utils/cleanupErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
@@ -28,14 +32,6 @@ const createMicrophoneAbortError = () =>
     'The microphone operation was interrupted by a lifecycle change.',
     'AbortError',
   );
-
-const appendCleanupFailures = (failures: unknown[], error: unknown) => {
-  if (error instanceof AggregateError) {
-    failures.push(...(error.errors as unknown[]));
-  } else {
-    failures.push(error);
-  }
-};
 
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
@@ -770,7 +766,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             currentStream.current = null;
           }
           if (retryFailures.length > 0) {
-            diagnosticError = new AggregateError(
+            diagnosticError = createCleanupError(
               [cleanupError, ...retryFailures],
               'Failed to retire previous microphone resources after retry.',
             );

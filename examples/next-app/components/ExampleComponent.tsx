@@ -178,6 +178,23 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   }, []);
 
   useEffect(() => {
+    if (accessToken === null) return;
+
+    const expiringToken = accessToken;
+    const expiresAfterMs = Math.max(
+      0,
+      expiringToken.expiresAt - getMonotonicTime(),
+    );
+    const expirationTimer = window.setTimeout(() => {
+      setAccessToken((currentToken) =>
+        currentToken === expiringToken ? null : currentToken,
+      );
+    }, expiresAfterMs + 1);
+
+    return () => window.clearTimeout(expirationTimer);
+  }, [accessToken]);
+
+  useEffect(() => {
     let cancelled = false;
     let refreshTimer: number | undefined;
 
@@ -314,7 +331,17 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   const connectionFeedback = (
     <>
       {accessTokenError === null ? null : (
-        <div className="text-sm text-red-500">{accessTokenError}</div>
+        <div
+          className={
+            hasUsableAccessToken
+              ? 'text-sm text-amber-700'
+              : 'text-sm text-red-500'
+          }
+        >
+          {hasUsableAccessToken
+            ? `Access-token refresh failed. The existing token remains usable until it expires. ${accessTokenError}`
+            : accessTokenError}
+        </div>
       )}
       {connectionAttemptError === null ? null : (
         <div className="text-sm text-red-500">{connectionAttemptError}</div>

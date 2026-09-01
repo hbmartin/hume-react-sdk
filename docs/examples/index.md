@@ -40,7 +40,7 @@ to `.env.local` and fill it in first.
 
 | Example                   | Workspace name           | URL                     |
 | ------------------------- | ------------------------ | ----------------------- |
-| `examples/next-app`       | `example-next-app`       | `http://localhost:3003` |
+| `examples/next-app`       | `example-next-app`       | `http://127.0.0.1:3003` |
 | `examples/vite-app-embed` | `example-vite-app-embed` | `http://localhost:3002` |
 | `examples/vite-app`       | `example-vite-app`       | `http://localhost:3001` |
 
