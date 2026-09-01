@@ -6,6 +6,7 @@ import { getBrowserErrorMessage } from '../utils/browserErrors';
 import {
   appendCleanupFailures,
   createCleanupError,
+  throwCleanupFailures,
 } from '../utils/cleanupErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
@@ -32,6 +33,14 @@ const createMicrophoneAbortError = () =>
     'The microphone operation was interrupted by a lifecycle change.',
     'AbortError',
   );
+
+const createContextualCleanupFailure = (
+  context: string,
+  cause: unknown,
+): Error =>
+  new Error(`${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`, {
+    cause,
+  });
 
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
@@ -244,7 +253,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       const streamToStop = currentStream.current;
       const contextToClose = audioContext.current;
       const shouldCloseContext = ownsAudioContext.current;
-      const failures: string[] = [];
+      const failures: unknown[] = [];
 
       // Enumerate tracks before relinquishing the stream. getTracks() is
       // synchronous, so this cannot race a new start, and retaining the stream
@@ -256,8 +265,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
           tracksToStop = streamToStop.getTracks();
         } catch (error) {
           tracksEnumerated = false;
-          const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-          failures.push(`Media track enumeration failed: ${message}`);
+          failures.push(
+            createContextualCleanupFailure(
+              'Media track enumeration failed',
+              error,
+            ),
+          );
         }
       }
 
@@ -362,8 +375,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
           }
           if (errorName !== 'InvalidStateError') {
             recorderStopped = false;
-            const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-            failures.push(`Recorder cleanup failed: ${message}`);
+            failures.push(
+              createContextualCleanupFailure('Recorder cleanup failed', error),
+            );
             if (!restoreOnFailure) {
               removeDataHandler();
             }
@@ -392,7 +406,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
             recorderStopped = false;
             removeDataHandler();
             removeStopHandler();
-            failures.push('Recorder cleanup failed: stop event timed out');
+            failures.push(
+              new Error('Recorder cleanup failed: stop event timed out'),
+            );
           }
         } else if (recorderStopped) {
           removeDataHandler();
@@ -415,7 +431,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           }
           if (!finalDataFlushed) {
             failures.push(
-              'Recorder cleanup failed: final audio data timed out',
+              new Error('Recorder cleanup failed: final audio data timed out'),
             );
           }
           diagnostics.current?.emit({
@@ -441,9 +457,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
             track.stop();
           } catch (error) {
             tracksStopped = false;
-            const message = getBrowserErrorMessage(error) ?? 'Unknown error';
             failures.push(
-              `Media track ${index + 1} cleanup failed: ${message}`,
+              createContextualCleanupFailure(
+                `Media track ${index + 1} cleanup failed`,
+                error,
+              ),
             );
           }
         });
@@ -456,8 +474,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       for (const error of retryRetiredMicrophoneStreams(streamToStop)) {
-        const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-        failures.push(`Retired media stream cleanup failed: ${message}`);
+        failures.push(
+          createContextualCleanupFailure(
+            'Retired media stream cleanup failed',
+            error,
+          ),
+        );
       }
 
       if (recorderStopped && tracksStopped && !preserveMute) {
@@ -491,14 +513,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
         const closeResult = await closeAudioContextWithTimeout(contextToClose);
         if (!closeResult.success) {
           failures.push(
-            `Audio context cleanup failed: ${closeResult.error.message}`,
+            createContextualCleanupFailure(
+              'Audio context cleanup failed',
+              closeResult.error,
+            ),
           );
         }
       }
 
-      if (failures.length > 0) {
-        throw new Error(failures.join('; '));
-      }
+      throwCleanupFailures(failures, 'Microphone resource cleanup failed.');
     },
     [
       dataHandler,

@@ -1,15 +1,37 @@
 import { getBrowserErrorMessage } from './browserErrors';
 
+type CleanupErrorOptions = {
+  cause?: unknown;
+};
+
 /** Append leaf failures while avoiding nested AggregateError wrappers. */
 export const appendCleanupFailures = (
   failures: unknown[],
   error: unknown,
 ): void => {
-  if (error instanceof AggregateError && error.errors.length > 0) {
-    failures.push(...(error.errors as unknown[]));
-  } else {
-    failures.push(error);
-  }
+  const aggregateAncestors = new WeakSet<AggregateError>();
+
+  const appendFailure = (failure: unknown): void => {
+    if (
+      !(failure instanceof AggregateError) ||
+      failure.errors.length === 0 ||
+      aggregateAncestors.has(failure)
+    ) {
+      failures.push(failure);
+      return;
+    }
+
+    aggregateAncestors.add(failure);
+    try {
+      for (const nestedFailure of failure.errors as unknown[]) {
+        appendFailure(nestedFailure);
+      }
+    } finally {
+      aggregateAncestors.delete(failure);
+    }
+  };
+
+  appendFailure(error);
 };
 
 const describeCleanupFailure = (failure: unknown): string => {
@@ -23,6 +45,7 @@ const describeCleanupFailure = (failure: unknown): string => {
 export const createCleanupError = (
   failures: readonly unknown[],
   summary: string,
+  options: CleanupErrorOptions = {},
 ): unknown => {
   if (failures.length === 0) return undefined;
   if (failures.length === 1) return failures[0];
@@ -33,7 +56,7 @@ export const createCleanupError = (
     )
     .join('; ');
   return new AggregateError([...failures], `${summary} ${details}`, {
-    cause: failures[0],
+    cause: 'cause' in options ? options.cause : failures[0],
   });
 };
 
@@ -41,7 +64,8 @@ export const createCleanupError = (
 export const throwCleanupFailures = (
   failures: readonly unknown[],
   summary: string,
+  options: CleanupErrorOptions = {},
 ): void => {
-  const error = createCleanupError(failures, summary);
-  if (error !== undefined) throw error;
+  if (failures.length === 0) return;
+  throw createCleanupError(failures, summary, options);
 };

@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-import { DEFAULT_HUME_HOSTNAME, normalizeHumeHostname } from './hume-hostname';
+import { resolveHumeHostname } from './hume-hostname';
 import { getServerMonotonicTime } from './server-monotonic-time';
 
 const TOKEN_REUSE_NUMERATOR = 5;
@@ -16,7 +16,7 @@ const OAuthAccessTokenSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(HUME_ACCESS_TOKEN_LIFETIME_SECONDS),
+    .max(Math.floor(Number.MAX_SAFE_INTEGER / 1000)),
 });
 
 type HumeCredentials = {
@@ -55,18 +55,12 @@ const readHumeCredentials = (): HumeCredentials => {
 };
 
 const readHumeTokenHostname = () => {
-  const configuredHostname = process.env['HUME_TOKEN_HOSTNAME']?.trim();
-  if (configuredHostname === undefined || configuredHostname === '') {
-    return DEFAULT_HUME_HOSTNAME;
-  }
-
-  const normalizedHostname = normalizeHumeHostname(configuredHostname);
-  if (normalizedHostname === null) {
-    throw new Error(
-      'HUME_TOKEN_HOSTNAME must be a hostname with an optional port and without a scheme, credentials, path, query, or fragment.',
-    );
-  }
-  return normalizedHostname;
+  const resolution = resolveHumeHostname(
+    process.env['HUME_TOKEN_HOSTNAME'],
+    'HUME_TOKEN_HOSTNAME',
+  );
+  if (resolution.error !== null) throw new Error(resolution.error);
+  return resolution.hostname;
 };
 
 const getCredentialIdentity = (
@@ -86,8 +80,8 @@ const toAccessTokenResponse = (
   now: number,
 ): HumeAccessToken => ({
   accessToken: token.accessToken,
-  expiresAfterMs: Math.max(0, token.expiresAt - now),
-  refreshAfterMs: Math.max(0, token.reuseUntil - now),
+  expiresAfterMs: Math.max(0, Math.floor(token.expiresAt - now)),
+  refreshAfterMs: Math.max(0, Math.floor(token.reuseUntil - now)),
 });
 
 const fetchHumeAccessToken = async (
@@ -133,7 +127,11 @@ const fetchHumeAccessToken = async (
     );
   }
 
-  const expiresInMs = tokenResponse.data.expires_in * 1000;
+  const expiresInMs =
+    Math.min(
+      tokenResponse.data.expires_in,
+      HUME_ACCESS_TOKEN_LIFETIME_SECONDS,
+    ) * 1000;
   const reuseForMs = Math.max(
     1,
     Math.floor((expiresInMs * TOKEN_REUSE_NUMERATOR) / TOKEN_REUSE_DENOMINATOR),

@@ -301,36 +301,70 @@ const sanitizeValue = (
   if (value instanceof Date) {
     return value.toISOString();
   }
-  if (value instanceof AggregateError) {
+  if (
+    typeof AggregateError !== 'undefined' &&
+    value instanceof AggregateError
+  ) {
     if (seen.has(value)) return '[Circular]';
     seen.add(value);
-    const errors = sanitizeValue(value.errors, secrets, seen);
-    return {
-      name: redactSecrets(value.name, secrets),
-      message: redactSecrets(value.message, secrets),
-      ...(value.stack !== undefined && value.stack !== ''
-        ? { stack: redactSecrets(value.stack, secrets) }
-        : undefined),
-      errors: errors ?? [],
-    };
+    try {
+      const errors = sanitizeValue(value.errors, secrets, seen);
+      const cause =
+        'cause' in value
+          ? sanitizeValue(value.cause, secrets, seen)
+          : undefined;
+      return {
+        name: redactSecrets(value.name, secrets),
+        message: redactSecrets(value.message, secrets),
+        ...(value.stack !== undefined && value.stack !== ''
+          ? { stack: redactSecrets(value.stack, secrets) }
+          : undefined),
+        errors: errors ?? [],
+        ...(cause === undefined ? undefined : { cause }),
+      };
+    } finally {
+      seen.delete(value);
+    }
   }
   if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
-    return {
-      name: redactSecrets(value.name, secrets),
-      message: redactSecrets(value.message, secrets),
-      ...(value.stack !== undefined && value.stack !== ''
-        ? { stack: redactSecrets(value.stack, secrets) }
-        : undefined),
-    };
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    try {
+      const cause =
+        'cause' in value
+          ? sanitizeValue(value.cause, secrets, seen)
+          : undefined;
+      return {
+        name: redactSecrets(value.name, secrets),
+        message: redactSecrets(value.message, secrets),
+        ...(value.stack !== undefined && value.stack !== ''
+          ? { stack: redactSecrets(value.stack, secrets) }
+          : undefined),
+        ...(cause === undefined ? undefined : { cause }),
+      };
+    } finally {
+      seen.delete(value);
+    }
   }
   if (value instanceof Error) {
-    return {
-      name: redactSecrets(value.name, secrets),
-      message: redactSecrets(value.message, secrets),
-      ...(value.stack !== undefined && value.stack !== ''
-        ? { stack: redactSecrets(value.stack, secrets) }
-        : undefined),
-    };
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    try {
+      const cause =
+        'cause' in value
+          ? sanitizeValue(value.cause, secrets, seen)
+          : undefined;
+      return {
+        name: redactSecrets(value.name, secrets),
+        message: redactSecrets(value.message, secrets),
+        ...(value.stack !== undefined && value.stack !== ''
+          ? { stack: redactSecrets(value.stack, secrets) }
+          : undefined),
+        ...(cause === undefined ? undefined : { cause }),
+      };
+    } finally {
+      seen.delete(value);
+    }
   }
   if (
     value instanceof ArrayBuffer ||
@@ -344,27 +378,35 @@ const sanitizeValue = (
       return '[Circular]';
     }
     seen.add(value);
-    return value
-      .map((item) => sanitizeValue(item, secrets, seen))
-      .filter((item): item is VoiceDiagnosticValue => item !== undefined);
+    try {
+      return value
+        .map((item) => sanitizeValue(item, secrets, seen))
+        .filter((item): item is VoiceDiagnosticValue => item !== undefined);
+    } finally {
+      seen.delete(value);
+    }
   }
   if (typeof value === 'object') {
     if (seen.has(value)) {
       return '[Circular]';
     }
     seen.add(value);
-    const result: Record<string, VoiceDiagnosticValue> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      if (REDACTED_KEYS.has(normalizeKey(key))) {
-        result[key] = REDACTED;
-        continue;
+    try {
+      const result: Record<string, VoiceDiagnosticValue> = {};
+      for (const [key, entry] of Object.entries(value)) {
+        if (REDACTED_KEYS.has(normalizeKey(key))) {
+          result[key] = REDACTED;
+          continue;
+        }
+        const sanitized = sanitizeValue(entry, secrets, seen);
+        if (sanitized !== undefined) {
+          result[key] = sanitized;
+        }
       }
-      const sanitized = sanitizeValue(entry, secrets, seen);
-      if (sanitized !== undefined) {
-        result[key] = sanitized;
-      }
+      return result;
+    } finally {
+      seen.delete(value);
     }
-    return result;
   }
   return undefined;
 };

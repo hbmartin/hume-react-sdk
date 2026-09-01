@@ -462,13 +462,25 @@ describe('useMicrophone', () => {
     const cleanupError = cleanupEvent?.details['error'];
     expect(cleanupError).toMatchObject({
       name: 'AggregateError',
+      message:
+        'Failed to retire previous microphone resources after retry. [1] Media track 1 cleanup failed: old track cleanup failed; [2] old track cleanup retry failed',
+      errors: [
+        {
+          name: 'Error',
+          message: 'Media track 1 cleanup failed: old track cleanup failed',
+          cause: { name: 'Error', message: 'old track cleanup failed' },
+        },
+        {
+          name: 'AbortError',
+          message: 'old track cleanup retry failed',
+        },
+      ],
+      cause: {
+        name: 'Error',
+        message: 'Media track 1 cleanup failed: old track cleanup failed',
+        cause: { name: 'Error', message: 'old track cleanup failed' },
+      },
     });
-    const serializedCleanupError = JSON.stringify(cleanupError);
-    expect(serializedCleanupError).toContain(
-      'Failed to retire previous microphone resources after retry.',
-    );
-    expect(serializedCleanupError).toContain('old track cleanup failed');
-    expect(serializedCleanupError).toContain('old track cleanup retry failed');
 
     await act(() =>
       result.current.replace(
