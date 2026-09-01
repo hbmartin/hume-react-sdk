@@ -2,7 +2,7 @@ import { getAggregateErrorDetails } from './aggregateErrors';
 import { getBrowserErrorMessage } from './browserErrors';
 
 type CleanupErrorOptions = {
-  /** Cause attached when multiple failures require an aggregate wrapper. */
+  /** Cause attached when failures require a contextual aggregate wrapper. */
   cause?: unknown;
 };
 
@@ -70,7 +70,7 @@ export const createCleanupError = (
   options: CleanupErrorOptions = {},
 ): unknown => {
   if (failures.length === 0) return undefined;
-  if (failures.length === 1) return failures[0];
+  if (failures.length === 1 && !('cause' in options)) return failures[0];
 
   const details = failures
     .map(

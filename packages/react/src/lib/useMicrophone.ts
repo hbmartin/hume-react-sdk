@@ -2,10 +2,7 @@
 import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import {
-  getBrowserErrorMessage,
-  getBrowserErrorName,
-} from '../utils/browserErrors';
+import { getBrowserErrorMessage } from '../utils/browserErrors';
 import {
   appendCleanupFailures,
   createCleanupError,
@@ -41,23 +38,10 @@ const createMicrophoneAbortError = () =>
 const createContextualCleanupFailure = (
   context: string,
   cause: unknown,
-): Error => {
-  const failure = new Error(
-    `${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`,
-    {
-      cause,
-    },
-  );
-  const causeName = getBrowserErrorName(cause);
-  if (causeName !== null && causeName !== '') {
-    Object.defineProperty(failure, 'name', {
-      configurable: true,
-      value: causeName,
-      writable: true,
-    });
-  }
-  return failure;
-};
+): Error =>
+  new Error(`${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`, {
+    cause,
+  });
 
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;

@@ -2,11 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createVoiceDiagnosticsReporter,
+  invokeIsolatedConsumerCallback,
   type VoiceDiagnosticEvent,
   type VoiceDiagnosticValue,
   type VoiceDiagnosticsOptions,
   type VoiceLogger,
 } from './diagnostics';
+
+const isDiagnosticObject = (
+  value: VoiceDiagnosticValue | undefined,
+): value is Readonly<Record<string, VoiceDiagnosticValue>> =>
+  value !== undefined &&
+  value !== null &&
+  typeof value === 'object' &&
+  !Array.isArray(value);
 
 const input = {
   category: 'connection' as const,
@@ -163,6 +172,38 @@ describe('voice diagnostics reporter', () => {
     expect(events[3]?.chatId).toBeUndefined();
   });
 
+  it('snapshots correlation for delayed isolated callback failures', async () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const originalConnectionId = reporter.beginConnection();
+    reporter.setChatId('original-chat');
+    let rejectCallback: ((error: unknown) => void) | undefined;
+    const callbackResult = new Promise<void>((_resolve, reject) => {
+      rejectCallback = reject;
+    });
+
+    invokeIsolatedConsumerCallback(
+      reporter,
+      'onStopRecording',
+      () => callbackResult,
+    );
+    reporter.clearConnection();
+    reporter.beginConnection();
+    reporter.setChatId('replacement-chat');
+    rejectCallback?.(new Error('consumer callback failed'));
+    await callbackResult.catch(() => undefined);
+    await Promise.resolve();
+
+    expect(events[0]).toMatchObject({
+      connectionId: originalConnectionId,
+      chatId: 'original-chat',
+      name: 'consumer.callback_failed',
+    });
+  });
+
   it('redacts secrets and protected fields from default events', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -198,6 +239,88 @@ describe('voice diagnostics reporter', () => {
     expect(serialized).toContain('[REDACTED]');
   });
 
+  it('skips diagnostic accessors without invoking them', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const accessor = vi.fn(() => 'unsafe value');
+    const nested: Record<string, unknown> = { safe: 'nested value' };
+    Object.defineProperty(nested, 'unsafe', {
+      enumerable: true,
+      get: accessor,
+    });
+    const values: unknown[] = [];
+    Object.defineProperty(values, 0, {
+      enumerable: true,
+      get: accessor,
+    });
+    const details: Record<string, unknown> = {
+      nested,
+      safe: 'top-level value',
+      values,
+    };
+    Object.defineProperty(details, 'unsafe', {
+      enumerable: true,
+      get: accessor,
+    });
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    expect(() => reporter.emit({ ...input, details })).not.toThrow();
+
+    expect(accessor).not.toHaveBeenCalled();
+    expect(events[0]?.details).toEqual({
+      nested: { safe: 'nested value' },
+      safe: 'top-level value',
+      values: [null],
+    });
+  });
+
+  it('marks details incomplete when sanitization fails', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error('Failed to enumerate diagnostic details');
+        },
+      },
+    );
+
+    expect(() => reporter.emit({ ...input, details })).not.toThrow();
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details).toEqual({ sanitizationFailed: true });
+  });
+
+  it('keeps values whose sanitized object keys collide', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+
+    reporter.emit({
+      ...input,
+      details: {
+        'secret-token-key': 'first value',
+        '[REDACTED]-key': 'second value',
+        __humeDiagnosticTruncated: 'consumer value',
+      },
+    });
+
+    expect(events[0]?.details).toMatchObject({
+      '[REDACTED]-key': 'first value',
+      '[REDACTED]-key#2': 'second value',
+      '__humeDiagnosticTruncated#2': 'consumer value',
+    });
+  });
+
   it('preserves and redacts individual AggregateError failures', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -229,6 +352,26 @@ describe('voice diagnostics reporter', () => {
       cause: { message: 'First cleanup exposed [REDACTED]' },
     });
     expect(JSON.stringify(events)).not.toContain('secret-token');
+  });
+
+  it('preserves failures from a native AggregateError with a custom name', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const aggregate = new AggregateError(
+      [new Error('Track cleanup failed')],
+      'Microphone cleanup failed',
+    );
+    aggregate.name = 'MicrophoneCleanupError';
+
+    reporter.emit({ ...input, details: { error: aggregate } });
+
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'MicrophoneCleanupError',
+      errors: [{ message: 'Track cleanup failed' }],
+    });
   });
 
   it('preserves positions for unsupported AggregateError failures', () => {
@@ -288,11 +431,7 @@ describe('voice diagnostics reporter', () => {
     reporter.emit({ ...input, details: { error } });
 
     const serializedError = events[0]?.details['error'];
-    if (
-      serializedError === null ||
-      typeof serializedError !== 'object' ||
-      Array.isArray(serializedError)
-    ) {
+    if (!isDiagnosticObject(serializedError)) {
       throw new Error('Expected serialized error details.');
     }
     expect(serializedError['stack']).toContain('Track cleanup failed');
@@ -478,6 +617,32 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('does not invoke overridden DOMException accessors', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const accessor = vi.fn(() => {
+      throw new Error('DOMException accessor should not run');
+    });
+    const error = new DOMException('Cleanup was interrupted', 'AbortError');
+    for (const key of ['message', 'name', 'stack'] as const) {
+      Object.defineProperty(error, key, {
+        configurable: true,
+        get: accessor,
+      });
+    }
+
+    reporter.emit({ ...input, details: { error } });
+
+    expect(accessor).not.toHaveBeenCalled();
+    expect(events[0]?.details['error']).toMatchObject({
+      name: 'AbortError',
+      message: 'Cleanup was interrupted',
+    });
+  });
+
   it('keeps redaction values after correlation is cleared', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -573,6 +738,31 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['error']).toMatchObject({
       name: 'Error',
       message: 'Primary cleanup failure',
+    });
+  });
+
+  it('prioritizes nested errors over earlier oversized siblings', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: {
+        noise: Array.from({ length: 10_000 }, (_, index) => index),
+        cleanup: {
+          result: {
+            error: new Error('Nested cleanup failure'),
+          },
+        },
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['cleanup']).toMatchObject({
+      result: { error: { message: 'Nested cleanup failure' } },
     });
   });
 
@@ -709,5 +899,27 @@ describe('voice diagnostics reporter', () => {
     expect(sanitizedKey).not.toContain('secret-token');
     expect(sanitizedKey).toHaveLength(16_384);
     expect(sanitizedKey).toMatch(/\[Truncated\]$/);
+  });
+
+  it('bounds aggregate diagnostic string content', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const longValue = 'x'.repeat(16_384);
+
+    reporter.emit({
+      ...input,
+      details: Object.fromEntries(
+        Array.from({ length: 1_000 }, (_, index) => [
+          `entry-${index}`,
+          longValue,
+        ]),
+      ),
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(JSON.stringify(events[0]?.details).length).toBeLessThan(350_000);
   });
 });

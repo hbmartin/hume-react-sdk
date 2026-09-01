@@ -1,19 +1,48 @@
-/** Return the DOM-style name carried by a browser error, including cross-realm errors. */
-export const getBrowserErrorName = (error: unknown): string | null => {
-  if (typeof error !== 'object' || error === null || !('name' in error)) {
+import { getDataProperty } from './aggregateErrors';
+
+const getNativeDomExceptionString = (
+  error: object,
+  key: 'message' | 'name',
+): string | null => {
+  try {
+    if (
+      typeof DOMException === 'undefined' ||
+      !(error instanceof DOMException)
+    ) {
+      return null;
+    }
+    // oxlint-disable-next-line typescript/unbound-method -- invoked with the validated DOMException receiver below
+    const getter = Object.getOwnPropertyDescriptor(
+      DOMException.prototype,
+      key,
+    )?.get;
+    if (getter === undefined) return null;
+    const value: unknown = getter.call(error);
+    return typeof value === 'string' ? value : null;
+  } catch {
     return null;
   }
-  return typeof error.name === 'string' ? error.name : null;
 };
+
+/** Read a browser error string without invoking user-defined accessors. */
+export const getBrowserErrorString = (
+  error: unknown,
+  key: 'message' | 'name',
+): string | null => {
+  if (typeof error !== 'object' || error === null) return null;
+  const dataValue = getDataProperty(error, key)?.value;
+  if (typeof dataValue === 'string') return dataValue;
+  return getNativeDomExceptionString(error, key);
+};
+
+/** Return the DOM-style name carried by a browser error, including cross-realm errors. */
+export const getBrowserErrorName = (error: unknown): string | null =>
+  getBrowserErrorString(error, 'name');
 
 /** Return a useful message carried by a browser error, including cross-realm errors. */
 export const getBrowserErrorMessage = (error: unknown): string | null => {
-  if (typeof error !== 'object' || error === null || !('message' in error)) {
-    return null;
-  }
-  return typeof error.message === 'string' && error.message.trim().length > 0
-    ? error.message
-    : null;
+  const message = getBrowserErrorString(error, 'message');
+  return message !== null && message.trim().length > 0 ? message : null;
 };
 
 /** Normalize a browser failure without discarding cross-realm name or message fields. */
