@@ -1,18 +1,41 @@
 export type DataProperty = Readonly<{ value: unknown }>;
 
+/** Read an own property descriptor without allowing proxy traps to escape. */
+export const getOwnPropertyDescriptorSafely = (
+  value: object,
+  key: PropertyKey,
+): PropertyDescriptor | null | undefined => {
+  try {
+    return Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return null;
+  }
+};
+
 /** Read an own data property without invoking an accessor. */
 export const getOwnDataProperty = (
   value: object,
   key: PropertyKey,
 ): DataProperty | null => {
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor !== undefined && 'value' in descriptor
-      ? { value: descriptor.value }
-      : null;
-  } catch {
-    return null;
-  }
+  const descriptor = getOwnPropertyDescriptorSafely(value, key);
+  return descriptor !== null &&
+    descriptor !== undefined &&
+    'value' in descriptor
+    ? { value: descriptor.value }
+    : null;
+};
+
+/** Read an enumerable own data property without invoking an accessor. */
+export const getOwnEnumerableDataProperty = (
+  value: object,
+  key: PropertyKey,
+): DataProperty | null => {
+  const descriptor = getOwnPropertyDescriptorSafely(value, key);
+  return descriptor !== null &&
+    descriptor?.enumerable === true &&
+    'value' in descriptor
+    ? { value: descriptor.value }
+    : null;
 };
 
 /** Read a data property from an object or its prototypes without invoking accessors. */

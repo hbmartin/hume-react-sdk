@@ -2,7 +2,10 @@
 import { getBrowserSupportedMimeType, type MimeType } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { getBrowserErrorMessage } from '../utils/browserErrors';
+import {
+  getBrowserErrorMessage,
+  getBrowserErrorName,
+} from '../utils/browserErrors';
 import {
   appendCleanupFailures,
   createCleanupError,
@@ -38,10 +41,21 @@ const createMicrophoneAbortError = () =>
 const createContextualCleanupFailure = (
   context: string,
   cause: unknown,
-): Error =>
-  new Error(`${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`, {
-    cause,
-  });
+): Error => {
+  const failure = new Error(
+    `${context}: ${getBrowserErrorMessage(cause) ?? 'Unknown error'}`,
+    { cause },
+  );
+  const causeName = getBrowserErrorName(cause);
+  if (causeName !== null && causeName !== '') {
+    Object.defineProperty(failure, 'name', {
+      configurable: true,
+      value: causeName,
+      writable: true,
+    });
+  }
+  return failure;
+};
 
 type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
@@ -366,10 +380,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         try {
           recorderToStop.stop();
         } catch (error) {
-          const errorName =
-            typeof error === 'object' && error !== null && 'name' in error
-              ? error.name
-              : null;
+          const errorName = getBrowserErrorName(error);
           if (stopListenerAttached) {
             removeStopHandler();
             stopListenerAttached = false;

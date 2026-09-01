@@ -2,9 +2,14 @@ import packageJson from '../../package.json';
 import {
   getAggregateErrorDetails,
   getDataProperty,
+  getOwnEnumerableDataProperty,
   getOwnDataProperty,
+  getOwnPropertyDescriptorSafely,
 } from '../utils/aggregateErrors';
-import { getBrowserErrorString } from '../utils/browserErrors';
+import {
+  getBrowserErrorString,
+  isNativeDomException,
+} from '../utils/browserErrors';
 
 /** Severity threshold for diagnostic events. */
 export type VoiceDiagnosticLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -208,13 +213,24 @@ export const invokeIsolatedConsumerCallback = (
   callback: string,
   invoke: () => unknown,
 ): void => {
-  let correlation: ReturnType<VoiceDiagnosticsReporter['getCorrelation']>;
-  try {
-    correlation = diagnostics?.getCorrelation() ?? {};
-  } catch {
-    correlation = {};
+  let shouldReportFailure = diagnostics !== undefined;
+  if (diagnostics !== undefined) {
+    try {
+      shouldReportFailure = diagnostics.isEnabled('warn');
+    } catch {
+      // Preserve reporting for custom reporters whose enabled check is broken.
+    }
+  }
+  let correlation: ReturnType<VoiceDiagnosticsReporter['getCorrelation']> = {};
+  if (shouldReportFailure) {
+    try {
+      correlation = diagnostics?.getCorrelation() ?? {};
+    } catch {
+      // A custom reporter may not support correlation snapshots reliably.
+    }
   }
   const reportFailure = (error: unknown) => {
+    if (!shouldReportFailure) return;
     try {
       diagnostics?.emit({
         level: 'warn',
@@ -256,6 +272,7 @@ const MAX_SANITIZED_ENTRIES = 1_000;
 const MAX_SANITIZED_OBJECTS = 1_000;
 const MAX_SANITIZED_STRING_LENGTH = 16_384;
 const MAX_SANITIZED_TOTAL_STRING_LENGTH = 262_144;
+const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
 const MAX_PRIORITY_SEARCH_NODES = 128;
 const PRIORITY_DIAGNOSTIC_KEYS = [
@@ -310,6 +327,7 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
 };
 
 type SanitizationBudget = {
+  prioritizedKeys: WeakMap<object, Set<string>>;
   remainingEntries: number;
   remainingObjects: number;
   remainingStringLength: number;
@@ -347,6 +365,30 @@ const sanitizeString = (
   budget: SanitizationBudget,
 ) => truncateDiagnosticString(redactSecrets(value, secrets), budget);
 
+const sanitizeObjectKey = (
+  value: string,
+  secrets: ReadonlySet<string>,
+  budget: SanitizationBudget,
+): string | null => {
+  const redacted = redactSecrets(value, secrets);
+  const maximumLength = Math.min(
+    MAX_SANITIZED_STRING_LENGTH,
+    budget.remainingStringLength,
+  );
+  if (redacted.length <= maximumLength) {
+    budget.remainingStringLength -= redacted.length;
+    return redacted;
+  }
+  budget.truncated = true;
+  if (maximumLength < TRUNCATED_SUFFIX.length) return null;
+  const sanitized = `${redacted.slice(
+    0,
+    maximumLength - TRUNCATED_SUFFIX.length,
+  )}${TRUNCATED_SUFFIX}`;
+  budget.remainingStringLength -= sanitized.length;
+  return sanitized;
+};
+
 const getStringDataProperty = (
   value: object,
   key: PropertyKey,
@@ -356,26 +398,47 @@ const getStringDataProperty = (
   return typeof property === 'string' ? property : fallback;
 };
 
-const nativeLazyErrorStackGetter = (() => {
-  try {
-    // oxlint-disable-next-line typescript/unbound-method -- captured only for identity checking and invoked with an Error receiver
-    return Object.getOwnPropertyDescriptor(new Error(), 'stack')?.get;
-  } catch {
-    return undefined;
-  }
+const nativeLazyErrorStackGetters = (() => {
+  const getters = new Set<() => unknown>();
+  const capture = (value: object) => {
+    try {
+      // oxlint-disable-next-line typescript/unbound-method -- captured only for identity checking and guarded invocation with an Error receiver
+      const getter = Object.getOwnPropertyDescriptor(value, 'stack')?.get;
+      if (getter !== undefined) getters.add(getter);
+    } catch {
+      // Stack descriptors are non-standard and may be unavailable.
+    }
+  };
+  capture(new Error());
+  capture(Error.prototype);
+  return getters;
 })();
 
 const getErrorStack = (value: object) => {
   const dataStack = getStringDataProperty(value, 'stack', '');
-  if (dataStack !== '' || nativeLazyErrorStackGetter === undefined) {
-    return dataStack;
-  }
+  if (dataStack !== '') return dataStack;
 
   try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, 'stack');
-    if (descriptor?.get !== nativeLazyErrorStackGetter) return '';
-    const stack: unknown = descriptor.get.call(value);
-    return typeof stack === 'string' ? stack : '';
+    const visited = new WeakSet<object>();
+    let current: object | null = value;
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, 'stack');
+      if (descriptor !== undefined) {
+        if ('value' in descriptor) {
+          return typeof descriptor.value === 'string' ? descriptor.value : '';
+        }
+        // oxlint-disable-next-line typescript/unbound-method -- identity-checked below and invoked with the original Error receiver
+        const getter = descriptor.get;
+        if (getter === undefined || !nativeLazyErrorStackGetters.has(getter)) {
+          return '';
+        }
+        const stack: unknown = getter.call(value);
+        return typeof stack === 'string' ? stack : '';
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+    return '';
   } catch {
     return '';
   }
@@ -390,106 +453,134 @@ const consumeObjectBudget = (budget: SanitizationBudget) => {
   return true;
 };
 
-const getPriorityDepth = (
-  value: unknown,
-  depth = 0,
-  seen = new WeakSet<object>(),
-  searchBudget = { remainingNodes: MAX_PRIORITY_SEARCH_NODES },
-): number => {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    depth > MAX_PRIORITY_SEARCH_DEPTH ||
-    searchBudget.remainingNodes === 0 ||
-    seen.has(value)
-  ) {
-    return Number.POSITIVE_INFINITY;
-  }
-  searchBudget.remainingNodes -= 1;
-
+const isErrorInstance = (value: object): value is Error => {
   try {
-    if (
-      getAggregateErrorDetails(value) !== null ||
-      value instanceof Error ||
-      (typeof DOMException !== 'undefined' && value instanceof DOMException)
-    ) {
-      return 0;
-    }
-    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (
-        descriptor?.enumerable === true &&
-        'value' in descriptor &&
-        descriptor.value !== undefined
-      ) {
-        return 0;
-      }
-    }
-
-    seen.add(value);
-    let nearest = Number.POSITIVE_INFINITY;
-    const visitChild = (key: string) => {
-      if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) return false;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor?.enumerable !== true || !('value' in descriptor)) {
-        return false;
-      }
-      const childDepth = getPriorityDepth(
-        descriptor.value,
-        depth + 1,
-        seen,
-        searchBudget,
-      );
-      nearest = Math.min(nearest, childDepth + 1);
-      return nearest === 1 || searchBudget.remainingNodes === 0;
-    };
-    if (Array.isArray(value)) {
-      const maximumIndex = Math.min(value.length, searchBudget.remainingNodes);
-      for (let index = 0; index < maximumIndex; index += 1) {
-        if (visitChild(String(index))) break;
-      }
-    } else {
-      let scannedKeys = 0;
-      for (const key in value) {
-        scannedKeys += 1;
-        if (scannedKeys > MAX_PRIORITY_SEARCH_NODES) break;
-        if (!Object.hasOwn(value, key)) continue;
-        if (visitChild(key)) break;
-      }
-    }
-    return nearest;
+    return value instanceof Error;
   } catch {
-    return Number.POSITIVE_INFINITY;
-  } finally {
-    seen.delete(value);
+    return false;
   }
 };
 
-const getPrioritizedObjectKeys = (value: object) => {
-  const keys: string[] = [];
-  const maximumKeys = MAX_SANITIZED_ENTRIES + MAX_PRIORITY_SEARCH_NODES;
-  let scannedKeys = 0;
-  for (const key in value) {
-    scannedKeys += 1;
-    if (scannedKeys > maximumKeys) break;
-    if (!Object.hasOwn(value, key)) continue;
-    if (!PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) keys.push(key);
-    if (keys.length === maximumKeys) break;
+const isDateInstance = (value: object): value is Date => {
+  try {
+    return value instanceof Date;
+  } catch {
+    return false;
   }
-  return keys
-    .map((key, index) => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      return {
-        depth:
-          descriptor?.enumerable === true && 'value' in descriptor
-            ? getPriorityDepth(descriptor.value)
-            : Number.POSITIVE_INFINITY,
-        index,
-        key,
-      };
-    })
-    .sort((left, right) => left.depth - right.depth || left.index - right.index)
-    .map(({ key }) => key);
+};
+
+const isArrayValue = (value: object): value is unknown[] => {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+};
+
+const isTerminalBinaryValue = (value: object) => {
+  try {
+    return (
+      value instanceof ArrayBuffer ||
+      ArrayBuffer.isView(value) ||
+      (typeof Blob !== 'undefined' && value instanceof Blob)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const getEnumerableOwnKeys = (value: object) => {
+  const keys: string[] = [];
+  let scannedKeys = 0;
+  let incomplete = false;
+  try {
+    for (const key in value) {
+      if (scannedKeys === MAX_ENUMERATED_OBJECT_KEYS) {
+        incomplete = true;
+        break;
+      }
+      scannedKeys += 1;
+      try {
+        if (Object.hasOwn(value, key)) keys.push(key);
+      } catch {
+        incomplete = true;
+      }
+    }
+  } catch {
+    incomplete = true;
+  }
+  return { incomplete, keys };
+};
+
+const isPriorityDiagnosticObject = (value: object) =>
+  getAggregateErrorDetails(value) !== null ||
+  isErrorInstance(value) ||
+  isNativeDomException(value);
+
+type PriorityPathEntry = Readonly<{ key: string; object: object }>;
+
+const getPrioritizedKeysByObject = (root: object) => {
+  const prioritizedKeys = new WeakMap<object, Set<string>>();
+  const markPath = (path: readonly PriorityPathEntry[]) => {
+    for (const { key, object } of path) {
+      const keys = prioritizedKeys.get(object) ?? new Set<string>();
+      keys.add(key);
+      prioritizedKeys.set(object, keys);
+    }
+  };
+  const queue: Array<
+    Readonly<{
+      depth: number;
+      path: readonly PriorityPathEntry[];
+      value: object;
+    }>
+  > = [{ depth: 0, path: [], value: root }];
+  const seen = new WeakSet<object>();
+  let cursor = 0;
+  let scheduledNodes = 1;
+
+  while (cursor < queue.length) {
+    const current = queue[cursor];
+    cursor += 1;
+    if (current === undefined || seen.has(current.value)) continue;
+    seen.add(current.value);
+
+    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+      const property = getOwnEnumerableDataProperty(current.value, key);
+      if (property !== null && property.value !== undefined) {
+        markPath([...current.path, { key, object: current.value }]);
+      }
+    }
+
+    const { keys } = getEnumerableOwnKeys(current.value);
+    for (const key of keys) {
+      if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+      const property = getOwnEnumerableDataProperty(current.value, key);
+      if (
+        property === null ||
+        typeof property.value !== 'object' ||
+        property.value === null
+      ) {
+        continue;
+      }
+      const path = [...current.path, { key, object: current.value }];
+      if (isPriorityDiagnosticObject(property.value)) {
+        markPath(path);
+      } else if (
+        current.depth < MAX_PRIORITY_SEARCH_DEPTH &&
+        scheduledNodes < MAX_PRIORITY_SEARCH_NODES
+      ) {
+        queue.push({
+          depth: current.depth + 1,
+          path,
+          value: property.value,
+        });
+        scheduledNodes += 1;
+      }
+    }
+  }
+
+  return prioritizedKeys;
 };
 
 const getUniqueSanitizedKey = (
@@ -527,35 +618,44 @@ const setSanitizedProperty = (
   });
 };
 
+const markSanitizedObjectTruncated = (
+  result: Record<string, VoiceDiagnosticValue>,
+  budget: SanitizationBudget,
+) => {
+  markTruncated(budget);
+  setSanitizedProperty(result, TRUNCATED_PROPERTY, true);
+};
+
 const mergeOwnDataProperties = (
   target: Record<string, unknown>,
   source: Record<string, unknown> | undefined,
 ) => {
-  if (source === undefined) return;
+  if (source === undefined) return false;
+  let incomplete = false;
   const mergeProperty = (key: string) => {
-    const descriptor = Object.getOwnPropertyDescriptor(source, key);
-    if (descriptor?.enumerable === true && 'value' in descriptor) {
+    const descriptor = getOwnPropertyDescriptorSafely(source, key);
+    if (descriptor === null) {
+      incomplete = true;
+    } else if (descriptor?.enumerable === true && 'value' in descriptor) {
       Object.defineProperty(target, key, {
         configurable: true,
         enumerable: true,
         value: descriptor.value,
         writable: true,
       });
+    } else if (descriptor?.enumerable === true) {
+      incomplete = true;
     }
   };
   for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
     mergeProperty(key);
   }
-  let scannedKeys = 0;
-  const maximumKeys = MAX_SANITIZED_ENTRIES + MAX_PRIORITY_SEARCH_NODES;
-  for (const key in source) {
-    scannedKeys += 1;
-    if (scannedKeys > maximumKeys) break;
-    if (!Object.hasOwn(source, key) || PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) {
-      continue;
-    }
-    mergeProperty(key);
+  const enumerated = getEnumerableOwnKeys(source);
+  incomplete ||= enumerated.incomplete;
+  for (const key of enumerated.keys) {
+    if (!PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) mergeProperty(key);
   }
+  return incomplete;
 };
 
 const sanitizeValue = (
@@ -586,17 +686,20 @@ const sanitizeValue = (
   ) {
     return undefined;
   }
-  if (value instanceof Date) {
-    return truncateDiagnosticString(
-      Date.prototype.toISOString.call(value),
-      budget,
-    );
+  if (isDateInstance(value)) {
+    try {
+      const time = Date.prototype.getTime.call(value);
+      return truncateDiagnosticString(
+        Number.isFinite(time)
+          ? Date.prototype.toISOString.call(value)
+          : 'Invalid Date',
+        budget,
+      );
+    } catch {
+      return truncateDiagnosticString('Invalid Date', budget);
+    }
   }
-  if (
-    value instanceof ArrayBuffer ||
-    ArrayBuffer.isView(value) ||
-    (typeof Blob !== 'undefined' && value instanceof Blob)
-  ) {
+  if (isTerminalBinaryValue(value)) {
     return REDACTED;
   }
   if (typeof value === 'object' && seen.has(value)) return '[Circular]';
@@ -642,7 +745,7 @@ const sanitizeValue = (
       seen.delete(aggregate.error);
     }
   }
-  if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
+  if (isNativeDomException(value)) {
     const canTraverse = consumeObjectBudget(budget);
     seen.add(value);
     try {
@@ -675,7 +778,7 @@ const sanitizeValue = (
       seen.delete(value);
     }
   }
-  if (value instanceof Error) {
+  if (isErrorInstance(value)) {
     const canTraverse = consumeObjectBudget(budget);
     seen.add(value);
     try {
@@ -709,22 +812,40 @@ const sanitizeValue = (
     }
   }
   if (!consumeObjectBudget(budget)) return markTruncated(budget);
-  if (Array.isArray(value)) {
+  if (isArrayValue(value)) {
     seen.add(value);
     try {
       const result: VoiceDiagnosticValue[] = [];
-      for (let index = 0; index < value.length; index += 1) {
+      const length = getOwnDataProperty(value, 'length')?.value;
+      if (
+        typeof length !== 'number' ||
+        !Number.isSafeInteger(length) ||
+        length < 0
+      ) {
+        result.push(markTruncated(budget));
+        return result;
+      }
+      for (let index = 0; index < length; index += 1) {
         if (budget.remainingEntries === 0) {
           result.push(markTruncated(budget));
           break;
         }
         budget.remainingEntries -= 1;
-        const descriptor = Object.getOwnPropertyDescriptor(value, index);
-        const entry: unknown =
-          descriptor?.enumerable === true && 'value' in descriptor
-            ? descriptor.value
-            : undefined;
-        result.push(sanitizeValue(entry, secrets, seen, budget) ?? null);
+        const descriptor = getOwnPropertyDescriptorSafely(value, index);
+        if (descriptor === null) {
+          result.push(markTruncated(budget));
+        } else if (descriptor?.enumerable === true && 'value' in descriptor) {
+          try {
+            result.push(
+              sanitizeValue(descriptor.value, secrets, seen, budget) ?? null,
+            );
+          } catch {
+            result.push(markTruncated(budget));
+          }
+        } else {
+          if (descriptor?.enumerable === true) budget.truncated = true;
+          result.push(null);
+        }
       }
       return result;
     } finally {
@@ -735,23 +856,39 @@ const sanitizeValue = (
   try {
     const result: Record<string, VoiceDiagnosticValue> = {};
     const sanitizeEntry = (key: string): boolean => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      const descriptor = getOwnPropertyDescriptorSafely(value, key);
+      if (descriptor === null) {
+        markSanitizedObjectTruncated(result, budget);
+        return true;
+      }
       if (descriptor === undefined || descriptor.enumerable !== true)
         return true;
-      if (!('value' in descriptor)) return true;
+      if (!('value' in descriptor)) {
+        markSanitizedObjectTruncated(result, budget);
+        return true;
+      }
       if (budget.remainingEntries === 0) {
-        setSanitizedProperty(result, TRUNCATED_PROPERTY, true);
-        markTruncated(budget);
+        markSanitizedObjectTruncated(result, budget);
         return false;
       }
       budget.remainingEntries -= 1;
-      const sanitizedKey = sanitizeString(key, secrets, budget);
+      const sanitizedKey = sanitizeObjectKey(key, secrets, budget);
+      if (sanitizedKey === null) {
+        markSanitizedObjectTruncated(result, budget);
+        return false;
+      }
       const resultKey = getUniqueSanitizedKey(result, sanitizedKey);
       if (REDACTED_KEYS.has(normalizeKey(key))) {
         setSanitizedProperty(result, resultKey, REDACTED);
         return true;
       }
-      const sanitized = sanitizeValue(descriptor.value, secrets, seen, budget);
+      let sanitized: VoiceDiagnosticValue | undefined;
+      try {
+        sanitized = sanitizeValue(descriptor.value, secrets, seen, budget);
+      } catch {
+        sanitized = markTruncated(budget);
+        markSanitizedObjectTruncated(result, budget);
+      }
       if (sanitized !== undefined) {
         setSanitizedProperty(result, resultKey, sanitized);
       }
@@ -761,7 +898,16 @@ const sanitizeValue = (
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
       if (!sanitizeEntry(key)) return result;
     }
-    for (const key of getPrioritizedObjectKeys(value)) {
+    const enumerated = getEnumerableOwnKeys(value);
+    if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
+    const priorityKeys = budget.prioritizedKeys.get(value);
+    const prioritized: string[] = [];
+    const remaining: string[] = [];
+    for (const key of enumerated.keys) {
+      if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+      (priorityKeys?.has(key) === true ? prioritized : remaining).push(key);
+    }
+    for (const key of [...prioritized, ...remaining]) {
       if (!sanitizeEntry(key)) break;
     }
     return result;
@@ -785,12 +931,14 @@ const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
 const sanitizeDetails = (
   details: Record<string, unknown>,
   secrets: ReadonlySet<string>,
+  initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
   const budget: SanitizationBudget = {
+    prioritizedKeys: getPrioritizedKeysByObject(details),
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,
-    truncated: false,
+    truncated: initiallyTruncated,
   };
   const sanitized = sanitizeValue(details, secrets, new WeakSet(), budget);
   if (
@@ -798,6 +946,13 @@ const sanitizeDetails = (
     !Array.isArray(sanitized) &&
     typeof sanitized === 'object'
   ) {
+    if (initiallyTruncated) {
+      setSanitizedProperty(
+        sanitized as Record<string, VoiceDiagnosticValue>,
+        TRUNCATED_PROPERTY,
+        true,
+      );
+    }
     return {
       details: freezeDiagnosticValue(
         sanitized as Record<string, VoiceDiagnosticValue>,
@@ -876,11 +1031,22 @@ export const createVoiceDiagnosticsReporter = (
       let detailsTruncated = false;
       try {
         const combinedDetails: Record<string, unknown> = {};
-        mergeOwnDataProperties(combinedDetails, input.details);
+        let mergeIncomplete = mergeOwnDataProperties(
+          combinedDetails,
+          input.details,
+        );
         if (configuration.includeContent) {
-          mergeOwnDataProperties(combinedDetails, input.sensitiveDetails);
+          const sensitiveMergeIncomplete = mergeOwnDataProperties(
+            combinedDetails,
+            input.sensitiveDetails,
+          );
+          mergeIncomplete ||= sensitiveMergeIncomplete;
         }
-        const sanitized = sanitizeDetails(combinedDetails, secrets);
+        const sanitized = sanitizeDetails(
+          combinedDetails,
+          secrets,
+          mergeIncomplete,
+        );
         details = sanitized.details;
         detailsTruncated = sanitized.truncated;
       } catch {

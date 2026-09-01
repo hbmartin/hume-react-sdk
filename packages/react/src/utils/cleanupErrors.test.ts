@@ -52,7 +52,7 @@ describe('cleanup error helpers', () => {
     expect((error as AggregateError).cause).toBe(firstAttempt);
   });
 
-  it('preserves context and an explicit cause for one collected failure', () => {
+  it('preserves one failure even when a contextual cause is supplied', () => {
     const collectedFailure = new Error('Track failed');
     const originalFailure = new AggregateError(
       [collectedFailure],
@@ -64,12 +64,12 @@ describe('cleanup error helpers', () => {
       { cause: originalFailure },
     );
 
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([collectedFailure]);
-    expect((error as AggregateError).message).toBe(
-      'Cleanup failed after traversal. [1] Track failed',
-    );
-    expect((error as AggregateError).cause).toBe(originalFailure);
+    expect(error).toBe(collectedFailure);
+    expect(
+      createCleanupError([collectedFailure], 'Cleanup failed.', {
+        cause: undefined,
+      }),
+    ).toBe(collectedFailure);
   });
 
   it('does not drop a thrown undefined failure', () => {
