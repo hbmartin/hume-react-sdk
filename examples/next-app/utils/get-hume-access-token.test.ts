@@ -121,6 +121,41 @@ describe('getHumeAccessToken', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('shares one successful request between concurrent callers', async () => {
+    let resolveResponse: (response: Response) => void = (_response) => {
+      throw new Error('The OAuth response promise was not initialized.');
+    };
+    const responsePromise = new Promise<Response>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValue(responsePromise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { getHumeAccessToken } = await loadTokenModule();
+
+    const firstRequest = getHumeAccessToken();
+    const concurrentRequest = getHumeAccessToken();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    resolveResponse(
+      Response.json({ access_token: 'shared-token', expires_in: 600 }),
+    );
+    await expect(
+      Promise.all([firstRequest, concurrentRequest]),
+    ).resolves.toEqual([
+      {
+        accessToken: 'shared-token',
+        expiresAfterMs: 600_000,
+        refreshAfterMs: 500_000,
+      },
+      {
+        accessToken: 'shared-token',
+        expiresAfterMs: 600_000,
+        refreshAfterMs: 500_000,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('subtracts OAuth request latency from the returned token lifetime', async () => {
     const fetchMock = vi.fn().mockImplementation(() => {
       now += 4_000;
