@@ -228,7 +228,10 @@ const LEVEL_PRIORITY: Record<VoiceDiagnosticLevel, number> = {
 
 const REDACTED = '[REDACTED]';
 const TRUNCATED = '[Truncated]';
+const TRUNCATED_PROPERTY = '__truncated__';
+const MAX_SANITIZED_ENTRIES = 1_000;
 const MAX_SANITIZED_OBJECTS = 1_000;
+const MAX_SANITIZED_STRING_LENGTH = 16_384;
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -273,20 +276,38 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
   return sanitized;
 };
 
+const truncateDiagnosticString = (value: string) =>
+  value.length <= MAX_SANITIZED_STRING_LENGTH
+    ? value
+    : `${value.slice(
+        0,
+        MAX_SANITIZED_STRING_LENGTH - TRUNCATED.length,
+      )}${TRUNCATED}`;
+
+const sanitizeString = (value: string, secrets: ReadonlySet<string>) =>
+  truncateDiagnosticString(redactSecrets(value, secrets));
+
 const getAggregateErrorFailures = (
   value: object,
 ): Readonly<{ error: Error; failures: readonly unknown[] }> | null => {
+  let error: Error;
   if (
     typeof AggregateError !== 'undefined' &&
     value instanceof AggregateError
   ) {
-    return { error: value, failures: value.errors as unknown[] };
+    error = value;
+  } else {
+    if (!(value instanceof Error) || value.name !== 'AggregateError')
+      return null;
+    error = value;
   }
-  if (!(value instanceof Error) || value.name !== 'AggregateError') return null;
+
   try {
-    if (!('errors' in value)) return null;
-    const errors: unknown = value.errors;
-    return Array.isArray(errors) ? { error: value, failures: errors } : null;
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'errors');
+    if (descriptor === undefined || !('value' in descriptor)) return null;
+    return Array.isArray(descriptor.value)
+      ? { error, failures: descriptor.value }
+      : null;
   } catch {
     return null;
   }
@@ -296,7 +317,7 @@ const sanitizeValue = (
   value: unknown,
   secrets: ReadonlySet<string>,
   seen: WeakSet<object>,
-  budget: { remainingObjects: number },
+  budget: { remainingEntries: number; remainingObjects: number },
 ): VoiceDiagnosticValue | undefined => {
   if (
     value === null ||
@@ -308,10 +329,10 @@ const sanitizeValue = (
       : String(value);
   }
   if (typeof value === 'string') {
-    return redactSecrets(value, secrets);
+    return sanitizeString(value, secrets);
   }
   if (typeof value === 'bigint') {
-    return value.toString();
+    return truncateDiagnosticString(value.toString());
   }
   if (
     typeof value === 'undefined' ||
@@ -337,10 +358,10 @@ const sanitizeValue = (
         ? sanitizeValue(aggregate.error.cause, secrets, seen, budget)
         : undefined;
       return {
-        name: redactSecrets(aggregate.error.name, secrets),
-        message: redactSecrets(aggregate.error.message, secrets),
+        name: sanitizeString(aggregate.error.name, secrets),
+        message: sanitizeString(aggregate.error.message, secrets),
         ...(aggregate.error.stack !== undefined && aggregate.error.stack !== ''
-          ? { stack: redactSecrets(aggregate.error.stack, secrets) }
+          ? { stack: sanitizeString(aggregate.error.stack, secrets) }
           : undefined),
         errors: errors ?? [],
         ...(cause === undefined ? undefined : { cause }),
@@ -356,10 +377,10 @@ const sanitizeValue = (
         ? sanitizeValue(value.cause, secrets, seen, budget)
         : undefined;
       return {
-        name: redactSecrets(value.name, secrets),
-        message: redactSecrets(value.message, secrets),
+        name: sanitizeString(value.name, secrets),
+        message: sanitizeString(value.message, secrets),
         ...(value.stack !== undefined && value.stack !== ''
-          ? { stack: redactSecrets(value.stack, secrets) }
+          ? { stack: sanitizeString(value.stack, secrets) }
           : undefined),
         ...(cause === undefined ? undefined : { cause }),
       };
@@ -374,10 +395,10 @@ const sanitizeValue = (
         ? sanitizeValue(value.cause, secrets, seen, budget)
         : undefined;
       return {
-        name: redactSecrets(value.name, secrets),
-        message: redactSecrets(value.message, secrets),
+        name: sanitizeString(value.name, secrets),
+        message: sanitizeString(value.message, secrets),
         ...(value.stack !== undefined && value.stack !== ''
-          ? { stack: redactSecrets(value.stack, secrets) }
+          ? { stack: sanitizeString(value.stack, secrets) }
           : undefined),
         ...(cause === undefined ? undefined : { cause }),
       };
@@ -395,9 +416,16 @@ const sanitizeValue = (
   if (Array.isArray(value)) {
     seen.add(value);
     try {
-      return value.map(
-        (item) => sanitizeValue(item, secrets, seen, budget) ?? null,
-      );
+      const result: VoiceDiagnosticValue[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (budget.remainingEntries === 0) {
+          result.push(TRUNCATED);
+          break;
+        }
+        budget.remainingEntries -= 1;
+        result.push(sanitizeValue(value[index], secrets, seen, budget) ?? null);
+      }
+      return result;
     } finally {
       seen.delete(value);
     }
@@ -406,14 +434,22 @@ const sanitizeValue = (
     seen.add(value);
     try {
       const result: Record<string, VoiceDiagnosticValue> = {};
-      for (const [key, entry] of Object.entries(value)) {
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        if (budget.remainingEntries === 0) {
+          result[TRUNCATED_PROPERTY] = TRUNCATED;
+          break;
+        }
+        budget.remainingEntries -= 1;
+        const sanitizedKey = sanitizeString(key, secrets);
         if (REDACTED_KEYS.has(normalizeKey(key))) {
-          result[key] = REDACTED;
+          result[sanitizedKey] = REDACTED;
           continue;
         }
+        const entry = (value as Record<string, unknown>)[key];
         const sanitized = sanitizeValue(entry, secrets, seen, budget);
         if (sanitized !== undefined) {
-          result[key] = sanitized;
+          result[sanitizedKey] = sanitized;
         }
       }
       return result;
@@ -441,6 +477,7 @@ const sanitizeDetails = (
   secrets: ReadonlySet<string>,
 ): VoiceDiagnosticDetails => {
   const sanitized = sanitizeValue(details, secrets, new WeakSet(), {
+    remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
   });
   if (

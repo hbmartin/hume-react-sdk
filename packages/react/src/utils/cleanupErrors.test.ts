@@ -143,6 +143,14 @@ describe('cleanup error helpers', () => {
       cause: firstFailure,
       errors: [firstFailure, secondFailure],
     });
+    expect(Object.keys(error)).toEqual([]);
+    expect(JSON.stringify(error)).toBe('{}');
+    expect(Object.hasOwn(error, 'name')).toBe(false);
+    expect(Object.getOwnPropertyDescriptor(error, 'errors')).toMatchObject({
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
     expect(flattened).toEqual([firstFailure, secondFailure]);
   });
 

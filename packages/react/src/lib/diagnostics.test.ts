@@ -320,6 +320,42 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('does not invoke AggregateError errors accessors', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const errorsGetter = vi.fn(() => [new Error('Prototype data')]);
+    const inheritedAccessor = new Error('Inherited errors accessor');
+    inheritedAccessor.name = 'AggregateError';
+    const inheritedPrototype = Object.create(Error.prototype) as object;
+    Object.defineProperty(inheritedPrototype, 'errors', { get: errorsGetter });
+    Object.setPrototypeOf(inheritedAccessor, inheritedPrototype);
+    const ownAccessor = new Error('Own errors accessor');
+    ownAccessor.name = 'AggregateError';
+    Object.defineProperty(ownAccessor, 'errors', { get: errorsGetter });
+    const nativeAccessor = new AggregateError([], 'Native errors accessor');
+    Object.defineProperty(nativeAccessor, 'errors', { get: errorsGetter });
+
+    reporter.emit({
+      ...input,
+      details: { errors: [inheritedAccessor, ownAccessor, nativeAccessor] },
+    });
+
+    expect(errorsGetter).not.toHaveBeenCalled();
+    const errors = events[0]?.details['errors'];
+    expect(Array.isArray(errors)).toBe(true);
+    expect(
+      (errors as readonly VoiceDiagnosticValue[]).every(
+        (error) =>
+          error !== null &&
+          typeof error === 'object' &&
+          !Object.hasOwn(error, 'errors'),
+      ),
+    ).toBe(true);
+  });
+
   it('preserves nested Error and DOMException causes', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -493,5 +529,78 @@ describe('voice diagnostics reporter', () => {
     const serialized = JSON.stringify(events[0]?.details);
     expect(serialized).toContain('[Truncated]');
     expect(serialized.length).toBeLessThan(100_000);
+  });
+
+  it('bounds arrays and objects containing primitive entries', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const primitiveEntries = Array.from(
+      { length: 10_000 },
+      (_, index) => index,
+    );
+
+    reporter.emit({
+      ...input,
+      details: { values: primitiveEntries },
+    });
+    reporter.emit({
+      ...input,
+      details: {
+        values: Object.fromEntries(
+          primitiveEntries.map((value) => [`entry-${value}`, value]),
+        ),
+      },
+    });
+
+    for (const event of events) {
+      const serialized = JSON.stringify(event.details);
+      expect(serialized).toContain('[Truncated]');
+      expect(serialized.length).toBeLessThan(100_000);
+    }
+    const arrayValues = events[0]?.details['values'];
+    const objectValues = events[1]?.details['values'];
+    if (
+      !Array.isArray(arrayValues) ||
+      objectValues === null ||
+      Array.isArray(objectValues) ||
+      typeof objectValues !== 'object'
+    ) {
+      throw new Error('Expected bounded array and object diagnostic values.');
+    }
+    expect(arrayValues.length).toBeLessThanOrEqual(1_000);
+    expect(Object.keys(objectValues).length).toBeLessThanOrEqual(1_000);
+  });
+
+  it('bounds individual diagnostic strings after redaction', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('secret-token');
+    const oversizedKey = `secret-token:${'k'.repeat(20_000)}`;
+
+    reporter.emit({
+      ...input,
+      details: {
+        [oversizedKey]: 'value',
+        message: `secret-token:${'x'.repeat(20_000)}`,
+      },
+    });
+
+    const message = events[0]?.details['message'];
+    expect(typeof message).toBe('string');
+    expect(message).not.toContain('secret-token');
+    expect(message).toHaveLength(16_384);
+    expect(message).toMatch(/\[Truncated\]$/);
+    const sanitizedKey = Object.keys(events[0]?.details ?? {}).find(
+      (key) => key !== 'message',
+    );
+    expect(sanitizedKey).not.toContain('secret-token');
+    expect(sanitizedKey).toHaveLength(16_384);
+    expect(sanitizedKey).toMatch(/\[Truncated\]$/);
   });
 });

@@ -10,19 +10,33 @@ const CLEANUP_FAILURES_TRUNCATED_MESSAGE =
   'Cleanup failure traversal was truncated.';
 
 class FallbackAggregateError extends Error {
-  readonly errors: readonly unknown[];
+  declare readonly errors: readonly unknown[];
 
   constructor(errors: readonly unknown[], message: string, cause: unknown) {
     super(message);
-    this.name = 'AggregateError';
-    this.errors = errors;
-    Object.defineProperty(this, 'cause', {
-      configurable: true,
-      value: cause,
-      writable: true,
+    Object.defineProperties(this, {
+      cause: {
+        configurable: true,
+        enumerable: false,
+        value: cause,
+        writable: true,
+      },
+      errors: {
+        configurable: true,
+        enumerable: false,
+        value: errors,
+        writable: true,
+      },
     });
   }
 }
+
+Object.defineProperty(FallbackAggregateError.prototype, 'name', {
+  configurable: true,
+  enumerable: false,
+  value: 'AggregateError',
+  writable: true,
+});
 
 const getAggregateFailures = (failure: unknown): readonly unknown[] | null => {
   if (
