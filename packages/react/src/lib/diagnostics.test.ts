@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createVoiceDiagnosticsReporter,
   type VoiceDiagnosticEvent,
+  type VoiceDiagnosticValue,
   type VoiceDiagnosticsOptions,
   type VoiceLogger,
 } from './diagnostics';
@@ -348,6 +349,56 @@ describe('voice diagnostics reporter', () => {
         cause: { message: 'Device disappeared' },
       },
     });
+  });
+
+  it('ignores inherited causes without invoking prototype getters', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const inheritedCauseGetter = vi.fn(() => new Error('Prototype data'));
+    const addInheritedCause = <ErrorValue extends Error>(
+      error: ErrorValue,
+      basePrototype: object,
+    ) => {
+      const prototype = {};
+      Object.setPrototypeOf(prototype, basePrototype);
+      Object.defineProperty(prototype, 'cause', {
+        get: inheritedCauseGetter,
+      });
+      Object.setPrototypeOf(error, prototype);
+      return error;
+    };
+
+    reporter.emit({
+      ...input,
+      details: {
+        errors: [
+          addInheritedCause(new Error('Standard failure'), Error.prototype),
+          addInheritedCause(
+            new DOMException('DOM failure', 'AbortError'),
+            DOMException.prototype,
+          ),
+          addInheritedCause(
+            new AggregateError([], 'Aggregate failure'),
+            AggregateError.prototype,
+          ),
+        ],
+      },
+    });
+
+    const errors = events[0]?.details['errors'];
+    expect(inheritedCauseGetter).not.toHaveBeenCalled();
+    expect(Array.isArray(errors)).toBe(true);
+    expect(
+      (errors as readonly VoiceDiagnosticValue[]).every(
+        (error) =>
+          error !== null &&
+          typeof error === 'object' &&
+          !Object.hasOwn(error, 'cause'),
+      ),
+    ).toBe(true);
   });
 
   it('preserves non-enumerable DOMException details', () => {

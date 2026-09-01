@@ -333,10 +333,9 @@ const sanitizeValue = (
     seen.add(aggregate.error);
     try {
       const errors = sanitizeValue(aggregate.failures, secrets, seen, budget);
-      const cause =
-        'cause' in aggregate.error
-          ? sanitizeValue(aggregate.error.cause, secrets, seen, budget)
-          : undefined;
+      const cause = Object.hasOwn(aggregate.error, 'cause')
+        ? sanitizeValue(aggregate.error.cause, secrets, seen, budget)
+        : undefined;
       return {
         name: redactSecrets(aggregate.error.name, secrets),
         message: redactSecrets(aggregate.error.message, secrets),
@@ -353,10 +352,9 @@ const sanitizeValue = (
   if (typeof DOMException !== 'undefined' && value instanceof DOMException) {
     seen.add(value);
     try {
-      const cause =
-        'cause' in value
-          ? sanitizeValue(value.cause, secrets, seen, budget)
-          : undefined;
+      const cause = Object.hasOwn(value, 'cause')
+        ? sanitizeValue(value.cause, secrets, seen, budget)
+        : undefined;
       return {
         name: redactSecrets(value.name, secrets),
         message: redactSecrets(value.message, secrets),
@@ -372,10 +370,9 @@ const sanitizeValue = (
   if (value instanceof Error) {
     seen.add(value);
     try {
-      const cause =
-        'cause' in value
-          ? sanitizeValue(value.cause, secrets, seen, budget)
-          : undefined;
+      const cause = Object.hasOwn(value, 'cause')
+        ? sanitizeValue(value.cause, secrets, seen, budget)
+        : undefined;
       return {
         name: redactSecrets(value.name, secrets),
         message: redactSecrets(value.message, secrets),
