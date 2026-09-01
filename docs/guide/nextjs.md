@@ -36,8 +36,11 @@ import { fetchAccessToken } from 'hume';
 
 import { VoiceProviders } from '../components/providers';
 import { Call } from '../components/call';
+import { requireHumeAccess } from '../lib/require-hume-access';
 
 export default async function Home() {
+  await requireHumeAccess();
+
   const accessToken = await fetchAccessToken({
     apiKey: process.env['HUME_API_KEY'],
     secretKey: process.env['HUME_SECRET_KEY'],
@@ -51,11 +54,17 @@ export default async function Home() {
 }
 ```
 
+A server component is not an authorization boundary: the rendered token crosses
+into the requesting browser. Here, `requireHumeAccess` represents an
+application-owned helper that verifies a signed server-side session and rejects
+or redirects unauthorized users. Protect the page itself and run this check
+before consulting a token cache or minting a token.
+
 A route handler works equally well if you would rather fetch the token from the
 client on demand — useful when a page is statically rendered, or when a session
-outlives the token. Authenticate and authorize the application user inside that
-handler before minting or returning a cached token. Do not treat same-origin
-fetching or CORS as authorization.
+outlives the token. The same authentication and authorization requirement applies
+to Server Actions, route handlers, `getServerSideProps`, and custom backends. Do
+not treat same-origin fetching or CORS as authorization.
 
 ::: danger `NEXT_PUBLIC_` means public
 Anything prefixed `NEXT_PUBLIC_` is inlined into the client bundle. `HUME_API_KEY`

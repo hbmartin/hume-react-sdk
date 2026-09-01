@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+const mocks = vi.hoisted(() => ({
+  getServerMonotonicTime: vi.fn<() => number>(),
+}));
+
+vi.mock('./server-monotonic-time', () => ({
+  getServerMonotonicTime: mocks.getServerMonotonicTime,
+}));
+
 const loadTokenModule = async () => {
   vi.resetModules();
   return import('./get-hume-access-token');
@@ -16,7 +24,7 @@ describe('getHumeAccessToken', () => {
     vi.stubEnv('HUME_SECRET_KEY', 'secret-key');
     vi.stubEnv('HUME_TOKEN_HOSTNAME', 'api.hume.ai');
     vi.stubEnv('NEXT_PUBLIC_HUME_VOICE_HOSTNAME', 'browser.example.test');
-    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mocks.getServerMonotonicTime.mockReset().mockImplementation(() => now);
   });
 
   afterEach(() => {
@@ -90,6 +98,63 @@ describe('getHumeAccessToken', () => {
     await expect(getHumeAccessToken()).rejects.toThrow(
       'without a valid expiration duration',
     );
+  });
+
+  it('does not cache a non-OK OAuth response', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        Response.json({ access_token: 'retry-token', expires_in: 600 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const { getHumeAccessToken } = await loadTokenModule();
+
+    await expect(getHumeAccessToken()).rejects.toThrow(
+      'Hume rejected the access-token request with status 401.',
+    );
+    await expect(getHumeAccessToken()).resolves.toEqual({
+      accessToken: 'retry-token',
+      expiresAfterMs: 600_000,
+      refreshAfterMs: 500_000,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('subtracts OAuth request latency from the returned token lifetime', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => {
+      now += 4_000;
+      return Promise.resolve(
+        Response.json({ access_token: 'delayed-token', expires_in: 1800 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { getHumeAccessToken } = await loadTokenModule();
+
+    await expect(getHumeAccessToken()).resolves.toEqual({
+      accessToken: 'delayed-token',
+      expiresAfterMs: 1_796_000,
+      refreshAfterMs: 1_496_000,
+    });
+  });
+
+  it('does not extend token deadlines when the wall clock moves backward', async () => {
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const fetchMock = vi.fn().mockImplementation(() => {
+      now += 4_000;
+      wallClock.mockReturnValue(996_000);
+      return Promise.resolve(
+        Response.json({ access_token: 'monotonic-token', expires_in: 1800 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { getHumeAccessToken } = await loadTokenModule();
+
+    await expect(getHumeAccessToken()).resolves.toEqual({
+      accessToken: 'monotonic-token',
+      expiresAfterMs: 1_796_000,
+      refreshAfterMs: 1_496_000,
+    });
   });
 
   it("rejects an expiration beyond Hume's documented 30-minute lifetime", async () => {

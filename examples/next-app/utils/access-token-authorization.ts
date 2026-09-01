@@ -1,10 +1,12 @@
 import 'server-only';
 
 /**
- * This repository does not know which users a consuming application authorizes.
- * Keep the local example convenient, but fail closed when somebody deploys it.
- * Replace this function with a server-verified session and authorization check
- * before enabling the access-token route in production.
+ * CSRF hardening for the loopback-bound development example. The dev and start
+ * scripts' 127.0.0.1 bind is the security boundary: request URLs and headers do
+ * not prove that a caller is local. Do not expose this endpoint through a
+ * tunnel, proxy, port forward, or non-loopback bind. Replace this function with
+ * a server-verified session and authorization check before doing so or before
+ * enabling the access-token route in production.
  */
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]', 'localhost']);
 

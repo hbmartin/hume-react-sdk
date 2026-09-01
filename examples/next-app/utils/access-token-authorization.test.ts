@@ -9,14 +9,18 @@ describe('access-token authorization', () => {
     vi.unstubAllEnvs();
   });
 
-  it('allows the loopback development example', () => {
+  it.each([
+    'http://127.0.0.1:3003',
+    'http://localhost:3003',
+    'http://[::1]:3003',
+  ])('allows the loopback development origin %s', (origin) => {
     vi.stubEnv('NODE_ENV', 'development');
 
     expect(
       isHumeAccessTokenRequestAuthorized(
-        new Request('http://127.0.0.1:3003/api/access-token', {
+        new Request(`${origin}/api/access-token`, {
           headers: {
-            Origin: 'http://127.0.0.1:3003',
+            Origin: origin,
             'Sec-Fetch-Site': 'same-origin',
           },
         }),

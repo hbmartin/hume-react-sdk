@@ -267,6 +267,9 @@ describe('useGetMicrophoneStream', () => {
       secondFailure,
     ]);
     expect((cleanupError as AggregateError).message).toContain(
+      '2 microphone cleanup failures occurred.',
+    );
+    expect((cleanupError as AggregateError).message).toContain(
       'First owned stream failed',
     );
     expect((cleanupError as AggregateError).message).toContain(

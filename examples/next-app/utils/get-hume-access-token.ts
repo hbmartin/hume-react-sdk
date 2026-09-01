@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { DEFAULT_HUME_HOSTNAME, normalizeHumeHostname } from './hume-hostname';
+import { getServerMonotonicTime } from './server-monotonic-time';
 
 const TOKEN_REUSE_NUMERATOR = 5;
 const TOKEN_REUSE_DENOMINATOR = 6;
@@ -94,6 +95,7 @@ const fetchHumeAccessToken = async (
   credentialIdentity: string,
   tokenHostname: string,
 ): Promise<CachedAccessToken> => {
+  const requestedAt = getServerMonotonicTime();
   const auth = Buffer.from(
     `${credentials.apiKey}:${credentials.secretKey}`,
     'utf8',
@@ -131,7 +133,6 @@ const fetchHumeAccessToken = async (
     );
   }
 
-  const issuedAt = Date.now();
   const expiresInMs = tokenResponse.data.expires_in * 1000;
   const reuseForMs = Math.max(
     1,
@@ -141,8 +142,8 @@ const fetchHumeAccessToken = async (
   return {
     accessToken: tokenResponse.data.access_token,
     credentialIdentity,
-    expiresAt: issuedAt + expiresInMs,
-    reuseUntil: issuedAt + reuseForMs,
+    expiresAt: requestedAt + expiresInMs,
+    reuseUntil: requestedAt + reuseForMs,
   };
 };
 
@@ -161,7 +162,7 @@ export const getHumeAccessToken = async (): Promise<HumeAccessToken> => {
   const credentials = readHumeCredentials();
   const tokenHostname = readHumeTokenHostname();
   const credentialIdentity = getCredentialIdentity(credentials, tokenHostname);
-  const now = Date.now();
+  const now = getServerMonotonicTime();
 
   if (
     cachedAccessToken !== undefined &&
@@ -173,7 +174,10 @@ export const getHumeAccessToken = async (): Promise<HumeAccessToken> => {
 
   const pendingAccessToken = pendingAccessTokens.get(credentialIdentity);
   if (pendingAccessToken !== undefined) {
-    return toAccessTokenResponse(await pendingAccessToken, Date.now());
+    return toAccessTokenResponse(
+      await pendingAccessToken,
+      getServerMonotonicTime(),
+    );
   }
 
   const request = fetchHumeAccessToken(
@@ -186,7 +190,7 @@ export const getHumeAccessToken = async (): Promise<HumeAccessToken> => {
   try {
     const result = await request;
     cachedAccessToken = result;
-    return toAccessTokenResponse(result, Date.now());
+    return toAccessTokenResponse(result, getServerMonotonicTime());
   } finally {
     pendingAccessTokens.delete(credentialIdentity);
   }

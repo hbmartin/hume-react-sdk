@@ -122,7 +122,7 @@ export const useMicrophoneStream = () => {
 
     throwCleanupFailures(
       failures,
-      `${failures.length} microphone stream cleanup operations failed.`,
+      `${failures.length} microphone cleanup failures occurred.`,
     );
   }, []);
 

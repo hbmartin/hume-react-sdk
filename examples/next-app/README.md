@@ -33,6 +33,12 @@ Then open <http://127.0.0.1:3003>. The example binds to the IPv4 loopback interf
 so other machines cannot reach its development token endpoint. (`pnpm dev` from
 the root starts this app alongside every package and the other examples.)
 
+That loopback bind is the development endpoint's security boundary. Do not
+expose it through a tunnel, reverse proxy, port forward, shared remote workspace,
+or non-loopback bind: a request URL and browser headers do not prove that the
+caller is local. Add a server-verified session and authorization policy before
+making the endpoint reachable from another machine.
+
 If the API key or secret key is missing, the app renders a short setup screen
 instead of failing — so it is safe to start before filling in `.env.local`.
 Once configured, the browser requests a short-lived access token from the

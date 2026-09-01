@@ -29,18 +29,28 @@ a route handler, or your own backend. Do not rely on
 pnpm add hume
 ```
 
-If you use a route handler, authenticate and authorize the application user
-before minting or returning a cached token. A same-origin URL, CORS policy, or
-`Origin` header is not user authentication; callers that can reach an open
-route can otherwise spend the Hume account associated with your credentials.
+At every server entry point, authenticate and authorize the application user
+before minting or returning a cached token. This applies to server components,
+Server Actions, route handlers, `getServerSideProps`, and custom backends. A
+same-origin URL, CORS policy, or `Origin` header is not user authentication;
+callers that can reach an open page or route can otherwise spend the Hume account
+associated with your credentials.
+
+In the example below, `requireHumeAccess` represents an application-owned helper
+that verifies a signed server-side session and rejects or redirects users who
+are not allowed to use Hume. Protect the page itself and run this check before
+consulting a token cache or minting a token.
 
 ```tsx
 // app/page.tsx — a React Server Component
 import { fetchAccessToken } from 'hume';
 
 import { Call } from './call';
+import { requireHumeAccess } from './require-hume-access';
 
 export default async function Home() {
+  await requireHumeAccess();
+
   const accessToken = await fetchAccessToken({
     apiKey: process.env['HUME_API_KEY'],
     secretKey: process.env['HUME_SECRET_KEY'],
