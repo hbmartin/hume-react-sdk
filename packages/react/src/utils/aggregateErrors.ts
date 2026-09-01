@@ -48,7 +48,19 @@ export const getAggregateErrorDetails = (
   value: unknown,
 ): AggregateErrorDetails | null => {
   if (typeof value !== 'object' || value === null) return null;
-  if (getDataProperty(value, 'name')?.value !== 'AggregateError') return null;
+  let isNativeAggregateError = false;
+  try {
+    isNativeAggregateError =
+      typeof AggregateError !== 'undefined' && value instanceof AggregateError;
+  } catch {
+    // Fall back to the cross-realm data-property check below.
+  }
+  if (
+    !isNativeAggregateError &&
+    getDataProperty(value, 'name')?.value !== 'AggregateError'
+  ) {
+    return null;
+  }
   const errors = getOwnDataProperty(value, 'errors')?.value;
   return Array.isArray(errors) ? { error: value, failures: errors } : null;
 };

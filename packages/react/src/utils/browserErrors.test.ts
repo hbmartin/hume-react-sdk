@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { getBrowserErrorMessage, normalizeBrowserError } from './browserErrors';
+import {
+  getBrowserErrorMessage,
+  getBrowserErrorName,
+  normalizeBrowserError,
+} from './browserErrors';
 
 describe('browser error normalization', () => {
   it.each([
@@ -31,4 +35,32 @@ describe('browser error normalization', () => {
       });
     },
   );
+
+  it('reads native DOMException accessors without using instance overrides', () => {
+    const error = new DOMException('Microphone denied', 'NotAllowedError');
+    const accessor = vi.fn(() => {
+      throw new Error('Instance accessor should not run');
+    });
+    Object.defineProperties(error, {
+      message: { configurable: true, get: accessor },
+      name: { configurable: true, get: accessor },
+    });
+
+    expect(getBrowserErrorName(error)).toBe('NotAllowedError');
+    expect(getBrowserErrorMessage(error)).toBe('Microphone denied');
+    expect(accessor).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke accessors on browser-shaped failures', () => {
+    const accessor = vi.fn(() => 'unsafe');
+    const error = {};
+    Object.defineProperties(error, {
+      message: { get: accessor },
+      name: { get: accessor },
+    });
+
+    expect(getBrowserErrorName(error)).toBeNull();
+    expect(getBrowserErrorMessage(error)).toBeNull();
+    expect(accessor).not.toHaveBeenCalled();
+  });
 });

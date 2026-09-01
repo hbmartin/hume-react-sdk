@@ -52,6 +52,26 @@ describe('cleanup error helpers', () => {
     expect((error as AggregateError).cause).toBe(firstAttempt);
   });
 
+  it('preserves context and an explicit cause for one collected failure', () => {
+    const collectedFailure = new Error('Track failed');
+    const originalFailure = new AggregateError(
+      [collectedFailure],
+      'Original cleanup failed',
+    );
+    const error = createCleanupError(
+      [collectedFailure],
+      'Cleanup failed after traversal.',
+      { cause: originalFailure },
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([collectedFailure]);
+    expect((error as AggregateError).message).toBe(
+      'Cleanup failed after traversal. [1] Track failed',
+    );
+    expect((error as AggregateError).cause).toBe(originalFailure);
+  });
+
   it('does not drop a thrown undefined failure', () => {
     let caught = false;
 
@@ -76,6 +96,17 @@ describe('cleanup error helpers', () => {
     );
 
     expect(failures).toEqual([firstFailure, secondFailure]);
+  });
+
+  it('flattens native aggregate failures after their name changes', () => {
+    const failures: unknown[] = [];
+    const leaf = new Error('Track cleanup failed');
+    const aggregate = new AggregateError([leaf], 'Tracks failed');
+    aggregate.name = 'TrackCleanupError';
+
+    appendCleanupFailures(failures, aggregate);
+
+    expect(failures).toEqual([leaf]);
   });
 
   it('recursively flattens nested aggregate failures to their leaves', () => {
