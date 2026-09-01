@@ -1,3 +1,4 @@
+import { getAggregateErrorDetails } from './aggregateErrors';
 import { getBrowserErrorMessage } from './browserErrors';
 
 type CleanupErrorOptions = {
@@ -6,47 +7,7 @@ type CleanupErrorOptions = {
 };
 
 const MAX_CLEANUP_FAILURE_NODES = 1_000;
-const CLEANUP_FAILURES_TRUNCATED_MESSAGE =
-  'Cleanup failure traversal was truncated.';
-
-class FallbackAggregateError extends Error {
-  declare readonly errors: readonly unknown[];
-
-  constructor(errors: readonly unknown[], message: string, cause: unknown) {
-    super(message);
-    Object.defineProperties(this, {
-      cause: {
-        configurable: true,
-        enumerable: false,
-        value: cause,
-        writable: true,
-      },
-      errors: {
-        configurable: true,
-        enumerable: false,
-        value: errors,
-        writable: true,
-      },
-    });
-  }
-}
-
-Object.defineProperty(FallbackAggregateError.prototype, 'name', {
-  configurable: true,
-  enumerable: false,
-  value: 'AggregateError',
-  writable: true,
-});
-
-const getAggregateFailures = (failure: unknown): readonly unknown[] | null => {
-  if (
-    typeof AggregateError !== 'undefined' &&
-    failure instanceof AggregateError
-  ) {
-    return failure.errors as unknown[];
-  }
-  return failure instanceof FallbackAggregateError ? failure.errors : null;
-};
+const CLEANUP_FAILURES_TRUNCATED_MESSAGE = `Cleanup failure traversal was truncated after ${MAX_CLEANUP_FAILURE_NODES} nodes.`;
 
 /** Append leaf failures while avoiding nested AggregateError wrappers. */
 export const appendCleanupFailures = (
@@ -54,39 +15,40 @@ export const appendCleanupFailures = (
   error: unknown,
 ): void => {
   const aggregateAncestors = new WeakSet<object>();
+  const expandedAggregates = new WeakSet<object>();
   let visitedNodes = 0;
   let reportedTruncation = false;
 
   const appendFailure = (failure: unknown): boolean => {
     if (visitedNodes === MAX_CLEANUP_FAILURE_NODES) {
       if (!reportedTruncation) {
-        failures.push(new Error(CLEANUP_FAILURES_TRUNCATED_MESSAGE));
+        failures.push(
+          new Error(CLEANUP_FAILURES_TRUNCATED_MESSAGE, { cause: failure }),
+        );
         reportedTruncation = true;
       }
       return false;
     }
     visitedNodes += 1;
-    const nestedFailures = getAggregateFailures(failure);
-    if (
-      nestedFailures === null ||
-      nestedFailures.length === 0 ||
-      (typeof failure === 'object' &&
-        failure !== null &&
-        aggregateAncestors.has(failure))
-    ) {
+    const aggregate = getAggregateErrorDetails(failure);
+    if (aggregate === null || aggregate.failures.length === 0) {
       failures.push(failure);
       return true;
     }
+    if (aggregateAncestors.has(aggregate.error)) {
+      failures.push(failure);
+      return true;
+    }
+    if (expandedAggregates.has(aggregate.error)) return true;
 
-    // Native and fallback aggregate failures are both objects here.
-    if (typeof failure !== 'object' || failure === null) return true;
-    aggregateAncestors.add(failure);
+    expandedAggregates.add(aggregate.error);
+    aggregateAncestors.add(aggregate.error);
     try {
-      for (const nestedFailure of nestedFailures) {
+      for (const nestedFailure of aggregate.failures) {
         if (!appendFailure(nestedFailure)) return false;
       }
     } finally {
-      aggregateAncestors.delete(failure);
+      aggregateAncestors.delete(aggregate.error);
     }
     return true;
   };
@@ -117,9 +79,7 @@ export const createCleanupError = (
     .join('; ');
   const cause = 'cause' in options ? options.cause : failures[0];
   const message = `${summary} ${details}`;
-  return typeof AggregateError === 'undefined'
-    ? new FallbackAggregateError([...failures], message, cause)
-    : new AggregateError([...failures], message, { cause });
+  return new AggregateError([...failures], message, { cause });
 };
 
 /** Throw collected cleanup failures after every cleanup attempt has run. */

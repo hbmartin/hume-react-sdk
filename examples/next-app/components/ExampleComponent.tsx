@@ -310,7 +310,6 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     setConnectionAttemptError(null);
 
     if (connectOptions === null) {
-      setConnectionAttemptError(HUME_VOICE_HOSTNAME_ERROR);
       return;
     }
 

@@ -416,6 +416,7 @@ export type VoiceDiagnosticEvent = Readonly<{
     category: VoiceDiagnosticCategory;
     name: VoiceDiagnosticEventName;
     durationMs?: number;
+    detailsTruncated?: true;
     details: VoiceDiagnosticDetails;
 }>;
 
