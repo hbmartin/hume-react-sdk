@@ -146,6 +146,74 @@ describe('browser error normalization', () => {
     }
   });
 
+  it('retries the same object after temporary getters reject it', async () => {
+    const NativeDOMException = DOMException;
+    class TemporaryDOMException {
+      readonly #message = 'Temporary message';
+      readonly #name = 'PartialError';
+
+      get message() {
+        return this.#message;
+      }
+
+      get name() {
+        return this.#name;
+      }
+    }
+    const error = new NativeDOMException(
+      'Microphone denied after polyfill replacement',
+      'NotAllowedError',
+    );
+
+    vi.resetModules();
+    vi.stubGlobal('DOMException', TemporaryDOMException);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBeNull();
+
+      vi.stubGlobal('DOMException', NativeDOMException);
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'NotAllowedError',
+      );
+      expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBe(
+        'Microphone denied after polyfill replacement',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  it('caches failed DOMException probes per property', async () => {
+    class PartialDOMException {
+      get message(): string {
+        throw new Error('Message is unavailable');
+      }
+
+      get name() {
+        return 'AbortError';
+      }
+    }
+
+    vi.resetModules();
+    vi.stubGlobal('DOMException', PartialDOMException);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      const error = new PartialDOMException();
+
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'AbortError',
+      );
+      expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBeNull();
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'AbortError',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
   it('caches DOMException brand checks for repeated objects', async () => {
     let nameReads = 0;
     class CountingDOMException {

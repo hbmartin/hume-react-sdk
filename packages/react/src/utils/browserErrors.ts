@@ -6,22 +6,25 @@ type NativeDomExceptionStringGetters = Partial<
 
 let nativeDomExceptionStringGetters: NativeDomExceptionStringGetters | null =
   null;
+let nativeDomExceptionPrototype: object | null = null;
 
 const getNativeDomExceptionStringGetters = () => {
-  if (nativeDomExceptionStringGetters !== null) {
-    return nativeDomExceptionStringGetters;
-  }
   const getters: NativeDomExceptionStringGetters = {};
+  let prototype: object;
   try {
-    // Leave the cache unset so a later-installed or completed DOMException
-    // polyfill can be captured on the next call.
+    // Re-read the current prototype so an installed, completed, or replaced
+    // DOMException implementation can supply a new set of getters.
     if (typeof DOMException === 'undefined') return getters;
+    prototype = DOMException.prototype;
+    if (
+      nativeDomExceptionStringGetters !== null &&
+      nativeDomExceptionPrototype === prototype
+    ) {
+      return nativeDomExceptionStringGetters;
+    }
     for (const key of ['message', 'name'] as const) {
       // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
-      const getter = Object.getOwnPropertyDescriptor(
-        DOMException.prototype,
-        key,
-      )?.get;
+      const getter = Object.getOwnPropertyDescriptor(prototype, key)?.get;
       if (getter !== undefined) getters[key] = getter;
     }
   } catch {
@@ -31,42 +34,44 @@ const getNativeDomExceptionStringGetters = () => {
   if (getters.message === undefined || getters.name === undefined)
     return getters;
   nativeDomExceptionStringGetters = getters;
+  nativeDomExceptionPrototype = prototype;
   return getters;
 };
 
-// DOMException name and message are immutable Web IDL values. Caching both
-// successful and failed brand probes avoids exception-driven duplicate work.
-const nonNativeDomExceptions = new WeakSet<object>();
+type NativeDomExceptionStringProbe = Readonly<{
+  getter: (this: object) => unknown;
+  value: string | null;
+}>;
+
+// Cache each getter probe independently and tie failures to the getter that
+// produced them. If a partial DOMException implementation is later completed,
+// the replacement getter can retry the same error object.
 const nativeDomExceptionStrings = new WeakMap<
   object,
-  Partial<Record<'message' | 'name', string>>
+  Partial<Record<'message' | 'name', NativeDomExceptionStringProbe>>
 >();
 
 const getNativeDomExceptionString = (
   error: object,
   key: 'message' | 'name',
 ): string | null => {
-  if (nonNativeDomExceptions.has(error)) return null;
+  const getter = getNativeDomExceptionStringGetters()[key];
+  if (getter === undefined) return null;
   const cached = nativeDomExceptionStrings.get(error);
-  if (cached !== undefined && Object.hasOwn(cached, key)) {
-    return cached[key] ?? null;
-  }
+  const cachedProbe = cached?.[key];
+  if (cachedProbe?.getter === getter) return cachedProbe.value;
 
   let result: string | null = null;
   try {
-    const getter = getNativeDomExceptionStringGetters()[key];
-    if (getter === undefined) return result;
     const value: unknown = getter.call(error);
     result = typeof value === 'string' ? value : null;
   } catch {
     // Invoking a native Web IDL getter with an ordinary object throws.
   }
-  if (result === null) {
-    nonNativeDomExceptions.add(error);
-    return null;
-  }
-  const values: Partial<Record<'message' | 'name', string>> = cached ?? {};
-  values[key] = result;
+  const values: Partial<
+    Record<'message' | 'name', NativeDomExceptionStringProbe>
+  > = cached ?? {};
+  values[key] = { getter, value: result };
   nativeDomExceptionStrings.set(error, values);
   return result;
 };
