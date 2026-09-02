@@ -1138,7 +1138,7 @@ describe('voice diagnostics reporter', () => {
       onEvent: (event) => events.push(event),
     }));
     const prototype = Object.fromEntries(
-      Array.from({ length: 2_000 }, (_, index) => [
+      Array.from({ length: 20_000 }, (_, index) => [
         `inherited-${index}`,
         index,
       ]),
@@ -1151,6 +1151,27 @@ describe('voice diagnostics reporter', () => {
 
     expect(events[0]?.detailsTruncated).toBeUndefined();
     expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
+  });
+
+  it('does not enumerate terminal Date and binary values during discovery', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const dateOwnKeys = vi.fn(() => Reflect.ownKeys(new Date(0)));
+    const binaryOwnKeys = vi.fn(() => Reflect.ownKeys(new ArrayBuffer(8)));
+    const date = new Proxy(new Date(0), { ownKeys: dateOwnKeys });
+    const binary = new Proxy(new ArrayBuffer(8), { ownKeys: binaryOwnKeys });
+
+    reporter.emit({ ...input, details: { binary, date } });
+
+    expect(dateOwnKeys).not.toHaveBeenCalled();
+    expect(binaryOwnKeys).not.toHaveBeenCalled();
+    expect(events[0]?.details).toMatchObject({
+      binary: '[REDACTED]',
+      date: 'Invalid Date',
+    });
   });
 
   it('keeps enumerating after an own key disappears', () => {
@@ -1177,6 +1198,40 @@ describe('voice diagnostics reporter', () => {
 
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(events[0]?.details['nested']).toMatchObject({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
+  it('marks a disappeared own key incomplete when its prototype shadows it', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const target = Object.assign(
+      Object.create({ unstable: 'inherited' }) as Record<string, unknown>,
+      { first: 1, unstable: 2, later: 3 },
+    );
+    let unstableDescriptorReads = 0;
+    const nested = new Proxy(target, {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === 'unstable') {
+          unstableDescriptorReads += 1;
+          if (unstableDescriptorReads === 2) {
+            Reflect.deleteProperty(target, key);
+            return undefined;
+          }
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
       __humeDiagnosticTruncated: true,
       first: 1,
       later: 3,
@@ -1296,7 +1351,7 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBeUndefined();
   });
 
-  it('bounds total source processing for highly compressible redactions', () => {
+  it('bounds total redaction work for highly compressible strings', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1315,6 +1370,75 @@ describe('voice diagnostics reporter', () => {
     expect(message).not.toContain('bounded-tail');
     expect(message).toMatch(/\[Truncated\]$/);
     expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('truncates when a registered secret exceeds the redaction-work budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const oversizedSecret = 's'.repeat(300_000);
+    reporter.beginConnection(oversizedSecret);
+
+    reporter.emit({
+      ...input,
+      details: { message: oversizedSecret },
+    });
+
+    expect(events[0]?.details['message']).toBe('[Truncated]');
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('does not charge unexamined source after redacted output fills', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('x');
+
+    reporter.emit({
+      ...input,
+      details: {
+        message: 'x'.repeat(300_000),
+        later: 'preserved after bounded redaction',
+      },
+    });
+
+    expect(events[0]?.details['message']).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.details['later']).toBe(
+      'preserved after bounded redaction',
+    );
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('stops adding properties when redaction work is exhausted', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 's'.repeat(1_024);
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: {
+        message: secret.repeat(300),
+        laterOne: 'omitted',
+        laterTwo: 'omitted',
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details).toMatchObject({
+      __humeDiagnosticTruncated: true,
+    });
+    expect(Object.keys(events[0]?.details ?? {})).not.toContain('[Truncated]');
+    expect(Object.keys(events[0]?.details ?? {})).not.toContain(
+      '[Truncated]#2',
+    );
   });
 
   it('bounds aggregate diagnostic string content', () => {

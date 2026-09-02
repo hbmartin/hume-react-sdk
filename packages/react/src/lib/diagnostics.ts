@@ -236,10 +236,11 @@ export const invokeIsolatedConsumerCallback = (
   if (isFailureReportingEnabled()) captureCorrelation();
 
   const reportFailure = (error: unknown) => {
-    if (!isFailureReportingEnabled()) return;
+    const reporter = diagnostics;
+    if (reporter === undefined || !isFailureReportingEnabled()) return;
     captureCorrelation();
     try {
-      diagnostics?.emit({
+      reporter.emit({
         level: 'warn',
         category: 'consumer',
         name: 'consumer.callback_failed',
@@ -282,7 +283,7 @@ const MAX_SANITIZED_ENTRIES = 1_000;
 const MAX_SANITIZED_OBJECTS = 1_000;
 const MAX_SANITIZED_STRING_LENGTH = 16_384;
 const MAX_SANITIZED_TOTAL_STRING_LENGTH = 262_144;
-const MAX_SANITIZED_TOTAL_REDACTION_SOURCE_LENGTH = 262_144;
+const MAX_SANITIZED_TOTAL_REDACTION_WORK = 262_144;
 const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
 const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 10;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
@@ -339,95 +340,110 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
 };
 
 type BoundedRedaction = Readonly<{
-  examinedSourceLength: number;
+  consumedWork: number;
   sourceTruncated: boolean;
   value: string;
 }>;
 
+type RedactionMatcher = ReadonlyMap<string, readonly string[]>;
+
+const createRedactionMatcher = (
+  secrets: ReadonlySet<string>,
+): RedactionMatcher => {
+  const candidatesByFirstCodeUnit = new Map<string, string[]>();
+  for (const secret of secrets) {
+    if (secret.length === 0) continue;
+    const firstCodeUnit = secret[0];
+    if (firstCodeUnit === undefined) continue;
+    const candidates = candidatesByFirstCodeUnit.get(firstCodeUnit) ?? [];
+    candidates.push(secret);
+    candidatesByFirstCodeUnit.set(firstCodeUnit, candidates);
+  }
+  for (const candidates of candidatesByFirstCodeUnit.values()) {
+    candidates.sort((left, right) => right.length - left.length);
+  }
+  return candidatesByFirstCodeUnit;
+};
+
 /**
  * Redact only the source prefix that can contribute to the bounded output.
- * Matching against the original value lets a secret that begins before the
- * input cutoff consume the complete secret instead of exposing its prefix.
+ * Metering explicit character comparisons bounds both source traversal and
+ * failed candidate matching without copying or repeatedly rescanning a tail.
  */
 const redactSecretsWithinLimits = (
   value: string,
-  secrets: ReadonlySet<string>,
-  maximumInputLength: number,
+  matcher: RedactionMatcher,
+  maximumWork: number,
   maximumOutputLength: number,
 ): BoundedRedaction => {
-  if (maximumInputLength === 0 || maximumOutputLength === 0) {
+  if (maximumOutputLength === 0) {
     return {
-      examinedSourceLength: 0,
+      consumedWork: 0,
       sourceTruncated: value.length > 0,
       value: '',
     };
   }
-  if (secrets.size === 0) {
-    const consumedLength = Math.min(
-      value.length,
-      maximumInputLength,
-      maximumOutputLength,
-    );
+  if (matcher.size === 0) {
+    const consumedLength = Math.min(value.length, maximumOutputLength);
     return {
-      examinedSourceLength: consumedLength,
+      consumedWork: 0,
       sourceTruncated: value.length > consumedLength,
       value: value.slice(0, consumedLength),
     };
   }
-
-  let maximumSecretLength = 0;
-  for (const secret of secrets) {
-    maximumSecretLength = Math.max(maximumSecretLength, secret.length);
+  if (maximumWork === 0) {
+    return {
+      consumedWork: 0,
+      sourceTruncated: value.length > 0,
+      value: '',
+    };
   }
-  const sourceLimit = Math.min(value.length, maximumInputLength);
-  const searchableSourceLength = Math.min(
-    value.length,
-    sourceLimit + Math.max(0, maximumSecretLength - 1),
-  );
-  const searchableSource =
-    searchableSourceLength === value.length
-      ? value
-      : value.slice(0, searchableSourceLength);
+
   let cursor = 0;
+  let consumedWork = 0;
   let sanitized = '';
-  while (cursor < sourceLimit && sanitized.length < maximumOutputLength) {
-    let matchedAt = Number.POSITIVE_INFINITY;
-    let matchedSecret = '';
-    for (const secret of secrets) {
-      if (secret.length === 0) continue;
-      const match = searchableSource.indexOf(secret, cursor);
-      if (
-        match !== -1 &&
-        match < sourceLimit &&
-        (match < matchedAt ||
-          (match === matchedAt && secret.length > matchedSecret.length))
-      ) {
-        matchedAt = match;
-        matchedSecret = secret;
-      }
+  while (
+    cursor < value.length &&
+    consumedWork < maximumWork &&
+    sanitized.length < maximumOutputLength
+  ) {
+    const firstCodeUnit = value[cursor];
+    if (firstCodeUnit === undefined) break;
+    consumedWork += 1;
+    const candidates = matcher.get(firstCodeUnit);
+    if (candidates === undefined) {
+      sanitized += firstCodeUnit;
+      cursor += 1;
+      continue;
     }
 
-    const literalEnd = Math.min(matchedAt, sourceLimit);
-    if (cursor < literalEnd) {
-      const copiedLength = Math.min(
-        literalEnd - cursor,
-        maximumOutputLength - sanitized.length,
-      );
-      sanitized += value.slice(cursor, cursor + copiedLength);
-      cursor += copiedLength;
-      if (cursor < literalEnd) break;
+    let matchedSecret = '';
+    let comparisonComplete = true;
+    candidateSearch: for (const secret of candidates) {
+      for (let offset = 1; offset < secret.length; offset += 1) {
+        if (consumedWork === maximumWork) {
+          comparisonComplete = false;
+          break candidateSearch;
+        }
+        consumedWork += 1;
+        if (value[cursor + offset] !== secret[offset]) continue candidateSearch;
+      }
+      matchedSecret = secret;
+      break;
     }
+    if (!comparisonComplete) break;
     if (matchedSecret !== '') {
       if (sanitized.length + REDACTED.length > maximumOutputLength) break;
       sanitized += REDACTED;
       cursor += matchedSecret.length;
     } else {
-      break;
+      sanitized += firstCodeUnit;
+      cursor += 1;
     }
   }
 
   return {
-    examinedSourceLength: sourceLimit,
+    consumedWork,
     sourceTruncated: cursor < value.length,
     value: sanitized,
   };
@@ -441,7 +457,7 @@ type SanitizationBudget = {
   prioritizedKeys: WeakMap<object, Set<string>>;
   remainingEntries: number;
   remainingObjects: number;
-  remainingRedactionSourceLength: number;
+  remainingRedactionWork: number;
   remainingStringLength: number;
   truncated: boolean;
 };
@@ -497,7 +513,7 @@ const truncateDiagnosticString = (
 
 const sanitizeString = (
   value: string,
-  secrets: ReadonlySet<string>,
+  matcher: RedactionMatcher,
   budget: SanitizationBudget,
 ) => {
   const maximumLength = Math.min(
@@ -506,11 +522,11 @@ const sanitizeString = (
   );
   const redacted = redactSecretsWithinLimits(
     value,
-    secrets,
-    budget.remainingRedactionSourceLength,
+    matcher,
+    budget.remainingRedactionWork,
     maximumLength,
   );
-  budget.remainingRedactionSourceLength -= redacted.examinedSourceLength;
+  budget.remainingRedactionWork -= redacted.consumedWork;
   return truncateDiagnosticString(
     redacted.value,
     budget,
@@ -520,7 +536,7 @@ const sanitizeString = (
 
 const sanitizeObjectKey = (
   value: string,
-  secrets: ReadonlySet<string>,
+  matcher: RedactionMatcher,
   budget: SanitizationBudget,
 ): string | null => {
   const maximumLength = Math.min(
@@ -529,11 +545,15 @@ const sanitizeObjectKey = (
   );
   const redacted = redactSecretsWithinLimits(
     value,
-    secrets,
-    budget.remainingRedactionSourceLength,
+    matcher,
+    budget.remainingRedactionWork,
     maximumLength,
   );
-  budget.remainingRedactionSourceLength -= redacted.examinedSourceLength;
+  budget.remainingRedactionWork -= redacted.consumedWork;
+  if (redacted.consumedWork === 0 && redacted.sourceTruncated) {
+    budget.truncated = true;
+    return null;
+  }
   return truncateSanitizedString(
     redacted.value,
     budget,
@@ -644,40 +664,32 @@ const getEnumerableOwnKeys = (value: object) => {
   const keys: string[] = [];
   let scannedKeys = 0;
   let incomplete = false;
+  let ownKeys: PropertyKey[];
   try {
-    for (const key in value) {
-      if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
-        incomplete = true;
-        break;
-      }
-      scannedKeys += 1;
-      let isOwn: boolean;
-      try {
-        isOwn = Object.hasOwn(value, key);
-      } catch {
-        incomplete = true;
-        continue;
-      }
-      if (!isOwn) {
-        try {
-          const prototype = Object.getPrototypeOf(value) as object | null;
-          if (prototype === null || !Reflect.has(prototype, key)) {
-            // The key disappeared between `for...in` and `Object.hasOwn`.
-            incomplete = true;
-          }
-        } catch {
-          incomplete = true;
-        }
-        continue;
-      }
-      if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
-        incomplete = true;
-        break;
-      }
-      keys.push(key);
-    }
+    ownKeys = Reflect.ownKeys(value);
   } catch {
-    incomplete = true;
+    return { incomplete: true, keys };
+  }
+  for (const key of ownKeys) {
+    if (typeof key !== 'string') continue;
+    if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    scannedKeys += 1;
+    const descriptor = getOwnPropertyDescriptorSafely(value, key);
+    if (descriptor === null || descriptor === undefined) {
+      // The key disappeared or its descriptor could not be inspected after
+      // the own-key snapshot was captured.
+      incomplete = true;
+      continue;
+    }
+    if (descriptor.enumerable !== true) continue;
+    if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    keys.push(key);
   }
   return { incomplete, keys };
 };
@@ -731,6 +743,7 @@ const getPrioritizedKeysByObject = (root: object) => {
     ) {
       return;
     }
+    if (isDateInstance(value) || isTerminalBinaryValue(value)) return;
     scheduled.add(value);
     queue.push({ depth, path, value });
     scheduledNodes += 1;
@@ -740,6 +753,9 @@ const getPrioritizedKeysByObject = (root: object) => {
     const current = queue[cursor];
     cursor += 1;
     if (current === undefined) continue;
+    if (isDateInstance(current.value) || isTerminalBinaryValue(current.value)) {
+      continue;
+    }
 
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
       const property = getOwnEnumerableDataProperty(current.value, key);
@@ -761,22 +777,20 @@ const getPrioritizedKeysByObject = (root: object) => {
     }
 
     const enumerated = getEnumerableOwnKeys(current.value);
-    if (
-      !isArrayValue(current.value) &&
-      !isDateInstance(current.value) &&
-      !isTerminalBinaryValue(current.value)
-    ) {
+    if (!isArrayValue(current.value)) {
       enumeratedKeysByObject.set(current.value, enumerated);
     }
     const { keys } = enumerated;
     for (const key of keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       const property = getOwnEnumerableDataProperty(current.value, key);
-      if (
-        property === null ||
-        typeof property.value !== 'object' ||
-        property.value === null
-      ) {
+      if (property === null) {
+        // The enumerable data property changed or became unavailable after
+        // the own-key snapshot was captured.
+        enumerated.incomplete = true;
+        continue;
+      }
+      if (typeof property.value !== 'object' || property.value === null) {
         continue;
       }
       const path: PriorityPath = {
@@ -798,20 +812,27 @@ const getPrioritizedKeysByObject = (root: object) => {
 const getUniqueSanitizedKey = (
   result: Record<string, VoiceDiagnosticValue>,
   sanitizedKey: string,
+  nextCollisionByKey: Map<string, number>,
 ) => {
   if (
     sanitizedKey !== TRUNCATED_PROPERTY &&
     !Object.hasOwn(result, sanitizedKey)
   ) {
+    nextCollisionByKey.set(sanitizedKey, 2);
     return sanitizedKey;
   }
-  for (let collision = 2; ; collision += 1) {
+  for (
+    let collision = nextCollisionByKey.get(sanitizedKey) ?? 2;
+    ;
+    collision += 1
+  ) {
     const suffix = `#${collision}`;
     const candidate = `${sanitizedKey.slice(
       0,
       MAX_SANITIZED_STRING_LENGTH - suffix.length,
     )}${suffix}`;
     if (candidate !== TRUNCATED_PROPERTY && !Object.hasOwn(result, candidate)) {
+      nextCollisionByKey.set(sanitizedKey, collision + 1);
       return candidate;
     }
   }
@@ -872,7 +893,7 @@ const mergeOwnDataProperties = (
 
 const sanitizeValue = (
   value: unknown,
-  secrets: ReadonlySet<string>,
+  matcher: RedactionMatcher,
   seen: WeakSet<object>,
   budget: SanitizationBudget,
 ): VoiceDiagnosticValue | undefined => {
@@ -886,7 +907,7 @@ const sanitizeValue = (
       : String(value);
   }
   if (typeof value === 'string') {
-    return sanitizeString(value, secrets, budget);
+    return sanitizeString(value, matcher, budget);
   }
   if (typeof value === 'bigint') {
     return truncateDiagnosticString(value.toString(), budget);
@@ -922,7 +943,7 @@ const sanitizeValue = (
     seen.add(aggregate.error);
     try {
       const sanitizedFailures = canTraverse
-        ? sanitizeValue(aggregate.failures, secrets, seen, budget)
+        ? sanitizeValue(aggregate.failures, matcher, seen, budget)
         : markTruncated(budget);
       const errors = Array.isArray(sanitizedFailures)
         ? sanitizedFailures
@@ -933,22 +954,22 @@ const sanitizeValue = (
       const cause =
         causeProperty === null
           ? undefined
-          : sanitizeValue(causeProperty.value, secrets, seen, budget);
+          : sanitizeValue(causeProperty.value, matcher, seen, budget);
       const stack = getErrorStack(aggregate.error);
       return {
         name: sanitizeString(
           getStringDataProperty(aggregate.error, 'name', 'AggregateError'),
-          secrets,
+          matcher,
           budget,
         ),
         message: sanitizeString(
           getStringDataProperty(aggregate.error, 'message', ''),
-          secrets,
+          matcher,
           budget,
         ),
         ...(stack === ''
           ? undefined
-          : { stack: sanitizeString(stack, secrets, budget) }),
+          : { stack: sanitizeString(stack, matcher, budget) }),
         errors,
         ...(cause === undefined ? undefined : { cause }),
         ...(canTraverse ? undefined : { [TRUNCATED_PROPERTY]: true }),
@@ -967,21 +988,21 @@ const sanitizeValue = (
       const cause =
         causeProperty === null
           ? undefined
-          : sanitizeValue(causeProperty.value, secrets, seen, budget);
+          : sanitizeValue(causeProperty.value, matcher, seen, budget);
       const stack = getErrorStack(value);
       return {
         name: sanitizeString(
           getBrowserErrorString(value, 'name') ?? 'DOMException',
-          secrets,
+          matcher,
           budget,
         ),
         message: sanitizeString(
           getBrowserErrorString(value, 'message') ?? '',
-          secrets,
+          matcher,
           budget,
         ),
         ...(stack !== ''
-          ? { stack: sanitizeString(stack, secrets, budget) }
+          ? { stack: sanitizeString(stack, matcher, budget) }
           : undefined),
         ...(cause === undefined ? undefined : { cause }),
         ...(canTraverse ? undefined : { [TRUNCATED_PROPERTY]: true }),
@@ -1000,22 +1021,22 @@ const sanitizeValue = (
       const cause =
         causeProperty === null
           ? undefined
-          : sanitizeValue(causeProperty.value, secrets, seen, budget);
+          : sanitizeValue(causeProperty.value, matcher, seen, budget);
       const stack = getErrorStack(value);
       return {
         name: sanitizeString(
           getStringDataProperty(value, 'name', 'Error'),
-          secrets,
+          matcher,
           budget,
         ),
         message: sanitizeString(
           getStringDataProperty(value, 'message', ''),
-          secrets,
+          matcher,
           budget,
         ),
         ...(stack === ''
           ? undefined
-          : { stack: sanitizeString(stack, secrets, budget) }),
+          : { stack: sanitizeString(stack, matcher, budget) }),
         ...(cause === undefined ? undefined : { cause }),
         ...(canTraverse ? undefined : { [TRUNCATED_PROPERTY]: true }),
       };
@@ -1049,7 +1070,7 @@ const sanitizeValue = (
         } else if (descriptor?.enumerable === true && 'value' in descriptor) {
           try {
             result.push(
-              sanitizeValue(descriptor.value, secrets, seen, budget) ?? null,
+              sanitizeValue(descriptor.value, matcher, seen, budget) ?? null,
             );
           } catch {
             result.push(markTruncated(budget));
@@ -1066,15 +1087,24 @@ const sanitizeValue = (
   }
   seen.add(value);
   try {
+    const enumerated =
+      budget.enumeratedKeysByObject.get(value) ?? getEnumerableOwnKeys(value);
+    const expectedEnumerableKeys = new Set(enumerated.keys);
     const result: Record<string, VoiceDiagnosticValue> = {};
+    const nextCollisionByKey = new Map<string, number>();
     const sanitizeEntry = (key: string): boolean => {
       const descriptor = getOwnPropertyDescriptorSafely(value, key);
       if (descriptor === null) {
         markSanitizedObjectTruncated(result, budget);
         return true;
       }
-      if (descriptor === undefined || descriptor.enumerable !== true)
+      if (descriptor === undefined) {
+        if (expectedEnumerableKeys.has(key)) {
+          markSanitizedObjectTruncated(result, budget);
+        }
         return true;
+      }
+      if (descriptor.enumerable !== true) return true;
       if (!('value' in descriptor)) {
         markSanitizedObjectTruncated(result, budget);
         return true;
@@ -1084,19 +1114,23 @@ const sanitizeValue = (
         return false;
       }
       budget.remainingEntries -= 1;
-      const sanitizedKey = sanitizeObjectKey(key, secrets, budget);
+      const sanitizedKey = sanitizeObjectKey(key, matcher, budget);
       if (sanitizedKey === null) {
         markSanitizedObjectTruncated(result, budget);
         return false;
       }
-      const resultKey = getUniqueSanitizedKey(result, sanitizedKey);
+      const resultKey = getUniqueSanitizedKey(
+        result,
+        sanitizedKey,
+        nextCollisionByKey,
+      );
       if (REDACTED_KEYS.has(normalizeKey(key))) {
         setSanitizedProperty(result, resultKey, REDACTED);
         return true;
       }
       let sanitized: VoiceDiagnosticValue | undefined;
       try {
-        sanitized = sanitizeValue(descriptor.value, secrets, seen, budget);
+        sanitized = sanitizeValue(descriptor.value, matcher, seen, budget);
       } catch {
         sanitized = markTruncated(budget);
         markSanitizedObjectTruncated(result, budget);
@@ -1110,8 +1144,6 @@ const sanitizeValue = (
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
       if (!sanitizeEntry(key)) return result;
     }
-    const enumerated =
-      budget.enumeratedKeysByObject.get(value) ?? getEnumerableOwnKeys(value);
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
     const prioritized: string[] = [];
@@ -1152,11 +1184,16 @@ const sanitizeDetails = (
     prioritizedKeys: priorityDiscovery.prioritizedKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
-    remainingRedactionSourceLength: MAX_SANITIZED_TOTAL_REDACTION_SOURCE_LENGTH,
+    remainingRedactionWork: MAX_SANITIZED_TOTAL_REDACTION_WORK,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,
     truncated: initiallyTruncated,
   };
-  const sanitized = sanitizeValue(details, secrets, new WeakSet(), budget);
+  const sanitized = sanitizeValue(
+    details,
+    createRedactionMatcher(secrets),
+    new WeakSet(),
+    budget,
+  );
   if (
     sanitized !== null &&
     !Array.isArray(sanitized) &&
