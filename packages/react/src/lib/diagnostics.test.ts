@@ -1190,6 +1190,42 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
   });
 
+  it('bounds descriptor checks for proxies with many non-enumerable keys', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const reportedKeyCount = 25_000;
+    const reportedKeys = Array.from(
+      { length: reportedKeyCount },
+      (_, index) => `hidden-${index}`,
+    );
+    let descriptorReads = 0;
+    const nested = new Proxy(
+      {},
+      {
+        ownKeys: () => reportedKeys,
+        getOwnPropertyDescriptor(target, key) {
+          descriptorReads += 1;
+          if (typeof key === 'string' && key.startsWith('hidden-')) {
+            return { configurable: true, enumerable: false, value: 1 };
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(descriptorReads).toBeGreaterThan(0);
+    expect(descriptorReads).toBeLessThan(reportedKeyCount);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
   it('does not enumerate terminal Date and binary values during discovery', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1281,6 +1317,34 @@ describe('voice diagnostics reporter', () => {
           if (key === 'unstable') {
             unstableDescriptorReads += 1;
             if (unstableDescriptorReads === 2) return undefined;
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details).toEqual({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
+  it('keeps top-level siblings when a descriptor check throws during enumeration', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details = new Proxy(
+      { first: 1, unstable: 2, later: 3 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'unstable') {
+            throw new Error('own-property check failed');
           }
           return Reflect.getOwnPropertyDescriptor(target, key);
         },

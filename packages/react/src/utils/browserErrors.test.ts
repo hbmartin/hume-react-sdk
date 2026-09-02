@@ -247,7 +247,37 @@ describe('browser error normalization', () => {
     }
   });
 
-  it('skips the sibling probe after a brand check throws', () => {
+  it('preserves a valid DOMException name after its message getter throws', async () => {
+    class PartialDOMException {
+      get message(): string {
+        throw new Error('Message is unavailable');
+      }
+
+      get name() {
+        return 'AbortError';
+      }
+    }
+
+    vi.resetModules();
+    vi.stubGlobal('DOMException', PartialDOMException);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      const error = new PartialDOMException();
+
+      expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBeNull();
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'AbortError',
+      );
+      expect(
+        deferredBrowserErrors.normalizeBrowserError(error, 'Fallback message'),
+      ).toMatchObject({ message: 'Fallback message', name: 'AbortError' });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  it('probes DOMException getters independently after a brand check throws', () => {
     let messageReads = 0;
     let nameReads = 0;
     class CountingDOMException {
@@ -271,7 +301,7 @@ describe('browser error normalization', () => {
       expect(getBrowserErrorName(ordinary)).toBeNull();
       expect(getBrowserErrorMessage(ordinary)).toBeNull();
       expect(nameReads).toBe(1);
-      expect(messageReads).toBe(0);
+      expect(messageReads).toBe(1);
 
       const error = new CountingDOMException();
       expect(getBrowserErrorName(error)).toBe('AbortError');

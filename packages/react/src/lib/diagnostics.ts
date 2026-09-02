@@ -290,6 +290,10 @@ const MAX_SANITIZED_STRING_REDACTION_WORK = 262_144;
 const MAX_SANITIZED_TOTAL_REDACTION_WORK =
   MAX_SANITIZED_STRING_REDACTION_WORK * 4;
 const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
+// Non-enumerable properties do not consume the result-entry budget, but their
+// descriptors still execute proxy traps. Keep that inspection work separately
+// bounded while leaving enough headroom for ordinary objects with hidden state.
+const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
 const MAX_PRIORITY_SEARCH_NODES = 128;
 const PRIORITY_DIAGNOSTIC_KEYS = [
@@ -694,16 +698,37 @@ const isTerminalDiagnosticObject = (value: object) =>
 type EnumeratedKeys = { incomplete: boolean; keys: string[] };
 
 const getEnumerableOwnKeys = (value: object): EnumeratedKeys => {
-  let keys: string[];
+  let ownKeys: PropertyKey[];
   try {
-    keys = Object.keys(value);
+    ownKeys = Reflect.ownKeys(value);
   } catch {
     return { incomplete: true, keys: [] };
   }
-  if (keys.length <= MAX_ENUMERATED_OBJECT_KEYS) {
-    return { incomplete: false, keys };
+
+  const keys: string[] = [];
+  let scannedKeys = 0;
+  let incomplete = false;
+  for (const key of ownKeys) {
+    if (typeof key !== 'string') continue;
+    if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    scannedKeys += 1;
+    const descriptor = getOwnPropertyDescriptorSafely(value, key);
+    if (descriptor === null || descriptor === undefined) {
+      // One unavailable key must not discard siblings that can still be read.
+      incomplete = true;
+      continue;
+    }
+    if (descriptor.enumerable !== true) continue;
+    if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    keys.push(key);
   }
-  return { incomplete: true, keys: keys.slice(0, MAX_ENUMERATED_OBJECT_KEYS) };
+  return { incomplete, keys };
 };
 
 const getEnumerableArrayIndexKeys = (value: unknown[]): EnumeratedKeys => {

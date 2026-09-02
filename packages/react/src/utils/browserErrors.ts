@@ -3,11 +3,6 @@ import { getDataProperty } from './aggregateErrors';
 type DomExceptionStringKey = 'message' | 'name';
 type DomExceptionStringGetter = (this: object) => unknown;
 
-const SIBLING_KEY: Record<DomExceptionStringKey, DomExceptionStringKey> = {
-  message: 'name',
-  name: 'message',
-};
-
 /**
  * Read the accessor the current DOMException implementation uses for a key.
  *
@@ -62,29 +57,15 @@ const getNativeDomExceptionString = (
   if (probe?.getter === getter) return probe.value;
 
   let value: string | null = null;
-  let brandCheckFailed = false;
   try {
     const result: unknown = getter.call(error);
     value = typeof result === 'string' ? result : null;
   } catch {
-    // A Web IDL getter throws for a receiver that is not of its brand.
-    brandCheckFailed = true;
+    // Native brand checks and partial or patched accessors can both throw.
+    // Cache only this probe because a sibling getter may still be usable.
   }
   const nextProbes: NativeDomExceptionStringProbes = probes ?? {};
   nextProbes[key] = { getter, value };
-  if (brandCheckFailed) {
-    // The sibling getter of the same implementation would throw for this
-    // receiver too, so record it without another exception. A sibling value
-    // the current getter already produced is kept.
-    const siblingKey = SIBLING_KEY[key];
-    const siblingGetter = getNativeDomExceptionStringGetter(siblingKey);
-    if (
-      siblingGetter !== undefined &&
-      nextProbes[siblingKey]?.getter !== siblingGetter
-    ) {
-      nextProbes[siblingKey] = { getter: siblingGetter, value: null };
-    }
-  }
   if (probes === undefined) nativeDomExceptionStrings.set(error, nextProbes);
   return value;
 };
