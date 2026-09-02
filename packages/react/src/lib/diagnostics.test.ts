@@ -6,7 +6,6 @@ import {
   type VoiceDiagnosticEvent,
   type VoiceDiagnosticValue,
   type VoiceDiagnosticsOptions,
-  type VoiceDiagnosticsReporter,
   type VoiceLogger,
 } from './diagnostics';
 
@@ -205,25 +204,33 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
-  it('does not snapshot correlation when failure diagnostics are disabled', () => {
-    const emit = vi.fn();
-    const getCorrelation = vi.fn(() => Object.freeze({}));
-    const isEnabled = vi.fn(() => false);
-    const reporter: VoiceDiagnosticsReporter = {
-      addRedactionValue: vi.fn(),
-      beginConnection: vi.fn(() => 'connection'),
-      clearConnection: vi.fn(),
-      emit,
-      getCorrelation,
-      isEnabled,
-      setChatId: vi.fn(),
+  it('reports a delayed callback failure after diagnostics are enabled', async () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    let options: false | VoiceDiagnosticsOptions = false;
+    const reporter = createVoiceDiagnosticsReporter(() => options);
+    const originalConnectionId = reporter.beginConnection();
+    reporter.setChatId('original-chat');
+    let rejectCallback: ((error: unknown) => void) | undefined;
+    const callbackResult = new Promise<void>((_resolve, reject) => {
+      rejectCallback = reject;
+    });
+
+    invokeIsolatedConsumerCallback(reporter, 'onClose', () => callbackResult);
+    reporter.clearConnection();
+    reporter.beginConnection();
+    options = {
+      logger: false,
+      onEvent: (event) => events.push(event),
     };
+    rejectCallback?.(new Error('consumer callback failed'));
+    await callbackResult.catch(() => undefined);
+    await Promise.resolve();
 
-    invokeIsolatedConsumerCallback(reporter, 'onClose', () => undefined);
-
-    expect(isEnabled).toHaveBeenCalledWith('warn');
-    expect(getCorrelation).not.toHaveBeenCalled();
-    expect(emit).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({
+      connectionId: originalConnectionId,
+      chatId: 'original-chat',
+      name: 'consumer.callback_failed',
+    });
   });
 
   it('redacts secrets and protected fields from default events', () => {
@@ -875,6 +882,99 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('discovers nested errors beneath a priority key', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: {
+        error: {
+          noise: Array.from({ length: 10_000 }, (_, index) => index),
+          result: {
+            failure: new Error('Nested primary failure'),
+          },
+        },
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['error']).toMatchObject({
+      result: { failure: { message: 'Nested primary failure' } },
+    });
+  });
+
+  it('does not let repeated references starve later priority discovery', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const shared = {};
+    const details: Record<string, unknown> = {};
+    for (let index = 0; index < 999; index += 1) {
+      details[`shared-${index}`] = shared;
+    }
+    details['lateTarget'] = { failure: new Error('Late cleanup failure') };
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['lateTarget']).toMatchObject({
+      failure: { message: 'Late cleanup failure' },
+    });
+  });
+
+  it('prioritizes the first path to a shared object without expanding aliases', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const shared = {
+      noise: Array.from({ length: 10_000 }, (_, index) => index),
+      failure: new Error('Shared cleanup failure'),
+    };
+
+    reporter.emit({
+      ...input,
+      details: { first: shared, second: shared },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['first']).toMatchObject({
+      failure: { message: 'Shared cleanup failure' },
+    });
+  });
+
+  it('reuses discovery enumeration during sanitization', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let enumerations = 0;
+    const nested = new Proxy(
+      { failure: new Error('Cleanup failure') },
+      {
+        ownKeys(target) {
+          enumerations += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.details['nested']).toMatchObject({
+      failure: { message: 'Cleanup failure' },
+    });
+    expect(enumerations).toBe(1);
+  });
+
   it('bounds priority discovery work across repeated object references', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1007,6 +1107,28 @@ describe('voice diagnostics reporter', () => {
     expect(Object.keys(objectValues).length).toBeLessThanOrEqual(1_000);
   });
 
+  it('does not count inherited properties against the own-key limit', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const prototype = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [
+        `inherited-${index}`,
+        index,
+      ]),
+    );
+    const nested = Object.assign(Object.create(prototype) as object, {
+      own: 'preserved',
+    });
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
+  });
+
   it('bounds individual diagnostic strings after redaction', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1036,6 +1158,55 @@ describe('voice diagnostics reporter', () => {
     expect(sanitizedKey).not.toContain('secret-token');
     expect(sanitizedKey).toHaveLength(16_384);
     expect(sanitizedKey).toMatch(/\[Truncated\]$/);
+  });
+
+  it('bounds source processing before repeated redactions shrink the output', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 's'.repeat(128);
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: {
+        message: `${'x'.repeat(8_000)}${secret.repeat(700)}unbounded-tail`,
+      },
+    });
+
+    const message = events[0]?.details['message'];
+    expect(message).not.toContain('unbounded-tail');
+    expect(message).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('redacts a secret that crosses the bounded source cutoff', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 'private-token-value';
+    const cutoffPrefix = 'x'.repeat(16_384 - '[Truncated]'.length - 4);
+    const oversizedValue = `${cutoffPrefix}${secret}tail`;
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: { [oversizedValue]: 'value', message: oversizedValue },
+    });
+
+    const message = events[0]?.details['message'];
+    const sanitizedKey = Object.keys(events[0]?.details ?? {}).find(
+      (key) => key !== 'message',
+    );
+    expect(message).not.toContain(secret.slice(0, 4));
+    expect(message).toMatch(/\[Truncated\]$/);
+    expect(sanitizedKey).not.toContain(secret.slice(0, 4));
+    expect(sanitizedKey).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.detailsTruncated).toBe(true);
   });
 
   it('bounds aggregate diagnostic string content', () => {
