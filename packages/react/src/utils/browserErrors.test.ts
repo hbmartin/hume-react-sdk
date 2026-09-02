@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   getBrowserErrorMessage,
   getBrowserErrorName,
+  isNativeDomException,
   normalizeBrowserError,
 } from './browserErrors';
 
@@ -213,8 +214,10 @@ describe('browser error normalization', () => {
   });
 
   it('caches failed DOMException probes per property', async () => {
+    let messageReads = 0;
     class PartialDOMException {
       get message(): string {
+        messageReads += 1;
         throw new Error('Message is unavailable');
       }
 
@@ -236,9 +239,94 @@ describe('browser error normalization', () => {
       expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
         'AbortError',
       );
+      expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBeNull();
+      expect(messageReads).toBe(1);
     } finally {
       vi.unstubAllGlobals();
       vi.resetModules();
+    }
+  });
+
+  it('skips the sibling probe after a brand check throws', () => {
+    let messageReads = 0;
+    let nameReads = 0;
+    class CountingDOMException {
+      readonly #message = 'Counted message';
+      readonly #name = 'AbortError';
+
+      get message() {
+        messageReads += 1;
+        return this.#message;
+      }
+
+      get name() {
+        nameReads += 1;
+        return this.#name;
+      }
+    }
+
+    vi.stubGlobal('DOMException', CountingDOMException);
+    try {
+      const ordinary = {};
+      expect(getBrowserErrorName(ordinary)).toBeNull();
+      expect(getBrowserErrorMessage(ordinary)).toBeNull();
+      expect(nameReads).toBe(1);
+      expect(messageReads).toBe(0);
+
+      const error = new CountingDOMException();
+      expect(getBrowserErrorName(error)).toBe('AbortError');
+      expect(getBrowserErrorMessage(error)).toBe('Counted message');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps recognizing native DOMException objects after a subclass replaces the global', () => {
+    const NativeDOMException = DOMException;
+    const before = new NativeDOMException(
+      'Microphone denied',
+      'NotAllowedError',
+    );
+    expect(getBrowserErrorName(before)).toBe('NotAllowedError');
+
+    vi.stubGlobal('DOMException', class extends NativeDOMException {});
+    try {
+      const after = new NativeDOMException(
+        'Microphone denied after subclass replacement',
+        'NotAllowedError',
+      );
+      expect(isNativeDomException(after)).toBe(true);
+      expect(getBrowserErrorName(after)).toBe('NotAllowedError');
+      expect(getBrowserErrorMessage(after)).toBe(
+        'Microphone denied after subclass replacement',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('observes DOMException accessors patched in place', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      DOMException.prototype,
+      'name',
+    );
+    if (descriptor === undefined) {
+      throw new Error('Expected a DOMException name accessor.');
+    }
+    const error = new DOMException('Microphone denied', 'NotAllowedError');
+    expect(getBrowserErrorName(error)).toBe('NotAllowedError');
+
+    Object.defineProperty(DOMException.prototype, 'name', {
+      configurable: true,
+      get: () => 'PatchedError',
+    });
+    try {
+      expect(getBrowserErrorName(error)).toBe('PatchedError');
+      expect(
+        getBrowserErrorName(new DOMException('Aborted', 'AbortError')),
+      ).toBe('PatchedError');
+    } finally {
+      Object.defineProperty(DOMException.prototype, 'name', descriptor);
     }
   });
 

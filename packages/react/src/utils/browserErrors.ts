@@ -1,79 +1,92 @@
 import { getDataProperty } from './aggregateErrors';
 
-type NativeDomExceptionStringGetters = Partial<
-  Record<'message' | 'name', (this: object) => unknown>
->;
+type DomExceptionStringKey = 'message' | 'name';
+type DomExceptionStringGetter = (this: object) => unknown;
 
-let nativeDomExceptionStringGetters: NativeDomExceptionStringGetters | null =
-  null;
-let nativeDomExceptionPrototype: object | null = null;
+const SIBLING_KEY: Record<DomExceptionStringKey, DomExceptionStringKey> = {
+  message: 'name',
+  name: 'message',
+};
 
-const getNativeDomExceptionStringGetters = () => {
-  const getters: NativeDomExceptionStringGetters = {};
-  let prototype: object;
+/**
+ * Read the accessor the current DOMException implementation uses for a key.
+ *
+ * The descriptor is re-read on every call, so a DOMException global that is
+ * installed, completed, replaced, subclassed, or patched in place after import
+ * is always observed. Walking the prototype chain finds an accessor that a
+ * subclass inherits rather than owns; a data property ends the walk because
+ * `Error.prototype` carries plain `name` and `message` values.
+ */
+const getNativeDomExceptionStringGetter = (
+  key: DomExceptionStringKey,
+): DomExceptionStringGetter | undefined => {
   try {
-    // Re-read the current prototype so an installed, completed, or replaced
-    // DOMException implementation can supply a new set of getters.
-    if (typeof DOMException === 'undefined') return getters;
-    prototype = DOMException.prototype;
-    if (
-      nativeDomExceptionStringGetters !== null &&
-      nativeDomExceptionPrototype === prototype
-    ) {
-      return nativeDomExceptionStringGetters;
-    }
-    for (const key of ['message', 'name'] as const) {
+    if (typeof DOMException === 'undefined') return undefined;
+    let current: object | null = DOMException.prototype;
+    while (current !== null) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
       // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
-      const getter = Object.getOwnPropertyDescriptor(prototype, key)?.get;
-      if (getter !== undefined) getters[key] = getter;
+      if (descriptor !== undefined) return descriptor.get;
+      current = Object.getPrototypeOf(current) as object | null;
     }
   } catch {
     // A partial DOMException implementation may not expose a usable prototype.
-    return getters;
   }
-  if (getters.message === undefined || getters.name === undefined)
-    return getters;
-  nativeDomExceptionStringGetters = getters;
-  nativeDomExceptionPrototype = prototype;
-  return getters;
+  return undefined;
 };
 
 type NativeDomExceptionStringProbe = Readonly<{
-  getter: (this: object) => unknown;
+  getter: DomExceptionStringGetter;
   value: string | null;
 }>;
+type NativeDomExceptionStringProbes = Partial<
+  Record<DomExceptionStringKey, NativeDomExceptionStringProbe>
+>;
 
-// Cache each getter probe independently and tie failures to the getter that
-// produced them. If a partial DOMException implementation is later completed,
-// the replacement getter can retry the same error object.
+// Cache each getter probe and tie it to the getter that produced it. If a
+// partial DOMException implementation is later completed or replaced, the new
+// getter retries the same error object.
 const nativeDomExceptionStrings = new WeakMap<
   object,
-  Partial<Record<'message' | 'name', NativeDomExceptionStringProbe>>
+  NativeDomExceptionStringProbes
 >();
 
 const getNativeDomExceptionString = (
   error: object,
-  key: 'message' | 'name',
+  key: DomExceptionStringKey,
 ): string | null => {
-  const getter = getNativeDomExceptionStringGetters()[key];
+  const getter = getNativeDomExceptionStringGetter(key);
   if (getter === undefined) return null;
-  const cached = nativeDomExceptionStrings.get(error);
-  const cachedProbe = cached?.[key];
-  if (cachedProbe?.getter === getter) return cachedProbe.value;
+  const probes = nativeDomExceptionStrings.get(error);
+  const probe = probes?.[key];
+  if (probe?.getter === getter) return probe.value;
 
-  let result: string | null = null;
+  let value: string | null = null;
+  let brandCheckFailed = false;
   try {
-    const value: unknown = getter.call(error);
-    result = typeof value === 'string' ? value : null;
+    const result: unknown = getter.call(error);
+    value = typeof result === 'string' ? result : null;
   } catch {
-    // Invoking a native Web IDL getter with an ordinary object throws.
+    // A Web IDL getter throws for a receiver that is not of its brand.
+    brandCheckFailed = true;
   }
-  const values: Partial<
-    Record<'message' | 'name', NativeDomExceptionStringProbe>
-  > = cached ?? {};
-  values[key] = { getter, value: result };
-  nativeDomExceptionStrings.set(error, values);
-  return result;
+  const nextProbes: NativeDomExceptionStringProbes = probes ?? {};
+  nextProbes[key] = { getter, value };
+  if (brandCheckFailed) {
+    // The sibling getter of the same implementation would throw for this
+    // receiver too, so record it without another exception. A sibling value
+    // the current getter already produced is kept.
+    const siblingKey = SIBLING_KEY[key];
+    const siblingGetter = getNativeDomExceptionStringGetter(siblingKey);
+    if (
+      siblingGetter !== undefined &&
+      nextProbes[siblingKey]?.getter !== siblingGetter
+    ) {
+      nextProbes[siblingKey] = { getter: siblingGetter, value: null };
+    }
+  }
+  if (probes === undefined) nativeDomExceptionStrings.set(error, nextProbes);
+  return value;
 };
 
 /** Recognize same- and cross-realm native DOMException objects safely. */
