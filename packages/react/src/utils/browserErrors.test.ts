@@ -95,6 +95,8 @@ describe('browser error normalization', () => {
     vi.stubGlobal('DOMException', undefined);
     try {
       const deferredBrowserErrors = await import('./browserErrors.js');
+      expect(deferredBrowserErrors.getBrowserErrorName({})).toBeNull();
+
       vi.stubGlobal('DOMException', NativeDOMException);
       const error = new NativeDOMException(
         'Microphone denied after initialization',
@@ -106,6 +108,32 @@ describe('browser error normalization', () => {
       );
       expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBe(
         'Microphone denied after initialization',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  it('retries accessor capture after a getter-less DOMException global', async () => {
+    const NativeDOMException = DOMException;
+    class PartialDOMException {}
+
+    vi.resetModules();
+    vi.stubGlobal('DOMException', PartialDOMException);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      expect(
+        deferredBrowserErrors.getBrowserErrorName(new PartialDOMException()),
+      ).toBeNull();
+
+      vi.stubGlobal('DOMException', NativeDOMException);
+      const error = new NativeDOMException(
+        'Microphone denied after polyfill replacement',
+        'NotAllowedError',
+      );
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'NotAllowedError',
       );
     } finally {
       vi.unstubAllGlobals();

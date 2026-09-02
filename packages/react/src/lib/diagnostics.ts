@@ -664,44 +664,32 @@ const getEnumerableOwnKeys = (value: object) => {
   const keys: string[] = [];
   let scannedKeys = 0;
   let incomplete = false;
+  let ownKeys: PropertyKey[];
   try {
-    for (const key in value) {
-      if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
-        incomplete = true;
-        break;
-      }
-      scannedKeys += 1;
-      let isOwn: boolean;
-      try {
-        isOwn = Object.hasOwn(value, key);
-      } catch {
-        incomplete = true;
-        continue;
-      }
-      if (!isOwn) {
-        try {
-          const prototype = Object.getPrototypeOf(value) as object | null;
-          if (prototype !== null && Reflect.has(prototype, key)) {
-            // `for...in` reaches prototypes only after the receiver's own keys.
-            // Stop before inherited properties consume the scan allowance.
-            break;
-          }
-          // The key disappeared between `for...in` and `Object.hasOwn`.
-          incomplete = true;
-        } catch {
-          incomplete = true;
-          break;
-        }
-        continue;
-      }
-      if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
-        incomplete = true;
-        break;
-      }
-      keys.push(key);
-    }
+    ownKeys = Reflect.ownKeys(value);
   } catch {
-    incomplete = true;
+    return { incomplete: true, keys };
+  }
+  for (const key of ownKeys) {
+    if (typeof key !== 'string') continue;
+    if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    scannedKeys += 1;
+    const descriptor = getOwnPropertyDescriptorSafely(value, key);
+    if (descriptor === null || descriptor === undefined) {
+      // The key disappeared or its descriptor could not be inspected after
+      // the own-key snapshot was captured.
+      incomplete = true;
+      continue;
+    }
+    if (descriptor.enumerable !== true) continue;
+    if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    keys.push(key);
   }
   return { incomplete, keys };
 };
@@ -796,11 +784,13 @@ const getPrioritizedKeysByObject = (root: object) => {
     for (const key of keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       const property = getOwnEnumerableDataProperty(current.value, key);
-      if (
-        property === null ||
-        typeof property.value !== 'object' ||
-        property.value === null
-      ) {
+      if (property === null) {
+        // The enumerable data property changed or became unavailable after
+        // the own-key snapshot was captured.
+        enumerated.incomplete = true;
+        continue;
+      }
+      if (typeof property.value !== 'object' || property.value === null) {
         continue;
       }
       const path: PriorityPath = {
@@ -1097,6 +1087,9 @@ const sanitizeValue = (
   }
   seen.add(value);
   try {
+    const enumerated =
+      budget.enumeratedKeysByObject.get(value) ?? getEnumerableOwnKeys(value);
+    const expectedEnumerableKeys = new Set(enumerated.keys);
     const result: Record<string, VoiceDiagnosticValue> = {};
     const nextCollisionByKey = new Map<string, number>();
     const sanitizeEntry = (key: string): boolean => {
@@ -1105,8 +1098,13 @@ const sanitizeValue = (
         markSanitizedObjectTruncated(result, budget);
         return true;
       }
-      if (descriptor === undefined || descriptor.enumerable !== true)
+      if (descriptor === undefined) {
+        if (expectedEnumerableKeys.has(key)) {
+          markSanitizedObjectTruncated(result, budget);
+        }
         return true;
+      }
+      if (descriptor.enumerable !== true) return true;
       if (!('value' in descriptor)) {
         markSanitizedObjectTruncated(result, budget);
         return true;
@@ -1146,8 +1144,6 @@ const sanitizeValue = (
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
       if (!sanitizeEntry(key)) return result;
     }
-    const enumerated =
-      budget.enumeratedKeysByObject.get(value) ?? getEnumerableOwnKeys(value);
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
     const prioritized: string[] = [];

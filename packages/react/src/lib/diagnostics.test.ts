@@ -1204,6 +1204,40 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('marks a disappeared own key incomplete when its prototype shadows it', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const target = Object.assign(
+      Object.create({ unstable: 'inherited' }) as Record<string, unknown>,
+      { first: 1, unstable: 2, later: 3 },
+    );
+    let unstableDescriptorReads = 0;
+    const nested = new Proxy(target, {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === 'unstable') {
+          unstableDescriptorReads += 1;
+          if (unstableDescriptorReads === 2) {
+            Reflect.deleteProperty(target, key);
+            return undefined;
+          }
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
   it('keeps enumerating after an own-property check throws', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1335,6 +1369,24 @@ describe('voice diagnostics reporter', () => {
     expect(message).not.toContain(secret);
     expect(message).not.toContain('bounded-tail');
     expect(message).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('truncates when a registered secret exceeds the redaction-work budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const oversizedSecret = 's'.repeat(300_000);
+    reporter.beginConnection(oversizedSecret);
+
+    reporter.emit({
+      ...input,
+      details: { message: oversizedSecret },
+    });
+
+    expect(events[0]?.details['message']).toBe('[Truncated]');
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
