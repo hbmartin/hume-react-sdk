@@ -11,12 +11,10 @@ const getNativeDomExceptionStringGetters = () => {
   if (nativeDomExceptionStringGetters !== null) {
     return nativeDomExceptionStringGetters;
   }
-  const getters: Partial<
-    Record<'message' | 'name', (this: object) => unknown>
-  > = {};
+  const getters: NativeDomExceptionStringGetters = {};
   try {
-    // Leave the cache empty so a later-installed DOMException polyfill can be
-    // captured on the next call.
+    // Leave the cache unset so a later-installed or completed DOMException
+    // polyfill can be captured on the next call.
     if (typeof DOMException === 'undefined') return getters;
     for (const key of ['message', 'name'] as const) {
       // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
@@ -28,22 +26,27 @@ const getNativeDomExceptionStringGetters = () => {
     }
   } catch {
     // A partial DOMException implementation may not expose a usable prototype.
+    return getters;
   }
+  if (getters.message === undefined || getters.name === undefined)
+    return getters;
   nativeDomExceptionStringGetters = getters;
   return getters;
 };
 
 // DOMException name and message are immutable Web IDL values. Caching both
 // successful and failed brand probes avoids exception-driven duplicate work.
+const nonNativeDomExceptions = new WeakSet<object>();
 const nativeDomExceptionStrings = new WeakMap<
   object,
-  Partial<Record<'message' | 'name', string | null>>
+  Partial<Record<'message' | 'name', string>>
 >();
 
 const getNativeDomExceptionString = (
   error: object,
   key: 'message' | 'name',
 ): string | null => {
+  if (nonNativeDomExceptions.has(error)) return null;
   const cached = nativeDomExceptionStrings.get(error);
   if (cached !== undefined && Object.hasOwn(cached, key)) {
     return cached[key] ?? null;
@@ -58,7 +61,11 @@ const getNativeDomExceptionString = (
   } catch {
     // Invoking a native Web IDL getter with an ordinary object throws.
   }
-  const values = cached ?? {};
+  if (result === null) {
+    nonNativeDomExceptions.add(error);
+    return null;
+  }
+  const values: Partial<Record<'message' | 'name', string>> = cached ?? {};
   values[key] = result;
   nativeDomExceptionStrings.set(error, values);
   return result;

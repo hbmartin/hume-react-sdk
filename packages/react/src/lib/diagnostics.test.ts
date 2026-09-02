@@ -6,6 +6,7 @@ import {
   type VoiceDiagnosticEvent,
   type VoiceDiagnosticValue,
   type VoiceDiagnosticsOptions,
+  type VoiceDiagnosticsReporter,
   type VoiceLogger,
 } from './diagnostics';
 
@@ -231,6 +232,29 @@ describe('voice diagnostics reporter', () => {
       chatId: 'original-chat',
       name: 'consumer.callback_failed',
     });
+  });
+
+  it('does not report a disabled synchronous callback failure', () => {
+    const emit = vi.fn();
+    const getCorrelation = vi.fn(() => Object.freeze({}));
+    const isEnabled = vi.fn(() => false);
+    const reporter: VoiceDiagnosticsReporter = {
+      addRedactionValue: vi.fn(),
+      beginConnection: vi.fn(() => 'connection'),
+      clearConnection: vi.fn(),
+      emit,
+      getCorrelation,
+      isEnabled,
+      setChatId: vi.fn(),
+    };
+
+    invokeIsolatedConsumerCallback(reporter, 'onClose', () => {
+      throw new Error('consumer callback failed');
+    });
+
+    expect(isEnabled).toHaveBeenCalledWith('warn');
+    expect(getCorrelation).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('redacts secrets and protected fields from default events', () => {
@@ -1129,6 +1153,68 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
   });
 
+  it('keeps enumerating after an own key disappears', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let unstableDescriptorReads = 0;
+    const nested = new Proxy(
+      { first: 1, unstable: 2, later: 3 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'unstable') {
+            unstableDescriptorReads += 1;
+            if (unstableDescriptorReads === 2) return undefined;
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toMatchObject({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
+  it('keeps enumerating after an own-property check throws', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let unstableDescriptorReads = 0;
+    const nested = new Proxy(
+      { first: 1, unstable: 2, later: 3 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'unstable') {
+            unstableDescriptorReads += 1;
+            if (unstableDescriptorReads === 2) {
+              throw new Error('own-property check failed');
+            }
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toMatchObject({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
   it('bounds individual diagnostic strings after redaction', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1160,7 +1246,7 @@ describe('voice diagnostics reporter', () => {
     expect(sanitizedKey).toMatch(/\[Truncated\]$/);
   });
 
-  it('bounds source processing before repeated redactions shrink the output', () => {
+  it('keeps a fully redacted value that fits the output limit', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1177,12 +1263,13 @@ describe('voice diagnostics reporter', () => {
     });
 
     const message = events[0]?.details['message'];
-    expect(message).not.toContain('unbounded-tail');
-    expect(message).toMatch(/\[Truncated\]$/);
-    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(message).toContain('unbounded-tail');
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain('[Truncated]');
+    expect(events[0]?.detailsTruncated).toBeUndefined();
   });
 
-  it('redacts a secret that crosses the bounded source cutoff', () => {
+  it('keeps a redaction that crosses the plain-output cutoff', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1203,9 +1290,30 @@ describe('voice diagnostics reporter', () => {
       (key) => key !== 'message',
     );
     expect(message).not.toContain(secret.slice(0, 4));
-    expect(message).toMatch(/\[Truncated\]$/);
+    expect(message).toMatch(/\[REDACTED\]tail$/);
     expect(sanitizedKey).not.toContain(secret.slice(0, 4));
-    expect(sanitizedKey).toMatch(/\[Truncated\]$/);
+    expect(sanitizedKey).toMatch(/\[REDACTED\]tail$/);
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+  });
+
+  it('bounds total source processing for highly compressible redactions', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 's'.repeat(1_024);
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: { message: `${secret.repeat(300)}bounded-tail` },
+    });
+
+    const message = events[0]?.details['message'];
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain('bounded-tail');
+    expect(message).toMatch(/\[Truncated\]$/);
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 

@@ -113,6 +113,39 @@ describe('browser error normalization', () => {
     }
   });
 
+  it('retries accessor capture after a partial DOMException global', async () => {
+    const NativeDOMException = DOMException;
+    class PartialDOMException {
+      get name() {
+        return 'PartialError';
+      }
+    }
+
+    vi.resetModules();
+    vi.stubGlobal('DOMException', PartialDOMException);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      expect(
+        deferredBrowserErrors.getBrowserErrorName(new PartialDOMException()),
+      ).toBe('PartialError');
+
+      vi.stubGlobal('DOMException', NativeDOMException);
+      const error = new NativeDOMException(
+        'Microphone denied after polyfill replacement',
+        'NotAllowedError',
+      );
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'NotAllowedError',
+      );
+      expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBe(
+        'Microphone denied after polyfill replacement',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
   it('caches DOMException brand checks for repeated objects', async () => {
     let nameReads = 0;
     class CountingDOMException {

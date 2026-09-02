@@ -214,12 +214,30 @@ export const invokeIsolatedConsumerCallback = (
   invoke: () => unknown,
 ): void => {
   let correlation: ReturnType<VoiceDiagnosticsReporter['getCorrelation']> = {};
-  try {
-    correlation = diagnostics?.getCorrelation() ?? {};
-  } catch {
-    // A custom reporter may not support correlation snapshots reliably.
-  }
+  let correlationCaptured = false;
+  const isFailureReportingEnabled = () => {
+    if (diagnostics === undefined) return false;
+    try {
+      return diagnostics.isEnabled('warn');
+    } catch {
+      // Preserve reporting for custom reporters whose enabled check is broken.
+      return true;
+    }
+  };
+  const captureCorrelation = () => {
+    if (correlationCaptured) return;
+    correlationCaptured = true;
+    try {
+      correlation = diagnostics?.getCorrelation() ?? {};
+    } catch {
+      // A custom reporter may not support correlation snapshots reliably.
+    }
+  };
+  if (isFailureReportingEnabled()) captureCorrelation();
+
   const reportFailure = (error: unknown) => {
+    if (!isFailureReportingEnabled()) return;
+    captureCorrelation();
     try {
       diagnostics?.emit({
         level: 'warn',
@@ -237,6 +255,9 @@ export const invokeIsolatedConsumerCallback = (
   try {
     const result: unknown = invoke();
     if (result !== undefined) {
+      // A disabled reporter may become enabled before an asynchronous callback
+      // rejects, so retain the invocation's correlation for delayed failures.
+      captureCorrelation();
       void Promise.resolve(result).catch(reportFailure);
     }
   } catch (error) {
@@ -261,7 +282,9 @@ const MAX_SANITIZED_ENTRIES = 1_000;
 const MAX_SANITIZED_OBJECTS = 1_000;
 const MAX_SANITIZED_STRING_LENGTH = 16_384;
 const MAX_SANITIZED_TOTAL_STRING_LENGTH = 262_144;
+const MAX_SANITIZED_TOTAL_REDACTION_SOURCE_LENGTH = 262_144;
 const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
+const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 10;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
 const MAX_PRIORITY_SEARCH_NODES = 128;
 const PRIORITY_DIAGNOSTIC_KEYS = [
@@ -316,6 +339,7 @@ const redactSecrets = (value: string, secrets: ReadonlySet<string>) => {
 };
 
 type BoundedRedaction = Readonly<{
+  examinedSourceLength: number;
   sourceTruncated: boolean;
   value: string;
 }>;
@@ -332,41 +356,81 @@ const redactSecretsWithinLimits = (
   maximumOutputLength: number,
 ): BoundedRedaction => {
   if (maximumInputLength === 0 || maximumOutputLength === 0) {
-    return { sourceTruncated: value.length > 0, value: '' };
+    return {
+      examinedSourceLength: 0,
+      sourceTruncated: value.length > 0,
+      value: '',
+    };
   }
   if (secrets.size === 0) {
+    const consumedLength = Math.min(
+      value.length,
+      maximumInputLength,
+      maximumOutputLength,
+    );
     return {
-      sourceTruncated: value.length > maximumInputLength,
-      value: value.slice(0, maximumInputLength),
+      examinedSourceLength: consumedLength,
+      sourceTruncated: value.length > consumedLength,
+      value: value.slice(0, consumedLength),
     };
   }
 
+  let maximumSecretLength = 0;
+  for (const secret of secrets) {
+    maximumSecretLength = Math.max(maximumSecretLength, secret.length);
+  }
+  const sourceLimit = Math.min(value.length, maximumInputLength);
+  const searchableSourceLength = Math.min(
+    value.length,
+    sourceLimit + Math.max(0, maximumSecretLength - 1),
+  );
+  const searchableSource =
+    searchableSourceLength === value.length
+      ? value
+      : value.slice(0, searchableSourceLength);
   let cursor = 0;
   let sanitized = '';
-  while (
-    cursor < value.length &&
-    cursor < maximumInputLength &&
-    sanitized.length < maximumOutputLength
-  ) {
+  while (cursor < sourceLimit && sanitized.length < maximumOutputLength) {
+    let matchedAt = Number.POSITIVE_INFINITY;
     let matchedSecret = '';
     for (const secret of secrets) {
+      if (secret.length === 0) continue;
+      const match = searchableSource.indexOf(secret, cursor);
       if (
-        secret.length > matchedSecret.length &&
-        value.startsWith(secret, cursor)
+        match !== -1 &&
+        match < sourceLimit &&
+        (match < matchedAt ||
+          (match === matchedAt && secret.length > matchedSecret.length))
       ) {
+        matchedAt = match;
         matchedSecret = secret;
       }
     }
+
+    const literalEnd = Math.min(matchedAt, sourceLimit);
+    if (cursor < literalEnd) {
+      const copiedLength = Math.min(
+        literalEnd - cursor,
+        maximumOutputLength - sanitized.length,
+      );
+      sanitized += value.slice(cursor, cursor + copiedLength);
+      cursor += copiedLength;
+      if (cursor < literalEnd) break;
+    }
     if (matchedSecret !== '') {
+      if (sanitized.length + REDACTED.length > maximumOutputLength) break;
       sanitized += REDACTED;
       cursor += matchedSecret.length;
     } else {
-      sanitized += value[cursor] ?? '';
-      cursor += 1;
+      break;
     }
   }
 
-  return { sourceTruncated: cursor < value.length, value: sanitized };
+  return {
+    examinedSourceLength: sourceLimit,
+    sourceTruncated: cursor < value.length,
+    value: sanitized,
+  };
 };
 
 type SanitizationBudget = {
@@ -377,6 +441,7 @@ type SanitizationBudget = {
   prioritizedKeys: WeakMap<object, Set<string>>;
   remainingEntries: number;
   remainingObjects: number;
+  remainingRedactionSourceLength: number;
   remainingStringLength: number;
   truncated: boolean;
 };
@@ -386,12 +451,23 @@ const markTruncated = (budget: SanitizationBudget): VoiceDiagnosticValue => {
   return TRUNCATED_VALUE;
 };
 
-const truncateSanitizedString = (
+function truncateSanitizedString(
+  value: string,
+  budget: SanitizationBudget,
+  sourceTruncated?: boolean,
+): string;
+function truncateSanitizedString(
+  value: string,
+  budget: SanitizationBudget,
+  sourceTruncated: boolean,
+  requireCompleteSuffix: true,
+): string | null;
+function truncateSanitizedString(
   value: string,
   budget: SanitizationBudget,
   sourceTruncated = false,
   requireCompleteSuffix = false,
-): string | null => {
+): string | null {
   const maximumLength = Math.min(
     MAX_SANITIZED_STRING_LENGTH,
     budget.remainingStringLength,
@@ -411,13 +487,13 @@ const truncateSanitizedString = (
   const truncated = `${value.slice(0, maximumLength - suffix.length)}${suffix}`;
   budget.remainingStringLength -= truncated.length;
   return truncated;
-};
+}
 
 const truncateDiagnosticString = (
   value: string,
   budget: SanitizationBudget,
   sourceTruncated = false,
-) => truncateSanitizedString(value, budget, sourceTruncated) ?? '';
+) => truncateSanitizedString(value, budget, sourceTruncated);
 
 const sanitizeString = (
   value: string,
@@ -431,9 +507,10 @@ const sanitizeString = (
   const redacted = redactSecretsWithinLimits(
     value,
     secrets,
-    maximumLength,
+    budget.remainingRedactionSourceLength,
     maximumLength,
   );
+  budget.remainingRedactionSourceLength -= redacted.examinedSourceLength;
   return truncateDiagnosticString(
     redacted.value,
     budget,
@@ -453,9 +530,10 @@ const sanitizeObjectKey = (
   const redacted = redactSecretsWithinLimits(
     value,
     secrets,
-    maximumLength,
+    budget.remainingRedactionSourceLength,
     maximumLength,
   );
+  budget.remainingRedactionSourceLength -= redacted.examinedSourceLength;
   return truncateSanitizedString(
     redacted.value,
     budget,
@@ -564,19 +642,34 @@ const isTerminalBinaryValue = (value: object) => {
 
 const getEnumerableOwnKeys = (value: object) => {
   const keys: string[] = [];
+  let scannedKeys = 0;
   let incomplete = false;
   try {
     for (const key in value) {
+      if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
+        incomplete = true;
+        break;
+      }
+      scannedKeys += 1;
       let isOwn: boolean;
       try {
         isOwn = Object.hasOwn(value, key);
       } catch {
         incomplete = true;
-        break;
+        continue;
       }
-      // `for...in` visits the receiver before its prototypes, so no own keys
-      // remain once inherited enumeration begins.
-      if (!isOwn) break;
+      if (!isOwn) {
+        try {
+          const prototype = Object.getPrototypeOf(value) as object | null;
+          if (prototype === null || !Reflect.has(prototype, key)) {
+            // The key disappeared between `for...in` and `Object.hasOwn`.
+            incomplete = true;
+          }
+        } catch {
+          incomplete = true;
+        }
+        continue;
+      }
       if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
         incomplete = true;
         break;
@@ -668,7 +761,13 @@ const getPrioritizedKeysByObject = (root: object) => {
     }
 
     const enumerated = getEnumerableOwnKeys(current.value);
-    enumeratedKeysByObject.set(current.value, enumerated);
+    if (
+      !isArrayValue(current.value) &&
+      !isDateInstance(current.value) &&
+      !isTerminalBinaryValue(current.value)
+    ) {
+      enumeratedKeysByObject.set(current.value, enumerated);
+    }
     const { keys } = enumerated;
     for (const key of keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
@@ -1053,6 +1152,7 @@ const sanitizeDetails = (
     prioritizedKeys: priorityDiscovery.prioritizedKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
+    remainingRedactionSourceLength: MAX_SANITIZED_TOTAL_REDACTION_SOURCE_LENGTH,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,
     truncated: initiallyTruncated,
   };
