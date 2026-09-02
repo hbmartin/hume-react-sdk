@@ -88,4 +88,64 @@ describe('browser error normalization', () => {
     expect(getBrowserErrorMessage(error)).toBeNull();
     expect(accessor).not.toHaveBeenCalled();
   });
+
+  it('captures DOMException accessors when the global appears after import', async () => {
+    const NativeDOMException = DOMException;
+    vi.resetModules();
+    vi.stubGlobal('DOMException', undefined);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      vi.stubGlobal('DOMException', NativeDOMException);
+      const error = new NativeDOMException(
+        'Microphone denied after initialization',
+        'NotAllowedError',
+      );
+
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'NotAllowedError',
+      );
+      expect(deferredBrowserErrors.getBrowserErrorMessage(error)).toBe(
+        'Microphone denied after initialization',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  it('caches DOMException brand checks for repeated objects', async () => {
+    let nameReads = 0;
+    class CountingDOMException {
+      readonly #name: string;
+
+      constructor(name: string) {
+        this.#name = name;
+      }
+
+      get name() {
+        nameReads += 1;
+        return this.#name;
+      }
+    }
+
+    vi.resetModules();
+    vi.stubGlobal('DOMException', CountingDOMException);
+    try {
+      const deferredBrowserErrors = await import('./browserErrors.js');
+      const error = new CountingDOMException('AbortError');
+      const ordinary = {};
+
+      expect(deferredBrowserErrors.isNativeDomException(error)).toBe(true);
+      expect(deferredBrowserErrors.getBrowserErrorName(error)).toBe(
+        'AbortError',
+      );
+      expect(deferredBrowserErrors.isNativeDomException(ordinary)).toBe(false);
+      expect(deferredBrowserErrors.isNativeDomException(ordinary)).toBe(false);
+      expect(deferredBrowserErrors.getBrowserErrorName(ordinary)).toBeNull();
+      expect(nameReads).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
 });

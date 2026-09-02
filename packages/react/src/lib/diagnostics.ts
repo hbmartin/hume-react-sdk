@@ -213,24 +213,13 @@ export const invokeIsolatedConsumerCallback = (
   callback: string,
   invoke: () => unknown,
 ): void => {
-  let shouldReportFailure = diagnostics !== undefined;
-  if (diagnostics !== undefined) {
-    try {
-      shouldReportFailure = diagnostics.isEnabled('warn');
-    } catch {
-      // Preserve reporting for custom reporters whose enabled check is broken.
-    }
-  }
   let correlation: ReturnType<VoiceDiagnosticsReporter['getCorrelation']> = {};
-  if (shouldReportFailure) {
-    try {
-      correlation = diagnostics?.getCorrelation() ?? {};
-    } catch {
-      // A custom reporter may not support correlation snapshots reliably.
-    }
+  try {
+    correlation = diagnostics?.getCorrelation() ?? {};
+  } catch {
+    // A custom reporter may not support correlation snapshots reliably.
   }
   const reportFailure = (error: unknown) => {
-    if (!shouldReportFailure) return;
     try {
       diagnostics?.emit({
         level: 'warn',
@@ -381,6 +370,10 @@ const redactSecretsWithinLimits = (
 };
 
 type SanitizationBudget = {
+  enumeratedKeysByObject: WeakMap<
+    object,
+    ReturnType<typeof getEnumerableOwnKeys>
+  >;
   prioritizedKeys: WeakMap<object, Set<string>>;
   remainingEntries: number;
   remainingObjects: number;
@@ -393,11 +386,12 @@ const markTruncated = (budget: SanitizationBudget): VoiceDiagnosticValue => {
   return TRUNCATED_VALUE;
 };
 
-const truncateDiagnosticString = (
+const truncateSanitizedString = (
   value: string,
   budget: SanitizationBudget,
   sourceTruncated = false,
-) => {
+  requireCompleteSuffix = false,
+): string | null => {
   const maximumLength = Math.min(
     MAX_SANITIZED_STRING_LENGTH,
     budget.remainingStringLength,
@@ -407,12 +401,23 @@ const truncateDiagnosticString = (
     return value;
   }
   budget.truncated = true;
+  if (requireCompleteSuffix && maximumLength < TRUNCATED_SUFFIX.length) {
+    return null;
+  }
   if (maximumLength === 0) return '';
-  const suffix = TRUNCATED_SUFFIX.slice(0, maximumLength);
+  const suffix = requireCompleteSuffix
+    ? TRUNCATED_SUFFIX
+    : TRUNCATED_SUFFIX.slice(0, maximumLength);
   const truncated = `${value.slice(0, maximumLength - suffix.length)}${suffix}`;
   budget.remainingStringLength -= truncated.length;
   return truncated;
 };
+
+const truncateDiagnosticString = (
+  value: string,
+  budget: SanitizationBudget,
+  sourceTruncated = false,
+) => truncateSanitizedString(value, budget, sourceTruncated) ?? '';
 
 const sanitizeString = (
   value: string,
@@ -451,18 +456,12 @@ const sanitizeObjectKey = (
     maximumLength,
     maximumLength,
   );
-  if (!redacted.sourceTruncated && redacted.value.length <= maximumLength) {
-    budget.remainingStringLength -= redacted.value.length;
-    return redacted.value;
-  }
-  budget.truncated = true;
-  if (maximumLength < TRUNCATED_SUFFIX.length) return null;
-  const sanitized = `${redacted.value.slice(
-    0,
-    maximumLength - TRUNCATED_SUFFIX.length,
-  )}${TRUNCATED_SUFFIX}`;
-  budget.remainingStringLength -= sanitized.length;
-  return sanitized;
+  return truncateSanitizedString(
+    redacted.value,
+    budget,
+    redacted.sourceTruncated,
+    true,
+  );
 };
 
 const getStringDataProperty = (
@@ -491,15 +490,13 @@ const nativeLazyErrorStackGetters = (() => {
 })();
 
 const getErrorStack = (value: object) => {
-  const dataStack = getStringDataProperty(value, 'stack', '');
-  if (dataStack !== '') return dataStack;
-
   try {
     const visited = new WeakSet<object>();
     let current: object | null = value;
     while (current !== null && !visited.has(current)) {
       visited.add(current);
-      const descriptor = Object.getOwnPropertyDescriptor(current, 'stack');
+      const descriptor = getOwnPropertyDescriptorSafely(current, 'stack');
+      if (descriptor === null) return '';
       if (descriptor !== undefined) {
         if ('value' in descriptor) {
           return typeof descriptor.value === 'string' ? descriptor.value : '';
@@ -567,20 +564,24 @@ const isTerminalBinaryValue = (value: object) => {
 
 const getEnumerableOwnKeys = (value: object) => {
   const keys: string[] = [];
-  let scannedKeys = 0;
   let incomplete = false;
   try {
     for (const key in value) {
-      if (scannedKeys === MAX_ENUMERATED_OBJECT_KEYS) {
+      let isOwn: boolean;
+      try {
+        isOwn = Object.hasOwn(value, key);
+      } catch {
         incomplete = true;
         break;
       }
-      scannedKeys += 1;
-      try {
-        if (Object.hasOwn(value, key)) keys.push(key);
-      } catch {
+      // `for...in` visits the receiver before its prototypes, so no own keys
+      // remain once inherited enumeration begins.
+      if (!isOwn) break;
+      if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
         incomplete = true;
+        break;
       }
+      keys.push(key);
     }
   } catch {
     incomplete = true;
@@ -593,42 +594,82 @@ const isPriorityDiagnosticObject = (value: object) =>
   isErrorInstance(value) ||
   isNativeDomException(value);
 
-type PriorityPathEntry = Readonly<{ key: string; object: object }>;
+type PriorityPath = Readonly<{
+  key: string;
+  object: object;
+  parent: PriorityPath | null;
+}>;
 
 const getPrioritizedKeysByObject = (root: object) => {
   const prioritizedKeys = new WeakMap<object, Set<string>>();
-  const markPath = (path: readonly PriorityPathEntry[]) => {
-    for (const { key, object } of path) {
+  const enumeratedKeysByObject = new WeakMap<
+    object,
+    ReturnType<typeof getEnumerableOwnKeys>
+  >();
+  const markPath = (path: PriorityPath) => {
+    let current: PriorityPath | null = path;
+    while (current !== null) {
+      const { key, object } = current;
       const keys = prioritizedKeys.get(object) ?? new Set<string>();
       keys.add(key);
       prioritizedKeys.set(object, keys);
+      current = current.parent;
     }
   };
   const queue: Array<
     Readonly<{
       depth: number;
-      path: readonly PriorityPathEntry[];
+      path: PriorityPath | null;
       value: object;
     }>
-  > = [{ depth: 0, path: [], value: root }];
-  const seen = new WeakSet<object>();
+  > = [{ depth: 0, path: null, value: root }];
+  // Explore a shared object through its first breadth-first path only. Walking
+  // every alias would make the bounded search exponential on ordinary DAGs.
+  const scheduled = new WeakSet<object>();
+  scheduled.add(root);
   let cursor = 0;
   let scheduledNodes = 1;
+
+  const schedule = (value: object, depth: number, path: PriorityPath) => {
+    if (
+      depth > MAX_PRIORITY_SEARCH_DEPTH ||
+      scheduledNodes === MAX_PRIORITY_SEARCH_NODES ||
+      scheduled.has(value)
+    ) {
+      return;
+    }
+    scheduled.add(value);
+    queue.push({ depth, path, value });
+    scheduledNodes += 1;
+  };
 
   while (cursor < queue.length) {
     const current = queue[cursor];
     cursor += 1;
-    if (current === undefined || seen.has(current.value)) continue;
-    seen.add(current.value);
+    if (current === undefined) continue;
 
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
       const property = getOwnEnumerableDataProperty(current.value, key);
       if (property !== null && property.value !== undefined) {
-        markPath([...current.path, { key, object: current.value }]);
+        const path: PriorityPath = {
+          key,
+          object: current.value,
+          parent: current.path,
+        };
+        markPath(path);
+        if (
+          typeof property.value === 'object' &&
+          property.value !== null &&
+          !isPriorityDiagnosticObject(property.value)
+        ) {
+          schedule(property.value, current.depth + 1, path);
+        }
       }
     }
 
-    const { keys } = getEnumerableOwnKeys(current.value);
+    const enumerated = getEnumerableOwnKeys(current.value);
+    enumeratedKeysByObject.set(current.value, enumerated);
+    const { keys } = enumerated;
     for (const key of keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       const property = getOwnEnumerableDataProperty(current.value, key);
@@ -639,24 +680,20 @@ const getPrioritizedKeysByObject = (root: object) => {
       ) {
         continue;
       }
-      const path = [...current.path, { key, object: current.value }];
+      const path: PriorityPath = {
+        key,
+        object: current.value,
+        parent: current.path,
+      };
       if (isPriorityDiagnosticObject(property.value)) {
         markPath(path);
-      } else if (
-        current.depth < MAX_PRIORITY_SEARCH_DEPTH &&
-        scheduledNodes < MAX_PRIORITY_SEARCH_NODES
-      ) {
-        queue.push({
-          depth: current.depth + 1,
-          path,
-          value: property.value,
-        });
-        scheduledNodes += 1;
+      } else {
+        schedule(property.value, current.depth + 1, path);
       }
     }
   }
 
-  return prioritizedKeys;
+  return { enumeratedKeysByObject, prioritizedKeys };
 };
 
 const getUniqueSanitizedKey = (
@@ -974,7 +1011,8 @@ const sanitizeValue = (
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
       if (!sanitizeEntry(key)) return result;
     }
-    const enumerated = getEnumerableOwnKeys(value);
+    const enumerated =
+      budget.enumeratedKeysByObject.get(value) ?? getEnumerableOwnKeys(value);
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
     const prioritized: string[] = [];
@@ -1009,8 +1047,10 @@ const sanitizeDetails = (
   secrets: ReadonlySet<string>,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
+  const priorityDiscovery = getPrioritizedKeysByObject(details);
   const budget: SanitizationBudget = {
-    prioritizedKeys: getPrioritizedKeysByObject(details),
+    enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
+    prioritizedKeys: priorityDiscovery.prioritizedKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,

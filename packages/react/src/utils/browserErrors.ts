@@ -1,10 +1,22 @@
 import { getDataProperty } from './aggregateErrors';
 
-const nativeDomExceptionStringGetters = (() => {
+type NativeDomExceptionStringGetters = Partial<
+  Record<'message' | 'name', (this: object) => unknown>
+>;
+
+let nativeDomExceptionStringGetters: NativeDomExceptionStringGetters | null =
+  null;
+
+const getNativeDomExceptionStringGetters = () => {
+  if (nativeDomExceptionStringGetters !== null) {
+    return nativeDomExceptionStringGetters;
+  }
   const getters: Partial<
     Record<'message' | 'name', (this: object) => unknown>
   > = {};
   try {
+    // Leave the cache empty so a later-installed DOMException polyfill can be
+    // captured on the next call.
     if (typeof DOMException === 'undefined') return getters;
     for (const key of ['message', 'name'] as const) {
       // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
@@ -17,21 +29,39 @@ const nativeDomExceptionStringGetters = (() => {
   } catch {
     // A partial DOMException implementation may not expose a usable prototype.
   }
+  nativeDomExceptionStringGetters = getters;
   return getters;
-})();
+};
+
+// DOMException name and message are immutable Web IDL values. Caching both
+// successful and failed brand probes avoids exception-driven duplicate work.
+const nativeDomExceptionStrings = new WeakMap<
+  object,
+  Partial<Record<'message' | 'name', string | null>>
+>();
 
 const getNativeDomExceptionString = (
   error: object,
   key: 'message' | 'name',
 ): string | null => {
-  try {
-    const getter = nativeDomExceptionStringGetters[key];
-    if (getter === undefined) return null;
-    const value: unknown = getter.call(error);
-    return typeof value === 'string' ? value : null;
-  } catch {
-    return null;
+  const cached = nativeDomExceptionStrings.get(error);
+  if (cached !== undefined && Object.hasOwn(cached, key)) {
+    return cached[key] ?? null;
   }
+
+  let result: string | null = null;
+  try {
+    const getter = getNativeDomExceptionStringGetters()[key];
+    if (getter === undefined) return result;
+    const value: unknown = getter.call(error);
+    result = typeof value === 'string' ? value : null;
+  } catch {
+    // Invoking a native Web IDL getter with an ordinary object throws.
+  }
+  const values = cached ?? {};
+  values[key] = result;
+  nativeDomExceptionStrings.set(error, values);
+  return result;
 };
 
 /** Recognize same- and cross-realm native DOMException objects safely. */
