@@ -800,6 +800,25 @@ describe('voice diagnostics reporter', () => {
     expect(JSON.stringify(events)).not.toContain('secret-token');
   });
 
+  it('redacts the chat identifier with the same matcher as details', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    reporter.beginConnection('b');
+    reporter.addRedactionValue('ab');
+    reporter.setChatId('ab');
+
+    reporter.emit({ ...input, details: { chat: 'ab' } });
+
+    // Leftmost-longest matching must not let the shorter, earlier-registered
+    // secret split the longer one and expose its prefix.
+    expect(reporter.getCorrelation().chatId).toBe('[REDACTED]');
+    expect(events[0]?.chatId).toBe('[REDACTED]');
+    expect(events[0]?.details['chat']).toBe('[REDACTED]');
+  });
+
   it('includes opted-in content while continuing to redact credentials', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1153,6 +1172,24 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
   });
 
+  it('does not count non-enumerable own properties against the own-key limit', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const nested: Record<string, unknown> = {};
+    for (let index = 0; index < 10_001; index += 1) {
+      Object.defineProperty(nested, `hidden-${index}`, { value: index });
+    }
+    nested['own'] = 'preserved';
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
+  });
+
   it('does not enumerate terminal Date and binary values during discovery', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1164,14 +1201,40 @@ describe('voice diagnostics reporter', () => {
     const date = new Proxy(new Date(0), { ownKeys: dateOwnKeys });
     const binary = new Proxy(new ArrayBuffer(8), { ownKeys: binaryOwnKeys });
 
-    reporter.emit({ ...input, details: { binary, date } });
+    reporter.emit({
+      ...input,
+      details: { binary, date, when: new Date(0) },
+    });
 
     expect(dateOwnKeys).not.toHaveBeenCalled();
     expect(binaryOwnKeys).not.toHaveBeenCalled();
     expect(events[0]?.details).toMatchObject({
       binary: '[REDACTED]',
-      date: 'Invalid Date',
+      when: '1970-01-01T00:00:00.000Z',
     });
+    // A proxied Date has no [[DateValue]] slot, so it can only serialize
+    // through the fallback; what matters is that it stayed a string.
+    expect(typeof events[0]?.details['date']).toBe('string');
+  });
+
+  it('does not enumerate array keys during discovery', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const ownKeys = vi.fn((target: object) => Reflect.ownKeys(target));
+    const values = new Proxy([1, 2, new Error('Inside array')], { ownKeys });
+
+    reporter.emit({ ...input, details: { values } });
+
+    expect(ownKeys).not.toHaveBeenCalled();
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(events[0]?.details['values']).toMatchObject([
+      1,
+      2,
+      { message: 'Inside array' },
+    ]);
   });
 
   it('keeps enumerating after an own key disappears', () => {
@@ -1198,6 +1261,36 @@ describe('voice diagnostics reporter', () => {
 
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(events[0]?.details['nested']).toMatchObject({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
+  it('marks details incomplete when a top-level key disappears during merge', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let unstableDescriptorReads = 0;
+    const details = new Proxy(
+      { first: 1, unstable: 2, later: 3 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'unstable') {
+            unstableDescriptorReads += 1;
+            if (unstableDescriptorReads === 2) return undefined;
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details).toEqual({
       __humeDiagnosticTruncated: true,
       first: 1,
       later: 3,
@@ -1413,7 +1506,7 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
-  it('stops adding properties when redaction work is exhausted', () => {
+  it('keeps later properties when one string exhausts its redaction work', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1426,19 +1519,105 @@ describe('voice diagnostics reporter', () => {
       ...input,
       details: {
         message: secret.repeat(300),
-        laterOne: 'omitted',
-        laterTwo: 'omitted',
+        laterOne: 'kept',
+        laterTwo: 'kept',
       },
     });
 
     expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['message']).not.toContain(secret);
+    expect(events[0]?.details['message']).toMatch(/\[Truncated\]$/);
     expect(events[0]?.details).toMatchObject({
-      __humeDiagnosticTruncated: true,
+      laterOne: 'kept',
+      laterTwo: 'kept',
     });
-    expect(Object.keys(events[0]?.details ?? {})).not.toContain('[Truncated]');
-    expect(Object.keys(events[0]?.details ?? {})).not.toContain(
-      '[Truncated]#2',
+  });
+
+  it('skips names it cannot redact once total redaction work is exhausted', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const secret = 's'.repeat(1_024);
+    const dense = secret.repeat(300);
+    reporter.beginConnection(secret);
+
+    reporter.emit({
+      ...input,
+      details: {
+        one: dense,
+        two: dense,
+        three: dense,
+        four: dense,
+        status: 'omitted',
+        later: 'kept',
+      },
+    });
+
+    const details = events[0]?.details ?? {};
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(details).toMatchObject({
+      __humeDiagnosticTruncated: true,
+      later: 'kept',
+    });
+    expect(Object.hasOwn(details, 'status')).toBe(false);
+    expect(
+      Object.keys(details).filter((key) => key.includes('[Truncated]')),
+    ).toEqual([]);
+    expect(JSON.stringify(details)).not.toContain(secret);
+  });
+
+  it('keeps later properties after an oversized key when no secrets are registered', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+
+    reporter.emit({
+      ...input,
+      details: { ['k'.repeat(20_000)]: 1, later: 'kept' },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    const oversizedKey = Object.keys(events[0]?.details ?? {}).find((key) =>
+      key.startsWith('k'),
     );
+    expect(oversizedKey).toHaveLength(16_384);
+    expect(oversizedKey).toMatch(/\[Truncated\]$/);
+    expect(events[0]?.details['later']).toBe('kept');
+  });
+
+  it('does not let ordinary text exhaust the redaction budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    // A JWT-style token starts with the most common English letter, so every
+    // `e` in ordinary prose is a candidate that must be compared and rejected.
+    reporter.beginConnection('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig');
+    const prose = 'the quick brown fox jumps over the lazy dog '
+      .repeat(400)
+      .slice(0, 16_384);
+    const details: Record<string, unknown> = {};
+    for (let index = 0; index < 14; index += 1) {
+      details[`chunk-${index}`] = prose;
+    }
+    details['code'] = 1006;
+    details['wasClean'] = false;
+    details['reason'] = 'abnormal closure';
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(events[0]?.details).toMatchObject({
+      'chunk-13': prose,
+      code: 1006,
+      wasClean: false,
+      reason: 'abnormal closure',
+    });
   });
 
   it('bounds aggregate diagnostic string content', () => {
