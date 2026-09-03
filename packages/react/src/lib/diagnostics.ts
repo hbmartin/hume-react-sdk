@@ -297,7 +297,8 @@ const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
 // bounded while leaving enough headroom for ordinary objects with hidden state.
 const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
 // A chain of individually bounded objects must not multiply descriptor work
-// across one emit. Share the same generous scan allowance across the event.
+// across one emit. Share the ordinary merge and sanitization allowance across
+// the event; priority discovery has a smaller independent cap below.
 const MAX_SCANNED_TOTAL_OBJECT_KEYS = MAX_SCANNED_OBJECT_KEYS;
 const PRIORITY_DIAGNOSTIC_KEYS = [
   'error',
@@ -310,8 +311,8 @@ const MAX_PRIORITY_SEARCH_DEPTH = 8;
 // Priority discovery can inspect every object that sanitization could retain.
 // Its fixed priority probes and sampled traversal keys share the same budget.
 const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS;
-// Reserve half of the per-event descriptor work for discovery before merging
-// input details. Unused discovery work is returned to sanitization.
+// Priority discovery has its own bounded allowance so it cannot reduce the
+// pre-existing merge and sanitization scan budget.
 const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
   MAX_SCANNED_TOTAL_OBJECT_KEYS / 2,
 );
@@ -1393,9 +1394,6 @@ const sanitizeDetails = (
     priorityScanBudget,
     rootEnumeratedKeys,
   );
-  // Discovery and sanitization remain independently usable without increasing
-  // the original total scan ceiling.
-  ownKeyScanBudget.remainingKeys += priorityScanBudget.remainingKeys;
   const budget: SanitizationBudget = {
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
     ownKeyScanBudget,
@@ -1509,8 +1507,7 @@ export const createVoiceDiagnosticsReporter = (
           remainingKeys: MAX_PRIORITY_SCANNED_TOTAL_KEYS,
         };
         const ownKeyScanBudget: OwnKeyScanBudget = {
-          remainingKeys:
-            MAX_SCANNED_TOTAL_OBJECT_KEYS - MAX_PRIORITY_SCANNED_TOTAL_KEYS,
+          remainingKeys: MAX_SCANNED_TOTAL_OBJECT_KEYS,
         };
         let mergeIncomplete = mergeOwnDataProperties(
           combinedDetails,

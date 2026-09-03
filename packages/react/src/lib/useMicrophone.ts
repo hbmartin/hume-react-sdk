@@ -127,14 +127,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
       const updates: Array<{
         enabled: boolean;
         hadSavedState: boolean;
-        savedState: boolean | undefined;
+        savedState: boolean;
         track: MediaStreamTrack;
       }> = [];
 
       try {
         tracks.forEach((track) => {
           const hadSavedState = enabledStates.has(track);
-          const savedState = enabledStates.get(track);
+          const savedState = enabledStates.get(track) ?? false;
 
           if (!muted && !hadSavedState) return;
 
@@ -153,7 +153,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             return;
           }
 
-          track.enabled = savedState ?? false;
+          track.enabled = savedState;
           enabledStates.delete(track);
         });
       } catch (error) {
@@ -165,7 +165,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           } catch {
             // Best-effort rollback for a nonstandard track implementation.
           }
-          if (update.hadSavedState && update.savedState !== undefined) {
+          if (update.hadSavedState) {
             enabledStates.set(update.track, update.savedState);
           } else {
             enabledStates.delete(update.track);
@@ -196,6 +196,21 @@ export const useMicrophone = (props: MicrophoneProps) => {
       applyMuteStateToTracks(tracks, muted);
     },
     [applyMuteStateToTracks],
+  );
+
+  const applyMuteStateToRetiredStreams = useCallback(
+    (muted: boolean) => {
+      const failures: unknown[] = [];
+      for (const stream of retiredStreams.current) {
+        try {
+          applyMuteStateToStream(stream, muted);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      return failures;
+    },
+    [applyMuteStateToStream],
   );
 
   const reportMuteStateFailure = useCallback(
@@ -757,7 +772,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         try {
           stream.getTracks().forEach((track) => track.stop());
         } catch {
-          // A stale candidate must not mask the lifecycle interruption.
+          // Candidate cleanup must not mask the replacement failure.
         }
       };
       if (!isCurrent()) {
@@ -767,6 +782,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       const mimeType = mimeTypeRef.current;
       if (mimeType === null) {
+        stopCandidateStream();
         throw new Error('No MimeType specified');
       }
 
@@ -777,10 +793,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
         !currentContext ||
         !recordingStarted.current
       ) {
+        stopCandidateStream();
         throw new Error('The microphone is not recording.');
       }
       const previousStream = currentStream.current;
       if (sharedAudioContext && sharedAudioContext !== currentContext) {
+        stopCandidateStream();
         throw new Error('The microphone audio context changed.');
       }
 
@@ -926,6 +944,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
       } catch (error) {
         reportMuteStateFailure(isMutedRef.current, error);
         disposeCandidate();
+        try {
+          await disposeMicrophoneResources();
+        } catch (cleanupError) {
+          reportClosureFailure(
+            'Failed to fully clean up after microphone replacement',
+            cleanupError,
+          );
+        }
         throw error;
       }
       pendingReplacementStream.current = null;
@@ -967,6 +993,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       disposeMicrophoneResources,
       diagnostics,
       fftStore,
+      reportClosureFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
@@ -1016,6 +1043,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       reportMuteStateFailure(true, error);
       return;
     }
+    const retiredFailures = applyMuteStateToRetiredStreams(true);
 
     isMutedRef.current = true;
     fftStore.clear();
@@ -1026,8 +1054,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
       name: 'control.changed',
       details: { control: 'microphone_mute', value: true },
     });
+    retiredFailures.forEach((error) => reportMuteStateFailure(true, error));
   }, [
     applyMuteStateToActiveStreams,
+    applyMuteStateToRetiredStreams,
     diagnostics,
     fftStore,
     reportMuteStateFailure,
@@ -1040,6 +1070,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       reportMuteStateFailure(false, error);
       return;
     }
+    const retiredFailures = applyMuteStateToRetiredStreams(false);
 
     isMutedRef.current = false;
     setIsMuted(false);
@@ -1049,7 +1080,13 @@ export const useMicrophone = (props: MicrophoneProps) => {
       name: 'control.changed',
       details: { control: 'microphone_mute', value: false },
     });
-  }, [applyMuteStateToActiveStreams, diagnostics, reportMuteStateFailure]);
+    retiredFailures.forEach((error) => reportMuteStateFailure(false, error));
+  }, [
+    applyMuteStateToActiveStreams,
+    applyMuteStateToRetiredStreams,
+    diagnostics,
+    reportMuteStateFailure,
+  ]);
 
   useEffect(() => {
     microphoneMounted.current = true;
