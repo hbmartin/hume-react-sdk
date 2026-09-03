@@ -71,6 +71,7 @@ export type VoiceDiagnosticEventName =
   | 'tool.handler_failed'
   | 'tool.handler_skipped'
   | 'control.changed'
+  | 'control.change_failed'
   | 'consumer.callback_failed'
   | 'sdk.error'
   | 'sdk.error_cleared';
@@ -298,23 +299,6 @@ const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
 // A chain of individually bounded objects must not multiply descriptor work
 // across one emit. Share the same generous scan allowance across the event.
 const MAX_SCANNED_TOTAL_OBJECT_KEYS = MAX_SCANNED_OBJECT_KEYS;
-const MAX_PRIORITY_SEARCH_DEPTH = 8;
-// Priority discovery gets bounded work independent of sanitization. Give it
-// enough nodes to inspect every top-level value plus a similarly sized nested
-// frontier without allowing an adversarial graph to grow without limit.
-const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS * 2;
-// Reserve at most half of the remaining per-event descriptor work for
-// discovery. Unused work is returned to sanitization after the search.
-const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
-  MAX_SCANNED_TOTAL_OBJECT_KEYS / 2,
-);
-// Share discovery work across its node allowance. Sampling both ends keeps
-// appended failures visible without letting one payload container starve later
-// siblings.
-const MAX_PRIORITY_KEYS_PER_OBJECT = Math.max(
-  1,
-  Math.floor(MAX_PRIORITY_SCANNED_TOTAL_KEYS / MAX_PRIORITY_SEARCH_NODES),
-);
 const PRIORITY_DIAGNOSTIC_KEYS = [
   'error',
   'errors',
@@ -322,6 +306,22 @@ const PRIORITY_DIAGNOSTIC_KEYS = [
   'cause',
 ] as const;
 const PRIORITY_DIAGNOSTIC_KEY_SET = new Set<string>(PRIORITY_DIAGNOSTIC_KEYS);
+const MAX_PRIORITY_SEARCH_DEPTH = 8;
+// Priority discovery can inspect every object that sanitization could retain.
+// Its fixed priority probes and sampled traversal keys share the same budget.
+const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS;
+// Reserve half of the per-event descriptor work for discovery before merging
+// input details. Unused discovery work is returned to sanitization.
+const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
+  MAX_SCANNED_TOTAL_OBJECT_KEYS / 2,
+);
+// After the fixed probes, share the remaining discovery work across its node
+// allowance. Sampling both ends keeps appended failures visible.
+const MAX_PRIORITY_KEYS_PER_OBJECT = Math.max(
+  1,
+  Math.floor(MAX_PRIORITY_SCANNED_TOTAL_KEYS / MAX_PRIORITY_SEARCH_NODES) -
+    PRIORITY_DIAGNOSTIC_KEYS.length,
+);
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -1015,6 +1015,11 @@ const mergeOwnDataProperties = (
     return true;
   };
   for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+    if (ownKeyScanBudget.remainingKeys === 0) {
+      incomplete = true;
+      break;
+    }
+    ownKeyScanBudget.remainingKeys -= 1;
     if (!mergeProperty(key, false)) missingPriorityKeys.add(key);
   }
   const enumerated = getEnumerableOwnKeys(source, ownKeyScanBudget);
@@ -1194,11 +1199,59 @@ const sanitizeValue = (
         result.push(markTruncated(budget));
         return result;
       }
-      for (let index = 0; index < length; index += 1) {
+
+      const priorityIndexes: number[] = [];
+      const priorityKeys = budget.prioritizedKeys.get(value);
+      if (priorityKeys !== undefined) {
+        for (const key of priorityKeys) {
+          const index = Number(key);
+          if (
+            Number.isSafeInteger(index) &&
+            index >= 0 &&
+            index < length &&
+            String(index) === key
+          ) {
+            priorityIndexes.push(index);
+          }
+        }
+        priorityIndexes.sort((left, right) => left - right);
+      }
+
+      const sanitizedPriorityEntries = new Map<number, VoiceDiagnosticValue>();
+      for (const index of priorityIndexes) {
         if (budget.remainingEntries === 0) {
-          result.push(markTruncated(budget));
+          markTruncated(budget);
           break;
         }
+        budget.remainingEntries -= 1;
+        const descriptor = getOwnPropertyDescriptorSafely(value, index);
+        if (descriptor === null) {
+          sanitizedPriorityEntries.set(index, markTruncated(budget));
+        } else if (descriptor?.enumerable === true && 'value' in descriptor) {
+          try {
+            sanitizedPriorityEntries.set(
+              index,
+              sanitizeValue(descriptor.value, matcher, seen, budget) ?? null,
+            );
+          } catch {
+            sanitizedPriorityEntries.set(index, markTruncated(budget));
+          }
+        } else {
+          markTruncated(budget);
+          sanitizedPriorityEntries.set(index, null);
+        }
+      }
+
+      let index = 0;
+      for (; index < length; index += 1) {
+        const prioritized = sanitizedPriorityEntries.get(index);
+        if (prioritized !== undefined) {
+          result.push(prioritized);
+          sanitizedPriorityEntries.delete(index);
+          continue;
+        }
+        if (budget.remainingEntries === 0) break;
+
         budget.remainingEntries -= 1;
         const descriptor = getOwnPropertyDescriptorSafely(value, index);
         if (descriptor === null) {
@@ -1215,6 +1268,10 @@ const sanitizeValue = (
           if (descriptor?.enumerable === true) budget.truncated = true;
           result.push(null);
         }
+      }
+      if (index < length) result.push(markTruncated(budget));
+      for (const prioritized of sanitizedPriorityEntries.values()) {
+        result.push(prioritized);
       }
       return result;
     } finally {
@@ -1294,18 +1351,15 @@ const sanitizeValue = (
     }
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
-    const prioritized =
-      priorityKeys === undefined
-        ? []
-        : [...priorityKeys].filter(
-            (key) => !PRIORITY_DIAGNOSTIC_KEY_SET.has(key),
-          );
-    const remaining: string[] = [];
+    if (priorityKeys !== undefined) {
+      for (const key of priorityKeys) {
+        if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+        if (sanitizeEntry(key, true) === 'stop') return result;
+      }
+    }
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
-      if (priorityKeys?.has(key) !== true) remaining.push(key);
-    }
-    for (const key of [...prioritized, ...remaining]) {
+      if (priorityKeys?.has(key) === true) continue;
       if (sanitizeEntry(key, true) === 'stop') break;
     }
     return result;
@@ -1330,15 +1384,10 @@ const sanitizeDetails = (
   details: Record<string, unknown>,
   matcher: RedactionMatcher,
   ownKeyScanBudget: OwnKeyScanBudget,
+  priorityScanBudget: OwnKeyScanBudget,
   rootEnumeratedKeys: EnumeratedKeys,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
-  const priorityKeyAllowance = Math.min(
-    MAX_PRIORITY_SCANNED_TOTAL_KEYS,
-    Math.floor(ownKeyScanBudget.remainingKeys / 2),
-  );
-  const priorityScanBudget = { remainingKeys: priorityKeyAllowance };
-  ownKeyScanBudget.remainingKeys -= priorityKeyAllowance;
   const priorityDiscovery = getPrioritizedKeysByObject(
     details,
     priorityScanBudget,
@@ -1456,8 +1505,12 @@ export const createVoiceDiagnosticsReporter = (
       let detailsTruncated = false;
       try {
         const combinedDetails: Record<string, unknown> = {};
+        const priorityScanBudget: OwnKeyScanBudget = {
+          remainingKeys: MAX_PRIORITY_SCANNED_TOTAL_KEYS,
+        };
         const ownKeyScanBudget: OwnKeyScanBudget = {
-          remainingKeys: MAX_SCANNED_TOTAL_OBJECT_KEYS,
+          remainingKeys:
+            MAX_SCANNED_TOTAL_OBJECT_KEYS - MAX_PRIORITY_SCANNED_TOTAL_KEYS,
         };
         let mergeIncomplete = mergeOwnDataProperties(
           combinedDetails,
@@ -1481,6 +1534,7 @@ export const createVoiceDiagnosticsReporter = (
           combinedDetails,
           getMatcher(),
           ownKeyScanBudget,
+          priorityScanBudget,
           rootEnumeratedKeys,
           mergeIncomplete,
         );

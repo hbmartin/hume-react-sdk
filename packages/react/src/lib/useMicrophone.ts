@@ -87,10 +87,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(false);
-  const enabledStateBeforeMute = useRef(
-    new WeakMap<MediaStreamTrack, boolean>(),
-  );
+  const enabledStateBeforeMute = useRef<WeakMap<
+    MediaStreamTrack,
+    boolean
+  > | null>(null);
   const currentStream = useRef<MediaStream | null>(null);
+  const pendingReplacementStream = useRef<MediaStream | null>(null);
   const retiredStreams = useRef(new Set<MediaStream>());
 
   const fftStore = useRef(new FftStore()).current;
@@ -116,25 +118,101 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const sendAudio = useLatestRef(onAudioCaptured);
 
-  const applyMuteStateToStream = useCallback(
-    (stream: MediaStream, muted: boolean) => {
-      stream.getAudioTracks().forEach((track) => {
-        if (muted) {
-          if (!enabledStateBeforeMute.current.has(track)) {
-            enabledStateBeforeMute.current.set(track, track.enabled);
+  const applyMuteStateToTracks = useCallback(
+    (tracks: MediaStreamTrack[], muted: boolean) => {
+      const enabledStates = (enabledStateBeforeMute.current ??= new WeakMap<
+        MediaStreamTrack,
+        boolean
+      >());
+      const updates: Array<{
+        enabled: boolean;
+        hadSavedState: boolean;
+        savedState: boolean | undefined;
+        track: MediaStreamTrack;
+      }> = [];
+
+      try {
+        tracks.forEach((track) => {
+          const hadSavedState = enabledStates.has(track);
+          const savedState = enabledStates.get(track);
+
+          if (!muted && !hadSavedState) return;
+
+          updates.push({
+            enabled: track.enabled,
+            hadSavedState,
+            savedState,
+            track,
+          });
+
+          if (muted) {
+            if (!hadSavedState) {
+              enabledStates.set(track, track.enabled);
+            }
+            track.enabled = false;
+            return;
           }
-          track.enabled = false;
-          return;
+
+          track.enabled = savedState ?? false;
+          enabledStates.delete(track);
+        });
+      } catch (error) {
+        for (let index = updates.length - 1; index >= 0; index -= 1) {
+          const update = updates[index];
+          if (update === undefined) continue;
+          try {
+            update.track.enabled = update.enabled;
+          } catch {
+            // Best-effort rollback for a nonstandard track implementation.
+          }
+          if (update.hadSavedState && update.savedState !== undefined) {
+            enabledStates.set(update.track, update.savedState);
+          } else {
+            enabledStates.delete(update.track);
+          }
         }
 
-        const previousEnabledState = enabledStateBeforeMute.current.get(track);
-        if (previousEnabledState !== undefined) {
-          track.enabled = previousEnabledState;
-          enabledStateBeforeMute.current.delete(track);
-        }
-      });
+        throw error;
+      }
     },
     [],
+  );
+
+  const applyMuteStateToStream = useCallback(
+    (stream: MediaStream, muted: boolean) => {
+      applyMuteStateToTracks(stream.getAudioTracks(), muted);
+    },
+    [applyMuteStateToTracks],
+  );
+
+  const applyMuteStateToActiveStreams = useCallback(
+    (muted: boolean) => {
+      const stream = currentStream.current;
+      const pendingStream = pendingReplacementStream.current;
+      const tracks = [...(stream?.getAudioTracks() ?? [])];
+      if (pendingStream && pendingStream !== stream) {
+        tracks.push(...pendingStream.getAudioTracks());
+      }
+      applyMuteStateToTracks(tracks, muted);
+    },
+    [applyMuteStateToTracks],
+  );
+
+  const reportMuteStateFailure = useCallback(
+    (muted: boolean, error: unknown) => {
+      diagnostics.current?.emit({
+        level: 'warn',
+        category: 'microphone',
+        name: 'control.change_failed',
+        details: {
+          control: 'microphone_mute',
+          value: muted,
+          error,
+          message: 'Failed to apply the microphone mute state.',
+        },
+      });
+    },
+    [diagnostics],
   );
 
   const stopFftAnalyzer = useCallback(() => {
@@ -252,13 +330,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
           return;
         }
 
-        currentAnalyzer.current.getByteFrequencyData(dataArray);
+        if (!isMutedRef.current) {
+          currentAnalyzer.current.getByteFrequencyData(dataArray);
 
-        const sampleRate = audioContext.current.sampleRate;
+          const sampleRate = audioContext.current.sampleRate;
 
-        convertLinearFrequenciesToBarkInto(dataArray, sampleRate, barkBuffer);
+          convertLinearFrequenciesToBarkInto(dataArray, sampleRate, barkBuffer);
 
-        fftStore.write(barkBuffer);
+          fftStore.write(barkBuffer);
+        }
         fftAnimationId.current = requestAnimationFrame(draw);
       };
       draw();
@@ -746,6 +826,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
       let candidateRecorder: MediaRecorder | null = null;
       let candidateStarted = false;
       const disposeCandidate = () => {
+        if (pendingReplacementStream.current === stream) {
+          pendingReplacementStream.current = null;
+        }
         candidateMode = 'disposed';
         if (candidateRecorder) {
           try {
@@ -778,6 +861,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         );
         candidateRecorder.start(100);
         candidateStarted = true;
+        pendingReplacementStream.current = stream;
       } catch (error) {
         disposeCandidate();
         throw error;
@@ -837,6 +921,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
         throw createMicrophoneAbortError();
       }
 
+      try {
+        applyMuteStateToStream(stream, isMutedRef.current);
+      } catch (error) {
+        reportMuteStateFailure(isMutedRef.current, error);
+        disposeCandidate();
+        throw error;
+      }
+      pendingReplacementStream.current = null;
+
       recordingGeneration.current += 1;
       candidateGeneration = recordingGeneration.current;
       currentStream.current = stream;
@@ -874,6 +967,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       disposeMicrophoneResources,
       diagnostics,
       fftStore,
+      reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
       startFftAnalyzer,
@@ -916,13 +1010,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
   ]);
 
   const mute = useCallback(() => {
-    isMutedRef.current = true;
-    fftStore.clear();
-
-    if (currentStream.current) {
-      applyMuteStateToStream(currentStream.current, true);
+    try {
+      applyMuteStateToActiveStreams(true);
+    } catch (error) {
+      reportMuteStateFailure(true, error);
+      return;
     }
 
+    isMutedRef.current = true;
+    fftStore.clear();
     setIsMuted(true);
     diagnostics.current?.emit({
       level: 'info',
@@ -930,14 +1026,22 @@ export const useMicrophone = (props: MicrophoneProps) => {
       name: 'control.changed',
       details: { control: 'microphone_mute', value: true },
     });
-  }, [applyMuteStateToStream, diagnostics, fftStore]);
+  }, [
+    applyMuteStateToActiveStreams,
+    diagnostics,
+    fftStore,
+    reportMuteStateFailure,
+  ]);
 
   const unmute = useCallback(() => {
-    isMutedRef.current = false;
-    if (currentStream.current) {
-      applyMuteStateToStream(currentStream.current, false);
+    try {
+      applyMuteStateToActiveStreams(false);
+    } catch (error) {
+      reportMuteStateFailure(false, error);
+      return;
     }
 
+    isMutedRef.current = false;
     setIsMuted(false);
     diagnostics.current?.emit({
       level: 'info',
@@ -945,7 +1049,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       name: 'control.changed',
       details: { control: 'microphone_mute', value: false },
     });
-  }, [applyMuteStateToStream, diagnostics]);
+  }, [applyMuteStateToActiveStreams, diagnostics, reportMuteStateFailure]);
 
   useEffect(() => {
     microphoneMounted.current = true;

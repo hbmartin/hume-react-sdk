@@ -1123,6 +1123,88 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('keeps a trailing discovered array failure after the entry budget is exhausted', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const values: unknown[] = Array.from(
+      { length: 1_001 },
+      (_, index) => index,
+    );
+    values[1_000] = new Error('Trailing array failure');
+
+    reporter.emit({ ...input, details: { values } });
+
+    const sanitizedValues = events[0]?.details['values'];
+    if (!Array.isArray(sanitizedValues)) {
+      throw new Error('Expected diagnostic array.');
+    }
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(sanitizedValues).toHaveLength(1_000);
+    expect(sanitizedValues.at(-2)).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
+    expect(sanitizedValues.at(-1)).toMatchObject({
+      message: 'Trailing array failure',
+    });
+  });
+
+  it('reserves discovery work before merging exhausts its scan budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const noise = Array.from({ length: 1_000 }, (_, index) => index);
+    const container = { failure: new Error('Reserved discovery failure') };
+    const hiddenKeys = Array.from(
+      { length: 16_000 },
+      (_, index) => `hidden-${index}`,
+    );
+    const details = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        ownKeys: () => ['noise', 'container', ...hiddenKeys],
+        getOwnPropertyDescriptor(_target, key) {
+          if (key === 'noise') {
+            return {
+              configurable: true,
+              enumerable: true,
+              value: noise,
+              writable: true,
+            };
+          }
+          if (key === 'container') {
+            return {
+              configurable: true,
+              enumerable: true,
+              value: container,
+              writable: true,
+            };
+          }
+          if (typeof key === 'string' && key.startsWith('hidden-')) {
+            return {
+              configurable: true,
+              enumerable: false,
+              value: null,
+              writable: true,
+            };
+          }
+          return undefined;
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['container']).toMatchObject({
+      failure: { message: 'Reserved discovery failure' },
+    });
+  });
+
   it('bounds priority discovery work across repeated object references', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1156,9 +1238,9 @@ describe('voice diagnostics reporter', () => {
     const priorityKeys = new Set(['error', 'errors', 'failures', 'cause']);
     let priorityProbeReads = 0;
     // With the root, scan consumer, and noise array, this frontier fills the
-    // 2,000-node discovery allowance.
+    // 1,000-node discovery allowance.
     const targets = Array.from(
-      { length: 1_997 },
+      { length: 997 },
       () => ({}) as Record<string, unknown>,
     );
     const frontier = targets.map(
@@ -1225,24 +1307,19 @@ describe('voice diagnostics reporter', () => {
       onEvent: (event) => events.push(event),
     }));
     const aggregate = new AggregateError(
-      [new Error('Nested cleanup failure')],
+      Array.from({ length: 1_000 }, () => ({})),
       'Aggregate cleanup failure',
     );
 
     reporter.emit({
       ...input,
-      details: {
-        values: [...Array.from({ length: 997 }, () => ({})), aggregate],
-      },
+      details: { aggregate },
     });
 
-    const values = events[0]?.details['values'];
-    if (!Array.isArray(values)) throw new Error('Expected diagnostic array.');
-    const serializedAggregate: unknown = values.at(-1);
+    const serializedAggregate: unknown = events[0]?.details['aggregate'];
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(serializedAggregate).toMatchObject({
       name: 'AggregateError',
-      errors: [{ __humeDiagnosticTruncated: true }],
     });
     const serializedErrors =
       serializedAggregate !== null &&
@@ -1251,6 +1328,9 @@ describe('voice diagnostics reporter', () => {
         ? (serializedAggregate as Record<string, unknown>)['errors']
         : undefined;
     expect(Array.isArray(serializedErrors)).toBe(true);
+    expect((serializedErrors as unknown[]).at(-1)).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
   });
 
   it('redacts terminal buffers without consuming recursive object budget', () => {
@@ -1446,7 +1526,7 @@ describe('voice diagnostics reporter', () => {
       onEvent: (event) => events.push(event),
     }));
     const hiddenKeys = Array.from(
-      { length: 15_999 },
+      { length: 7_995 },
       (_, index) => `hidden-${index}`,
     );
     const details = new Proxy(
