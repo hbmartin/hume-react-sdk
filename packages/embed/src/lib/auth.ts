@@ -3,8 +3,10 @@ import z from 'zod';
 const credentialSchema = (label: string) =>
   z
     .string({
-      required_error: `${label} for the Hume API is required`,
-      invalid_type_error: `${label} for the Hume API must be a string`,
+      error: (issue) =>
+        issue.input === undefined
+          ? `${label} for the Hume API is required`
+          : `${label} for the Hume API must be a string`,
     })
     .refine(
       (value) => value.trim().length > 0,
@@ -24,10 +26,14 @@ export const AuthStrategySchema = z.discriminatedUnion(
     }),
   ],
   {
-    required_error:
-      'An auth strategy ({ type: "apiKey" | "accessToken", value }) is required to connect to the Hume API',
-    invalid_type_error:
-      'The auth strategy must be an object of the form { type: "apiKey" | "accessToken", value }',
+    error: (issue) => {
+      if ((issue.path?.length ?? 0) > 0) {
+        return undefined;
+      }
+      return issue.input === undefined
+        ? 'An auth strategy ({ type: "apiKey" | "accessToken", value }) is required to connect to the Hume API'
+        : 'The auth strategy must be an object of the form { type: "apiKey" | "accessToken", value }';
+    },
   },
 );
 

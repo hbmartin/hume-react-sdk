@@ -7,7 +7,6 @@
 import { FC } from 'react';
 import { Hume } from 'hume';
 import { PropsWithChildren } from 'react';
-import { Simplify } from 'type-fest';
 import z from 'zod';
 
 // Warning: (ae-forgotten-export) The symbol "AssistantEnd" needs to be exported by the entry point index.d.ts
@@ -241,9 +240,13 @@ export type ToolCall = WithReceivedAt<ToolCallMessage>;
 export type ToolCallErrorSource = 'handler_failure' | 'invalid_response' | 'send_failure';
 
 // @public
-export type ToolCallHandler = (message: Simplify<ToolCall & {
-    toolType: typeof Hume.empathicVoice.ToolType.Function;
-}>, send: {
+export type ToolCallHandler = (message: {
+    [Key in keyof (ToolCall & {
+        toolType: typeof Hume.empathicVoice.ToolType.Function;
+    })]: (ToolCall & {
+        toolType: typeof Hume.empathicVoice.ToolType.Function;
+    })[Key];
+}, send: {
     success: (content: unknown) => Hume.empathicVoice.ToolResponseMessage;
     error: (e: {
         error: string;

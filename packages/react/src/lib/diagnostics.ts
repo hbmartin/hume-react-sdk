@@ -5,6 +5,7 @@ import {
   getOwnEnumerableDataProperty,
   getOwnDataProperty,
   getOwnPropertyDescriptorSafely,
+  getPropertyDescriptorSafely,
 } from '../utils/aggregateErrors';
 import {
   getBrowserErrorString,
@@ -630,27 +631,18 @@ const nativeLazyErrorStackGetters = (() => {
 
 const getErrorStack = (value: object) => {
   try {
-    const visited = new WeakSet<object>();
-    let current: object | null = value;
-    while (current !== null && !visited.has(current)) {
-      visited.add(current);
-      const descriptor = getOwnPropertyDescriptorSafely(current, 'stack');
-      if (descriptor === null) return '';
-      if (descriptor !== undefined) {
-        if ('value' in descriptor) {
-          return typeof descriptor.value === 'string' ? descriptor.value : '';
-        }
-        // oxlint-disable-next-line typescript/unbound-method -- identity-checked below and invoked with the original Error receiver
-        const getter = descriptor.get;
-        if (getter === undefined || !nativeLazyErrorStackGetters.has(getter)) {
-          return '';
-        }
-        const stack: unknown = getter.call(value);
-        return typeof stack === 'string' ? stack : '';
-      }
-      current = Object.getPrototypeOf(current) as object | null;
+    const descriptor = getPropertyDescriptorSafely(value, 'stack');
+    if (descriptor === null || descriptor === undefined) return '';
+    if ('value' in descriptor) {
+      return typeof descriptor.value === 'string' ? descriptor.value : '';
     }
-    return '';
+    // oxlint-disable-next-line typescript/unbound-method -- identity-checked below and invoked with the original Error receiver
+    const getter = descriptor.get;
+    if (getter === undefined || !nativeLazyErrorStackGetters.has(getter)) {
+      return '';
+    }
+    const stack: unknown = getter.call(value);
+    return typeof stack === 'string' ? stack : '';
   } catch {
     return '';
   }
@@ -744,7 +736,11 @@ const getEnumerableOwnKeys = (
   return { incomplete, keys };
 };
 
-const getEnumerableArrayIndexKeys = (value: unknown[]): EnumeratedKeys => {
+const getEnumerableArrayIndexKeys = (
+  value: unknown[],
+  budget: OwnKeyScanBudget,
+): EnumeratedKeys => {
+  if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
   const length = getOwnDataProperty(value, 'length')?.value;
   if (
     typeof length !== 'number' ||
@@ -753,7 +749,12 @@ const getEnumerableArrayIndexKeys = (value: unknown[]): EnumeratedKeys => {
   ) {
     return { incomplete: true, keys: [] };
   }
-  const count = Math.min(length, MAX_ENUMERATED_OBJECT_KEYS);
+  const count = Math.min(
+    length,
+    MAX_ENUMERATED_OBJECT_KEYS,
+    budget.remainingKeys,
+  );
+  budget.remainingKeys -= count;
   const keys: string[] = [];
   for (let index = 0; index < count; index += 1) keys.push(String(index));
   return { incomplete: length > count, keys };
@@ -773,9 +774,11 @@ type PriorityPath = Readonly<{
 const getPrioritizedKeysByObject = (
   root: object,
   ownKeyScanBudget: OwnKeyScanBudget,
+  rootEnumeratedKeys: EnumeratedKeys,
 ) => {
   const prioritizedKeys = new WeakMap<object, Set<string>>();
   const enumeratedKeysByObject = new WeakMap<object, EnumeratedKeys>();
+  enumeratedKeysByObject.set(root, rootEnumeratedKeys);
   const markPath = (path: PriorityPath) => {
     let current: PriorityPath | null = path;
     while (current !== null) {
@@ -843,9 +846,12 @@ const getPrioritizedKeysByObject = (
 
     const isArray = isArrayValue(value);
     const enumerated = isArray
-      ? getEnumerableArrayIndexKeys(value)
-      : getEnumerableOwnKeys(value, ownKeyScanBudget);
-    if (!isArray) enumeratedKeysByObject.set(value, enumerated);
+      ? getEnumerableArrayIndexKeys(value, ownKeyScanBudget)
+      : (enumeratedKeysByObject.get(value) ??
+        getEnumerableOwnKeys(value, ownKeyScanBudget));
+    if (!isArray && !enumeratedKeysByObject.has(value)) {
+      enumeratedKeysByObject.set(value, enumerated);
+    }
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       const property = getOwnEnumerableDataProperty(value, key);
@@ -917,6 +923,7 @@ const mergeOwnDataProperties = (
     const descriptor = getOwnPropertyDescriptorSafely(source, key);
     if (descriptor === null) {
       incomplete = true;
+      return false;
     } else if (descriptor === undefined || descriptor.enumerable !== true) {
       // A snapshotted own key vanished or stopped being enumerable before it
       // was read; probed priority keys are simply absent.
@@ -931,6 +938,7 @@ const mergeOwnDataProperties = (
       });
     } else {
       incomplete = true;
+      return false;
     }
     return true;
   };
@@ -1146,35 +1154,37 @@ const sanitizeValue = (
     const enumerated =
       budget.enumeratedKeysByObject.get(value) ??
       getEnumerableOwnKeys(value, budget.ownKeyScanBudget);
-    const expectedEnumerableKeys = new Set(enumerated.keys);
     const result: Record<string, VoiceDiagnosticValue> = {};
     let nextCollisionByKey: Map<string, number> | undefined;
-    const sanitizeEntry = (key: string, expected: boolean): boolean => {
+    const sanitizeEntry = (
+      key: string,
+      expected: boolean,
+    ): 'complete' | 'retry' | 'stop' => {
       const descriptor = getOwnPropertyDescriptorSafely(value, key);
       if (descriptor === null) {
         markSanitizedObjectTruncated(result, budget);
-        return true;
+        return expected ? 'retry' : 'complete';
       }
       if (descriptor === undefined || descriptor.enumerable !== true) {
         // A snapshotted own key vanished or stopped being enumerable before
         // it was read; probed priority keys are simply absent.
         if (expected) markSanitizedObjectTruncated(result, budget);
-        return true;
+        return expected ? 'retry' : 'complete';
       }
       if (!('value' in descriptor)) {
         markSanitizedObjectTruncated(result, budget);
-        return true;
+        return expected ? 'retry' : 'complete';
       }
       if (budget.remainingEntries === 0) {
         markSanitizedObjectTruncated(result, budget);
-        return false;
+        return 'stop';
       }
       budget.remainingEntries -= 1;
       const sanitizedKey = sanitizeObjectKey(key, matcher, budget);
       if (sanitizedKey === null) {
         // This name cannot be kept, but a later name may still fit.
         markSanitizedObjectTruncated(result, budget);
-        return true;
+        return 'complete';
       }
       const resultKey =
         sanitizedKey !== TRUNCATED_PROPERTY &&
@@ -1187,7 +1197,7 @@ const sanitizeValue = (
             );
       if (REDACTED_KEYS.has(normalizeKey(key))) {
         setSanitizedProperty(result, resultKey, REDACTED);
-        return true;
+        return 'complete';
       }
       let sanitized: VoiceDiagnosticValue | undefined;
       try {
@@ -1199,11 +1209,16 @@ const sanitizeValue = (
       if (sanitized !== undefined) {
         setSanitizedProperty(result, resultKey, sanitized);
       }
-      return true;
+      return 'complete';
     };
 
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-      if (!sanitizeEntry(key, expectedEnumerableKeys.has(key))) return result;
+      const expected = enumerated.keys.includes(key);
+      const outcome = sanitizeEntry(key, expected);
+      if (outcome === 'stop') return result;
+      if (outcome === 'retry' && sanitizeEntry(key, true) === 'stop') {
+        return result;
+      }
     }
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
@@ -1214,7 +1229,7 @@ const sanitizeValue = (
       (priorityKeys?.has(key) === true ? prioritized : remaining).push(key);
     }
     for (const key of [...prioritized, ...remaining]) {
-      if (!sanitizeEntry(key, true)) break;
+      if (sanitizeEntry(key, true) === 'stop') break;
     }
     return result;
   } finally {
@@ -1238,11 +1253,13 @@ const sanitizeDetails = (
   details: Record<string, unknown>,
   matcher: RedactionMatcher,
   ownKeyScanBudget: OwnKeyScanBudget,
+  rootEnumeratedKeys: EnumeratedKeys,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
   const priorityDiscovery = getPrioritizedKeysByObject(
     details,
     ownKeyScanBudget,
+    rootEnumeratedKeys,
   );
   const budget: SanitizationBudget = {
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
@@ -1369,10 +1386,16 @@ export const createVoiceDiagnosticsReporter = (
           );
           mergeIncomplete ||= sensitiveMergeIncomplete;
         }
+        const combinedKeys = Object.keys(combinedDetails);
+        const rootEnumeratedKeys: EnumeratedKeys = {
+          incomplete: combinedKeys.length > MAX_ENUMERATED_OBJECT_KEYS,
+          keys: combinedKeys.slice(0, MAX_ENUMERATED_OBJECT_KEYS),
+        };
         const sanitized = sanitizeDetails(
           combinedDetails,
           getMatcher(),
           ownKeyScanBudget,
+          rootEnumeratedKeys,
           mergeIncomplete,
         );
         details = sanitized.details;

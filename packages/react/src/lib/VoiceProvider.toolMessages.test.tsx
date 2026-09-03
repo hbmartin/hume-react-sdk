@@ -92,9 +92,11 @@ describe('VoiceProvider tool message state', () => {
 
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
-    globalThis.AudioContext = vi.fn(() => ({
-      close: vi.fn().mockResolvedValue(undefined),
-    })) as unknown as typeof AudioContext;
+    globalThis.AudioContext = vi.fn(function AudioContextMock() {
+      return {
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+    }) as unknown as typeof AudioContext;
     mocks.getStream.mockResolvedValue({ getTracks: () => [] });
     mocks.micReplace.mockResolvedValue(undefined);
     mocks.playerInit.mockResolvedValue(true);

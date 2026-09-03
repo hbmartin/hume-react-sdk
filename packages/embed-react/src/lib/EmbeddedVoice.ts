@@ -78,9 +78,11 @@ export const EmbeddedVoice = (props: EmbeddedVoiceProps) => {
   const embeddedVoice = useRef<EA | null>(null);
   const controlledOpenInstance = useRef<EA | null>(null);
   const previousIsEmbedOpen = useRef(isEmbedOpen);
-  const onMessageHandler = useRef<TranscriptMessageHandler | undefined>();
-  const onCloseHandler = useRef<CloseHandler | undefined>();
-  const onReadyHandler = useRef<ReadyHandler | undefined>();
+  const onMessageHandler = useRef<TranscriptMessageHandler | undefined>(
+    undefined,
+  );
+  const onCloseHandler = useRef<CloseHandler | undefined>(undefined);
+  const onReadyHandler = useRef<ReadyHandler | undefined>(undefined);
   const initialOpenOnMountPending = useRef(openOnMount);
   const configSignature = getConfigSignature(config);
 

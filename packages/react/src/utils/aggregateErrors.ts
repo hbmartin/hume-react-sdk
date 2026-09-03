@@ -12,6 +12,37 @@ export const getOwnPropertyDescriptorSafely = (
   }
 };
 
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
+
+/**
+ * Read the first property descriptor on a prototype chain without allowing
+ * proxy traps, cycles, or endlessly changing prototype chains to escape.
+ */
+export const getPropertyDescriptorSafely = (
+  value: object,
+  key: PropertyKey,
+): PropertyDescriptor | null | undefined => {
+  const visited = new WeakSet<object>();
+  let current: object | null = value;
+
+  try {
+    for (
+      let depth = 0;
+      current !== null && depth < MAX_PROTOTYPE_CHAIN_DEPTH;
+      depth += 1
+    ) {
+      if (visited.has(current)) return null;
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor !== undefined) return descriptor;
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    return null;
+  }
+  return current === null ? undefined : null;
+};
+
 /** Read an own data property without invoking an accessor. */
 export const getOwnDataProperty = (
   value: object,
@@ -43,22 +74,12 @@ export const getDataProperty = (
   value: object,
   key: PropertyKey,
 ): DataProperty | null => {
-  const visited = new WeakSet<object>();
-  let current: object | null = value;
-
-  try {
-    while (current !== null && !visited.has(current)) {
-      visited.add(current);
-      const descriptor = Object.getOwnPropertyDescriptor(current, key);
-      if (descriptor !== undefined) {
-        return 'value' in descriptor ? { value: descriptor.value } : null;
-      }
-      current = Object.getPrototypeOf(current) as object | null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+  const descriptor = getPropertyDescriptorSafely(value, key);
+  return descriptor !== null &&
+    descriptor !== undefined &&
+    'value' in descriptor
+    ? { value: descriptor.value }
+    : null;
 };
 
 export type AggregateErrorDetails = Readonly<{

@@ -34,31 +34,29 @@
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm typecheck:deps && pnpm format:check && pnpm check:deps && pnpm check:docs && pnpm check:fallow && pnpm check:packages && pnpm api-report:check && pnpm test",
     "release": "node tools/run-release.mjs"
   },
-  "dependencies": {
-    "vitepress": "1.6.4"
-  },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
     "@humeai/typescript-config": "workspace:*",
     "@microsoft/api-documenter": "7.30.13",
     "@microsoft/api-extractor": "7.59.0",
     "@types/node": "22.20.1",
-    "cspell": "10.1.1",
-    "fallow": "3.19.0",
+    "cspell": "10.2.0",
+    "fallow": "3.22.0",
     "markdownlint-cli2": "0.23.2",
-    "oxfmt": "0.65.0",
-    "oxlint": "1.80.0",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0",
     "oxlint-tsgolint": "7.0.2001",
     "publint": "0.3.24",
     "syncpack": "15.3.3",
-    "turbo": "^2.10.12"
+    "turbo": "^2.10.12",
+    "vitepress": "1.6.4"
   },
   "browserslist": [
     "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"
   ],
   "engines": {
     "node": ">=22.18",
-    "pnpm": "11.24.0"
+    "pnpm": "11.25.0"
   },
-  "packageManager": "pnpm@11.24.0"
+  "packageManager": "pnpm@11.25.0"
 }

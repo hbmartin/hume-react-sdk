@@ -1277,6 +1277,37 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
+  it('preserves merged keys after the source exhausts the scan budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const hiddenKeys = Array.from(
+      { length: 15_999 },
+      (_, index) => `hidden-${index}`,
+    );
+    const details = new Proxy(
+      {},
+      {
+        ownKeys: () => [...hiddenKeys, 'kept', 'after-limit'],
+        getOwnPropertyDescriptor(_target, key) {
+          return key === 'kept'
+            ? { configurable: true, enumerable: true, value: 'safe' }
+            : { configurable: true, enumerable: false, value: null };
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.details).toEqual({
+      __humeDiagnosticTruncated: true,
+      kept: 'safe',
+    });
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
   it('counts symbol keys against the own-key scan limit', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1355,6 +1386,28 @@ describe('voice diagnostics reporter', () => {
       2,
       { message: 'Inside array' },
     ]);
+  });
+
+  it('bounds array index descriptor checks across one emit', () => {
+    const reporter = createVoiceDiagnosticsReporter(() => ({ logger: false }));
+    const details: Record<string, unknown> = {};
+    let indexDescriptorReads = 0;
+    for (let outer = 0; outer < 127; outer += 1) {
+      details[`array-${outer}`] = new Proxy(Array.from({ length: 1_000 }), {
+        getOwnPropertyDescriptor(target, key) {
+          if (typeof key === 'string' && /^\d+$/.test(key)) {
+            indexDescriptorReads += 1;
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      });
+    }
+
+    reporter.emit({ ...input, details });
+
+    // Discovery spends at most the 16,000-key scan budget. Sanitization can
+    // inspect at most another 1,000 entries under its separate output budget.
+    expect(indexDescriptorReads).toBeLessThanOrEqual(17_000);
   });
 
   it('keeps enumerating after an own key disappears', () => {
@@ -1442,6 +1495,62 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBeUndefined();
   });
 
+  it('retries a priority key after its initial merge probe throws', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let errorDescriptorReads = 0;
+    const details = new Proxy(
+      { error: 'recovered after throw' },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'error' && ++errorDescriptorReads === 1) {
+            throw new Error('priority descriptor unavailable');
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.details).toEqual({
+      __humeDiagnosticTruncated: true,
+      error: 'recovered after throw',
+    });
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('retries a priority key after an initial accessor descriptor', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let errorDescriptorReads = 0;
+    const details = new Proxy(
+      { error: 'recovered after accessor' },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'error' && ++errorDescriptorReads === 1) {
+            return { configurable: true, enumerable: true, get: () => 'skip' };
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.details).toEqual({
+      __humeDiagnosticTruncated: true,
+      error: 'recovered after accessor',
+    });
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
   it('marks a vanished snapshotted priority key incomplete', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1468,6 +1577,34 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['nested']).toEqual({
       __humeDiagnosticTruncated: true,
     });
+  });
+
+  it('retries a nested priority key after a descriptor check throws', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let errorDescriptorReads = 0;
+    const nested = new Proxy(
+      { error: 'recovered during sanitization' },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'error' && ++errorDescriptorReads === 3) {
+            throw new Error('priority descriptor temporarily unavailable');
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
+      error: 'recovered during sanitization',
+    });
+    expect(events[0]?.detailsTruncated).toBe(true);
   });
 
   it('keeps top-level siblings when a descriptor check throws during enumeration', () => {

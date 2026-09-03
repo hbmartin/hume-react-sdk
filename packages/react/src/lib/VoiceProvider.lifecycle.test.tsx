@@ -210,9 +210,11 @@ describe('VoiceProvider close lifecycle', () => {
 
   beforeEach(() => {
     originalAudioContext = globalThis.AudioContext;
-    globalThis.AudioContext = vi.fn(() => ({
-      close: mocks.contextClose,
-    })) as unknown as typeof AudioContext;
+    globalThis.AudioContext = vi.fn(function AudioContextMock() {
+      return {
+        close: mocks.contextClose,
+      };
+    }) as unknown as typeof AudioContext;
 
     mocks.clientConnect.mockResolvedValue('open');
     mocks.contextClose.mockResolvedValue(undefined);
@@ -1543,7 +1545,7 @@ describe('VoiceProvider close lifecycle', () => {
     async (_label, makeContextError) => {
       const onError = vi.fn();
       const contextError = makeContextError();
-      globalThis.AudioContext = vi.fn(() => {
+      globalThis.AudioContext = vi.fn(function AudioContextMock() {
         throw contextError;
       }) as unknown as typeof AudioContext;
       const stream = { id: 'captured-stream' } as unknown as MediaStream;
@@ -1577,7 +1579,7 @@ describe('VoiceProvider close lifecycle', () => {
     const onError = vi.fn();
     let cancelConnection = () => {};
     let disconnecting = Promise.resolve();
-    globalThis.AudioContext = vi.fn(() => {
+    globalThis.AudioContext = vi.fn(function AudioContextMock() {
       cancelConnection();
       throw new DOMException('context unavailable', 'NotSupportedError');
     }) as unknown as typeof AudioContext;

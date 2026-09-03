@@ -73,7 +73,7 @@ const SocketConfigSchema = z
     const result = BaseSocketConfig.safeParse(value);
     if (!result.success) {
       for (const issue of result.error.issues) {
-        ctx.addIssue(issue);
+        ctx.addIssue({ ...issue });
       }
     }
   });

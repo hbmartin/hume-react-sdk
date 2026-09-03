@@ -68,16 +68,16 @@
   "devDependencies": {
     "@humeai/typescript-config": "workspace:*",
     "@humeai/vitest-config": "workspace:*",
-    "@testing-library/react": "^14.2.2",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "22.20.1",
-    "@types/react": "^18.2.70",
-    "@types/react-dom": "^18.2.22",
-    "jsdom": "^24.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "jsdom": "^30.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsup": "8.5.1",
     "typescript": "7.0.2",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "react": ">=18.2.0",

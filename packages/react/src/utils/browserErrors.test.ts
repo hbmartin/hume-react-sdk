@@ -360,6 +360,29 @@ describe('browser error normalization', () => {
     }
   });
 
+  it('bounds an endlessly changing DOMException prototype chain', () => {
+    let prototypeReads = 0;
+    const createPrototype = (): object =>
+      new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            prototypeReads += 1;
+            return createPrototype();
+          },
+        },
+      );
+
+    vi.stubGlobal('DOMException', { prototype: createPrototype() });
+    try {
+      expect(getBrowserErrorName({})).toBeNull();
+      expect(prototypeReads).toBeGreaterThan(1);
+      expect(prototypeReads).toBeLessThan(100);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('observes DOMException accessors patched in place', () => {
     const descriptor = Object.getOwnPropertyDescriptor(
       DOMException.prototype,

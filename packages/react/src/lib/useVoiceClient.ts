@@ -1,6 +1,5 @@
 import { Hume, HumeClient } from 'hume';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type Simplify } from 'type-fest';
 
 import type {
   AudioOutputMessage,
@@ -139,14 +138,18 @@ const getSessionSettingsOnConnect = (
  */
 export type ToolCallHandler = (
   // message will always be a tool call message where toolType === 'function'
-  message: Simplify<
-    ToolCall & {
-      // caveat: this doesn't actually do what it appears to, since ToolType is
-      // exported as both an interface and a value, this ends up being a constant
-      // that doesn't share an type identity with the actual ToolType enum
+  message: {
+    [
+      Key in keyof (ToolCall & {
+        // caveat: this doesn't actually do what it appears to, since ToolType is
+        // exported as both an interface and a value, this ends up being a constant
+        // that doesn't share an type identity with the actual ToolType enum
+        toolType: typeof Hume.empathicVoice.ToolType.Function;
+      })
+    ]: (ToolCall & {
       toolType: typeof Hume.empathicVoice.ToolType.Function;
-    }
-  >,
+    })[Key];
+  },
   send: {
     success: (content: unknown) => Hume.empathicVoice.ToolResponseMessage;
     error: (e: {
