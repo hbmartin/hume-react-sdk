@@ -335,6 +335,31 @@ describe('browser error normalization', () => {
     }
   });
 
+  it('stops walking a cyclic DOMException prototype chain', () => {
+    let prototypeReads = 0;
+    let cyclicPrototype: object;
+    cyclicPrototype = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          prototypeReads += 1;
+          if (prototypeReads > 1) {
+            throw new Error('Cyclic prototype was revisited');
+          }
+          return cyclicPrototype;
+        },
+      },
+    );
+
+    vi.stubGlobal('DOMException', { prototype: cyclicPrototype });
+    try {
+      expect(getBrowserErrorName({})).toBeNull();
+      expect(prototypeReads).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('observes DOMException accessors patched in place', () => {
     const descriptor = Object.getOwnPropertyDescriptor(
       DOMException.prototype,

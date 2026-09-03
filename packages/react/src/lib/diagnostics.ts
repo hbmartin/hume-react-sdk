@@ -294,6 +294,9 @@ const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
 // descriptors still execute proxy traps. Keep that inspection work separately
 // bounded while leaving enough headroom for ordinary objects with hidden state.
 const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
+// A chain of individually bounded objects must not multiply descriptor work
+// across one emit. Share the same generous scan allowance across the event.
+const MAX_SCANNED_TOTAL_OBJECT_KEYS = MAX_SCANNED_OBJECT_KEYS;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
 const MAX_PRIORITY_SEARCH_NODES = 128;
 const PRIORITY_DIAGNOSTIC_KEYS = [
@@ -478,16 +481,19 @@ const redactCorrelationId = (value: string, matcher: RedactionMatcher) => {
     MAX_SANITIZED_STRING_REDACTION_WORK,
     MAX_SANITIZED_STRING_LENGTH,
   );
-  return redacted.sourceTruncated
-    ? `${redacted.value}${TRUNCATED_SUFFIX}`
-    : redacted.value;
+  if (!redacted.sourceTruncated) return redacted.value;
+  return `${redacted.value.slice(
+    0,
+    MAX_SANITIZED_STRING_LENGTH - TRUNCATED_SUFFIX.length,
+  )}${TRUNCATED_SUFFIX}`;
 };
 
+type EnumeratedKeys = { incomplete: boolean; keys: string[] };
+type OwnKeyScanBudget = { remainingKeys: number };
+
 type SanitizationBudget = {
-  enumeratedKeysByObject: WeakMap<
-    object,
-    ReturnType<typeof getEnumerableOwnKeys>
-  >;
+  enumeratedKeysByObject: WeakMap<object, EnumeratedKeys>;
+  ownKeyScanBudget: OwnKeyScanBudget;
   prioritizedKeys: WeakMap<object, Set<string>>;
   remainingEntries: number;
   remainingObjects: number;
@@ -699,9 +705,11 @@ const isTerminalBinaryValue = (value: object) => {
 const isTerminalDiagnosticObject = (value: object) =>
   isDateInstance(value) || isTerminalBinaryValue(value);
 
-type EnumeratedKeys = { incomplete: boolean; keys: string[] };
-
-const getEnumerableOwnKeys = (value: object): EnumeratedKeys => {
+const getEnumerableOwnKeys = (
+  value: object,
+  budget: OwnKeyScanBudget,
+): EnumeratedKeys => {
+  if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
   let ownKeys: PropertyKey[];
   try {
     ownKeys = Reflect.ownKeys(value);
@@ -713,11 +721,12 @@ const getEnumerableOwnKeys = (value: object): EnumeratedKeys => {
   let scannedKeys = 0;
   let incomplete = false;
   for (const key of ownKeys) {
-    if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
+    if (scannedKeys === MAX_SCANNED_OBJECT_KEYS || budget.remainingKeys === 0) {
       incomplete = true;
       break;
     }
     scannedKeys += 1;
+    budget.remainingKeys -= 1;
     if (typeof key !== 'string') continue;
     const descriptor = getOwnPropertyDescriptorSafely(value, key);
     if (descriptor === null || descriptor === undefined) {
@@ -761,7 +770,10 @@ type PriorityPath = Readonly<{
   parent: PriorityPath | null;
 }>;
 
-const getPrioritizedKeysByObject = (root: object) => {
+const getPrioritizedKeysByObject = (
+  root: object,
+  ownKeyScanBudget: OwnKeyScanBudget,
+) => {
   const prioritizedKeys = new WeakMap<object, Set<string>>();
   const enumeratedKeysByObject = new WeakMap<object, EnumeratedKeys>();
   const markPath = (path: PriorityPath) => {
@@ -832,7 +844,7 @@ const getPrioritizedKeysByObject = (root: object) => {
     const isArray = isArrayValue(value);
     const enumerated = isArray
       ? getEnumerableArrayIndexKeys(value)
-      : getEnumerableOwnKeys(value);
+      : getEnumerableOwnKeys(value, ownKeyScanBudget);
     if (!isArray) enumeratedKeysByObject.set(value, enumerated);
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
@@ -896,9 +908,11 @@ const markSanitizedObjectTruncated = (
 const mergeOwnDataProperties = (
   target: Record<string, unknown>,
   source: Record<string, unknown> | undefined,
+  ownKeyScanBudget: OwnKeyScanBudget,
 ) => {
   if (source === undefined) return false;
   let incomplete = false;
+  const missingPriorityKeys = new Set<string>();
   const mergeProperty = (key: string, expected: boolean) => {
     const descriptor = getOwnPropertyDescriptorSafely(source, key);
     if (descriptor === null) {
@@ -907,6 +921,7 @@ const mergeOwnDataProperties = (
       // A snapshotted own key vanished or stopped being enumerable before it
       // was read; probed priority keys are simply absent.
       if (expected) incomplete = true;
+      return false;
     } else if ('value' in descriptor) {
       Object.defineProperty(target, key, {
         configurable: true,
@@ -917,14 +932,17 @@ const mergeOwnDataProperties = (
     } else {
       incomplete = true;
     }
+    return true;
   };
   for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-    mergeProperty(key, false);
+    if (!mergeProperty(key, false)) missingPriorityKeys.add(key);
   }
-  const enumerated = getEnumerableOwnKeys(source);
+  const enumerated = getEnumerableOwnKeys(source, ownKeyScanBudget);
   incomplete ||= enumerated.incomplete;
   for (const key of enumerated.keys) {
-    if (!PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) mergeProperty(key, true);
+    if (!PRIORITY_DIAGNOSTIC_KEY_SET.has(key) || missingPriorityKeys.has(key)) {
+      mergeProperty(key, true);
+    }
   }
   return incomplete;
 };
@@ -1126,7 +1144,9 @@ const sanitizeValue = (
   seen.add(value);
   try {
     const enumerated =
-      budget.enumeratedKeysByObject.get(value) ?? getEnumerableOwnKeys(value);
+      budget.enumeratedKeysByObject.get(value) ??
+      getEnumerableOwnKeys(value, budget.ownKeyScanBudget);
+    const expectedEnumerableKeys = new Set(enumerated.keys);
     const result: Record<string, VoiceDiagnosticValue> = {};
     let nextCollisionByKey: Map<string, number> | undefined;
     const sanitizeEntry = (key: string, expected: boolean): boolean => {
@@ -1183,7 +1203,7 @@ const sanitizeValue = (
     };
 
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-      if (!sanitizeEntry(key, false)) return result;
+      if (!sanitizeEntry(key, expectedEnumerableKeys.has(key))) return result;
     }
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
@@ -1217,11 +1237,16 @@ const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
 const sanitizeDetails = (
   details: Record<string, unknown>,
   matcher: RedactionMatcher,
+  ownKeyScanBudget: OwnKeyScanBudget,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
-  const priorityDiscovery = getPrioritizedKeysByObject(details);
+  const priorityDiscovery = getPrioritizedKeysByObject(
+    details,
+    ownKeyScanBudget,
+  );
   const budget: SanitizationBudget = {
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
+    ownKeyScanBudget,
     prioritizedKeys: priorityDiscovery.prioritizedKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
@@ -1328,20 +1353,26 @@ export const createVoiceDiagnosticsReporter = (
       let detailsTruncated = false;
       try {
         const combinedDetails: Record<string, unknown> = {};
+        const ownKeyScanBudget: OwnKeyScanBudget = {
+          remainingKeys: MAX_SCANNED_TOTAL_OBJECT_KEYS,
+        };
         let mergeIncomplete = mergeOwnDataProperties(
           combinedDetails,
           input.details,
+          ownKeyScanBudget,
         );
         if (configuration.includeContent) {
           const sensitiveMergeIncomplete = mergeOwnDataProperties(
             combinedDetails,
             input.sensitiveDetails,
+            ownKeyScanBudget,
           );
           mergeIncomplete ||= sensitiveMergeIncomplete;
         }
         const sanitized = sanitizeDetails(
           combinedDetails,
           getMatcher(),
+          ownKeyScanBudget,
           mergeIncomplete,
         );
         details = sanitized.details;
