@@ -1205,6 +1205,44 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('preserves priority-sensitive details after ordinary merge work is exhausted', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const hiddenKeys = Array.from(
+      { length: 16_000 },
+      (_, index) => `hidden-${index}`,
+    );
+    const details = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        ownKeys: () => hiddenKeys,
+        getOwnPropertyDescriptor() {
+          return {
+            configurable: true,
+            enumerable: false,
+            value: null,
+            writable: true,
+          };
+        },
+      },
+    );
+
+    reporter.emit({
+      ...input,
+      details,
+      sensitiveDetails: { error: new Error('Preserved sensitive failure') },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['error']).toMatchObject({
+      message: 'Preserved sensitive failure',
+    });
+  });
+
   it('bounds priority discovery work across repeated object references', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1297,7 +1335,7 @@ describe('voice diagnostics reporter', () => {
       },
     });
 
-    expect(priorityProbeReads + hiddenKeyReads).toBeLessThanOrEqual(24_000);
+    expect(priorityProbeReads + hiddenKeyReads).toBeLessThanOrEqual(16_000);
   });
 
   it('keeps AggregateError errors array-shaped when its budget is exhausted', () => {
@@ -1542,7 +1580,7 @@ describe('voice diagnostics reporter', () => {
 
     expect(firstOwnKeys).toHaveBeenCalledTimes(2);
     expect(secondOwnKeys).toHaveBeenCalledOnce();
-    expect(descriptorReads).toBeLessThanOrEqual(24_000);
+    expect(descriptorReads).toBeLessThanOrEqual(16_000);
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
@@ -1675,9 +1713,9 @@ describe('voice diagnostics reporter', () => {
 
     reporter.emit({ ...input, details });
 
-    // Discovery spends at most the 16,000-key scan budget. Sanitization can
+    // Discovery spends at most its reserved 8,000-key budget. Sanitization can
     // inspect at most another 1,000 entries under its separate output budget.
-    expect(indexDescriptorReads).toBeLessThanOrEqual(17_000);
+    expect(indexDescriptorReads).toBeLessThanOrEqual(9_000);
   });
 
   it('keeps enumerating after an own key disappears', () => {

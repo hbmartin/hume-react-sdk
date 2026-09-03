@@ -50,6 +50,7 @@ type DisposeMicrophoneOptions = {
   notifyStop?: boolean;
   preserveAudioContext?: boolean;
   preserveMute?: boolean;
+  preserveRecordingState?: boolean;
   restoreOnFailure?: boolean;
 };
 
@@ -230,6 +231,23 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [diagnostics],
   );
 
+  const reportRetiredStreamMuteFailure = useCallback(
+    (error: unknown) => {
+      diagnostics.current?.emit({
+        level: 'warn',
+        category: 'microphone',
+        name: 'resource.cleanup_failed',
+        details: {
+          resource: 'microphone',
+          error,
+          message:
+            'Failed to mute a retained microphone stream after cleanup failed.',
+        },
+      });
+    },
+    [diagnostics],
+  );
+
   const stopFftAnalyzer = useCallback(() => {
     const animationId = fftAnimationId.current;
     fftAnimationId.current = null;
@@ -367,6 +385,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         notifyStop = true,
         preserveAudioContext = false,
         preserveMute = false,
+        preserveRecordingState = false,
         restoreOnFailure = true,
       } = options;
       const recorderToStop = recorder.current;
@@ -401,7 +420,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
       // stream remains attached until all of its tracks stop successfully.
       recorder.current = null;
       recorderDataHandler.current = null;
-      recordingStarted.current = false;
+      if (!preserveRecordingState) {
+        recordingStarted.current = false;
+      }
       if (!preserveAudioContext) {
         audioContext.current = null;
         ownsAudioContext.current = false;
@@ -770,9 +791,21 @@ export const useMicrophone = (props: MicrophoneProps) => {
     ) => {
       const stopCandidateStream = () => {
         try {
-          stream.getTracks().forEach((track) => track.stop());
-        } catch {
-          // Candidate cleanup must not mask the replacement failure.
+          stopMediaStreamTracks(stream);
+          retiredStreams.current.delete(stream);
+        } catch (error) {
+          retiredStreams.current.add(stream);
+          diagnostics.current?.emit({
+            level: 'warn',
+            category: 'microphone',
+            name: 'resource.cleanup_failed',
+            details: {
+              resource: 'microphone',
+              message:
+                'Failed to release an uncommitted replacement microphone stream.',
+              error,
+            },
+          });
         }
       };
       if (!isCurrent()) {
@@ -890,6 +923,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           notifyStop: false,
           preserveAudioContext: true,
           preserveMute: true,
+          preserveRecordingState: true,
           restoreOnFailure: false,
         });
       } catch (cleanupError) {
@@ -945,7 +979,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         reportMuteStateFailure(isMutedRef.current, error);
         disposeCandidate();
         try {
-          await disposeMicrophoneResources();
+          await disposeMicrophoneResources({ preserveMute: true });
         } catch (cleanupError) {
           reportClosureFailure(
             'Failed to fully clean up after microphone replacement',
@@ -1054,13 +1088,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
       name: 'control.changed',
       details: { control: 'microphone_mute', value: true },
     });
-    retiredFailures.forEach((error) => reportMuteStateFailure(true, error));
+    retiredFailures.forEach(reportRetiredStreamMuteFailure);
   }, [
     applyMuteStateToActiveStreams,
     applyMuteStateToRetiredStreams,
     diagnostics,
     fftStore,
     reportMuteStateFailure,
+    reportRetiredStreamMuteFailure,
   ]);
 
   const unmute = useCallback(() => {
@@ -1070,8 +1105,6 @@ export const useMicrophone = (props: MicrophoneProps) => {
       reportMuteStateFailure(false, error);
       return;
     }
-    const retiredFailures = applyMuteStateToRetiredStreams(false);
-
     isMutedRef.current = false;
     setIsMuted(false);
     diagnostics.current?.emit({
@@ -1080,13 +1113,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       name: 'control.changed',
       details: { control: 'microphone_mute', value: false },
     });
-    retiredFailures.forEach((error) => reportMuteStateFailure(false, error));
-  }, [
-    applyMuteStateToActiveStreams,
-    applyMuteStateToRetiredStreams,
-    diagnostics,
-    reportMuteStateFailure,
-  ]);
+  }, [applyMuteStateToActiveStreams, diagnostics, reportMuteStateFailure]);
 
   useEffect(() => {
     microphoneMounted.current = true;

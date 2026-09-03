@@ -296,9 +296,9 @@ const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
 // descriptors still execute proxy traps. Keep that inspection work separately
 // bounded while leaving enough headroom for ordinary objects with hidden state.
 const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
-// A chain of individually bounded objects must not multiply descriptor work
-// across one emit. Share the ordinary merge and sanitization allowance across
-// the event; priority discovery has a smaller independent cap below.
+// A chain of individually bounded objects must not multiply own-key scan work
+// across one emit. Share one allowance across merging, priority discovery, and
+// sanitization; selected data descriptors are read separately.
 const MAX_SCANNED_TOTAL_OBJECT_KEYS = MAX_SCANNED_OBJECT_KEYS;
 const PRIORITY_DIAGNOSTIC_KEYS = [
   'error',
@@ -311,8 +311,8 @@ const MAX_PRIORITY_SEARCH_DEPTH = 8;
 // Priority discovery can inspect every object that sanitization could retain.
 // Its fixed priority probes and sampled traversal keys share the same budget.
 const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS;
-// Priority discovery has its own bounded allowance so it cannot reduce the
-// pre-existing merge and sanitization scan budget.
+// Reserve half of the per-event descriptor work for discovery before merging
+// input details. Unused discovery work is returned to sanitization.
 const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
   MAX_SCANNED_TOTAL_OBJECT_KEYS / 2,
 );
@@ -752,6 +752,55 @@ const getEnumerableOwnKeys = (
   return { incomplete, keys };
 };
 
+const getEnumerableOwnKeysForMerge = (
+  value: object,
+  budget: OwnKeyScanBudget,
+): EnumeratedKeys => {
+  if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
+  let ownKeys: PropertyKey[];
+  try {
+    ownKeys = Reflect.ownKeys(value);
+  } catch {
+    return { incomplete: true, keys: [] };
+  }
+
+  const count = Math.min(
+    ownKeys.length,
+    MAX_SCANNED_OBJECT_KEYS,
+    budget.remainingKeys,
+  );
+  budget.remainingKeys -= count;
+  const leadingCount = Math.ceil(count / 2);
+  const trailingCount = count - leadingCount;
+  const indexes = Array.from({ length: leadingCount }, (_, index) => index);
+  for (
+    let index = ownKeys.length - trailingCount;
+    index < ownKeys.length;
+    index += 1
+  ) {
+    indexes.push(index);
+  }
+
+  const keys: string[] = [];
+  let incomplete = ownKeys.length > count;
+  for (const index of indexes) {
+    const key = ownKeys[index];
+    if (typeof key !== 'string') continue;
+    const descriptor = getOwnPropertyDescriptorSafely(value, key);
+    if (descriptor === null || descriptor === undefined) {
+      incomplete = true;
+      continue;
+    }
+    if (descriptor.enumerable !== true) continue;
+    if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    keys.push(key);
+  }
+  return { incomplete, keys };
+};
+
 const getEnumerableArrayIndexKeys = (
   value: unknown[],
   budget: OwnKeyScanBudget,
@@ -986,14 +1035,27 @@ const markSanitizedObjectTruncated = (
 
 const mergeOwnDataProperties = (
   target: Record<string, unknown>,
-  source: Record<string, unknown> | undefined,
+  sources: readonly (Record<string, unknown> | undefined)[],
   ownKeyScanBudget: OwnKeyScanBudget,
 ) => {
-  if (source === undefined) return false;
   let incomplete = false;
-  const missingPriorityKeys = new Set<string>();
-  const mergeProperty = (key: string, expected: boolean) => {
-    const descriptor = getOwnPropertyDescriptorSafely(source, key);
+  const sourceMerges = sources.flatMap((source) =>
+    source === undefined
+      ? []
+      : [
+          {
+            missingPriorityKeys: new Set<string>(),
+            properties: {} as Record<string, unknown>,
+            source,
+          },
+        ],
+  );
+  const mergeProperty = (
+    sourceMerge: (typeof sourceMerges)[number],
+    key: string,
+    expected: boolean,
+  ) => {
+    const descriptor = getOwnPropertyDescriptorSafely(sourceMerge.source, key);
     if (descriptor === null) {
       incomplete = true;
       return false;
@@ -1003,7 +1065,7 @@ const mergeOwnDataProperties = (
       if (expected) incomplete = true;
       return false;
     } else if ('value' in descriptor) {
-      Object.defineProperty(target, key, {
+      Object.defineProperty(sourceMerge.properties, key, {
         configurable: true,
         enumerable: true,
         value: descriptor.value,
@@ -1015,21 +1077,49 @@ const mergeOwnDataProperties = (
     }
     return true;
   };
-  for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-    if (ownKeyScanBudget.remainingKeys === 0) {
-      incomplete = true;
-      break;
+
+  // Probe priority keys on every source before a wide source can consume the
+  // merge allowance. Per-source staging preserves sensitive-detail overrides.
+  for (const sourceMerge of sourceMerges) {
+    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+      if (ownKeyScanBudget.remainingKeys === 0) {
+        incomplete = true;
+        break;
+      }
+      ownKeyScanBudget.remainingKeys -= 1;
+      if (!mergeProperty(sourceMerge, key, false)) {
+        sourceMerge.missingPriorityKeys.add(key);
+      }
     }
-    ownKeyScanBudget.remainingKeys -= 1;
-    if (!mergeProperty(key, false)) missingPriorityKeys.add(key);
   }
-  const enumerated = getEnumerableOwnKeys(source, ownKeyScanBudget);
-  incomplete ||= enumerated.incomplete;
-  for (const key of enumerated.keys) {
-    if (!PRIORITY_DIAGNOSTIC_KEY_SET.has(key) || missingPriorityKeys.has(key)) {
-      mergeProperty(key, true);
+
+  for (const sourceMerge of sourceMerges) {
+    const enumerated = getEnumerableOwnKeysForMerge(
+      sourceMerge.source,
+      ownKeyScanBudget,
+    );
+    incomplete ||= enumerated.incomplete;
+    for (const key of enumerated.keys) {
+      if (
+        !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) ||
+        sourceMerge.missingPriorityKeys.has(key)
+      ) {
+        mergeProperty(sourceMerge, key, true);
+      }
     }
   }
+
+  for (const sourceMerge of sourceMerges) {
+    for (const [key, value] of Object.entries(sourceMerge.properties)) {
+      Object.defineProperty(target, key, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true,
+      });
+    }
+  }
+
   return incomplete;
 };
 
@@ -1394,6 +1484,9 @@ const sanitizeDetails = (
     priorityScanBudget,
     rootEnumeratedKeys,
   );
+  // Discovery and sanitization remain independently useful without exceeding
+  // the shared per-event own-key scan allowance.
+  ownKeyScanBudget.remainingKeys += priorityScanBudget.remainingKeys;
   const budget: SanitizationBudget = {
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
     ownKeyScanBudget,
@@ -1507,21 +1600,17 @@ export const createVoiceDiagnosticsReporter = (
           remainingKeys: MAX_PRIORITY_SCANNED_TOTAL_KEYS,
         };
         const ownKeyScanBudget: OwnKeyScanBudget = {
-          remainingKeys: MAX_SCANNED_TOTAL_OBJECT_KEYS,
+          remainingKeys:
+            MAX_SCANNED_TOTAL_OBJECT_KEYS - MAX_PRIORITY_SCANNED_TOTAL_KEYS,
         };
-        let mergeIncomplete = mergeOwnDataProperties(
+        const mergeIncomplete = mergeOwnDataProperties(
           combinedDetails,
-          input.details,
+          [
+            input.details,
+            configuration.includeContent ? input.sensitiveDetails : undefined,
+          ],
           ownKeyScanBudget,
         );
-        if (configuration.includeContent) {
-          const sensitiveMergeIncomplete = mergeOwnDataProperties(
-            combinedDetails,
-            input.sensitiveDetails,
-            ownKeyScanBudget,
-          );
-          mergeIncomplete ||= sensitiveMergeIncomplete;
-        }
         const combinedKeys = Object.keys(combinedDetails);
         const rootEnumeratedKeys: EnumeratedKeys = {
           incomplete: combinedKeys.length > MAX_ENUMERATED_OBJECT_KEYS,
