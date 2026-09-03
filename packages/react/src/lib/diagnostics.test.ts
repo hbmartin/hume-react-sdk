@@ -1101,6 +1101,28 @@ describe('voice diagnostics reporter', () => {
     expect(enumerations).toBe(1);
   });
 
+  it('keeps a trailing discovered failure after the front scan is exhausted', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const nested: Record<string, unknown> = Object.fromEntries(
+      Array.from(
+        { length: 1_001 },
+        (_, index) => [`noise-${index}`, index] as const,
+      ),
+    );
+    nested['failure'] = new Error('Trailing cleanup failure');
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toMatchObject({
+      failure: { message: 'Trailing cleanup failure' },
+    });
+  });
+
   it('bounds priority discovery work across repeated object references', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1127,6 +1149,73 @@ describe('voice diagnostics reporter', () => {
 
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(descriptorReads).toBeLessThan(20_000);
+  });
+
+  it('charges fixed priority probes against the shared key-scan budget', () => {
+    const reporter = createVoiceDiagnosticsReporter(() => ({ logger: false }));
+    const priorityKeys = new Set(['error', 'errors', 'failures', 'cause']);
+    let priorityProbeReads = 0;
+    // With the root, scan consumer, and noise array, this frontier fills the
+    // 2,000-node discovery allowance.
+    const targets = Array.from(
+      { length: 1_997 },
+      () => ({}) as Record<string, unknown>,
+    );
+    const frontier = targets.map(
+      (target) =>
+        new Proxy(target, {
+          getOwnPropertyDescriptor(target, key) {
+            if (typeof key === 'string' && priorityKeys.has(key)) {
+              priorityProbeReads += 1;
+            }
+            return Reflect.getOwnPropertyDescriptor(target, key);
+          },
+        }),
+    );
+    for (const [index, target] of targets.entries()) {
+      for (let offset = 1; offset <= 4; offset += 1) {
+        const child = frontier[index * 4 + offset];
+        if (child === undefined) break;
+        target[`child-${offset}`] = child;
+      }
+    }
+
+    const hiddenKeys = Array.from(
+      { length: 16_000 },
+      (_, index) => `hidden-${index}`,
+    );
+    let hiddenKeyReads = 0;
+    const scanConsumer = new Proxy(
+      {},
+      {
+        ownKeys: () => hiddenKeys,
+        getOwnPropertyDescriptor(_target, key) {
+          if (typeof key === 'string' && key.startsWith('hidden-')) {
+            hiddenKeyReads += 1;
+            return {
+              configurable: true,
+              enumerable: false,
+              value: null,
+              writable: true,
+            };
+          }
+          return undefined;
+        },
+      },
+    );
+
+    reporter.emit({
+      ...input,
+      details: {
+        scanConsumer,
+        // Spend the entry allowance before sanitization reaches the frontier,
+        // leaving its counted priority probes exclusive to discovery.
+        noise: Array.from({ length: 1_000 }),
+        frontier: frontier[0],
+      },
+    });
+
+    expect(priorityProbeReads + hiddenKeyReads).toBeLessThanOrEqual(16_000);
   });
 
   it('keeps AggregateError errors array-shaped when its budget is exhausted', () => {
