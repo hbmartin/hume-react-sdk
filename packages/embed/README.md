@@ -16,7 +16,7 @@ There are two packages needed to embed your own widget. Install this package to 
 
 Before installing this package, please ensure your development environment meets the following requirement:
 
-- Node.js (`v18.0.0` or higher).
+- Node.js (`v22.0.0` or higher).
 
 To verify your Node.js version, run this command in your terminal:
 
@@ -24,7 +24,7 @@ To verify your Node.js version, run this command in your terminal:
 node --version
 ```
 
-If your Node.js version is below `18.0.0`, update it to meet the requirement. For updating Node.js, visit [Node.js' official site](https://nodejs.org/) or use a version management tool like nvm for a more seamless upgrade process.
+If your Node.js version is below `22.0.0`, update it to meet the requirement. For updating Node.js, visit [Node.js' official site](https://nodejs.org/) or use a version management tool like nvm for a more seamless upgrade process.
 
 ## Installation
 

@@ -34,7 +34,8 @@ examples. When you need exact types or signatures, use the
 ## Requirements
 
 - A modern browser for microphone input and audio playback.
-- Node.js 18 or newer in applications consuming the packages.
+- Node.js 22 or newer in applications consuming the packages.
+- React and React DOM 19 or newer when consuming a React package.
 - A Hume API key or a server-generated access token.
 
 Do not embed a secret API key in public client-side code. For production browser

@@ -68,8 +68,8 @@ try {
       '--no-fund',
       '--no-package-lock',
       ...tarballPaths,
-      '@types/react@18',
-      '@types/react-dom@18',
+      '@types/react@19',
+      '@types/react-dom@19',
     ],
     { cwd: fixtureRoot },
   );
