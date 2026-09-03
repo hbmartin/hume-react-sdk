@@ -1,7 +1,11 @@
 import { type Hume } from 'hume';
 import * as HumeSerialization from 'hume/serialization';
 
-import { type ParsedAudioMessage, parseAudioMessage } from './audio-message';
+import {
+  isBinaryMessageData,
+  type ParsedAudioMessage,
+  parseAudioMessage,
+} from './audio-message';
 import {
   SocketFailedToParseMessageError,
   SocketUnknownMessageError,
@@ -24,6 +28,11 @@ const subscribeEventParser = (
   }
 ).SubscribeEvent;
 
+/** A failure returned while decoding data from a socket message. */
+export type ParsedMessageError =
+  | SocketFailedToParseMessageError
+  | SocketUnknownMessageError;
+
 /**
  * The result of parsing a message off the socket: either the decoded message,
  * or the error explaining why it could not be decoded.
@@ -35,8 +44,24 @@ export type ParsedMessageResult =
     }
   | {
       success: false;
-      error: Error;
+      error: ParsedMessageError;
     };
+
+const describeMessageData = (data: unknown): string => {
+  if (data === null) {
+    return 'null';
+  }
+
+  if (typeof data === 'object') {
+    const constructorName = (data as { constructor?: { name?: unknown } })
+      .constructor?.name;
+    if (typeof constructorName === 'string' && constructorName !== '') {
+      return constructorName;
+    }
+  }
+
+  return typeof data;
+};
 
 /**
  * Parse the data of a message from the socket.
@@ -51,19 +76,19 @@ export type ParsedMessageResult =
 export const parseMessageData = async (
   data: unknown,
 ): Promise<ParsedMessageResult> => {
-  if (data instanceof Blob) {
-    const message = await parseAudioMessage(data);
-
-    if (message) {
+  if (isBinaryMessageData(data)) {
+    try {
+      const message = await parseAudioMessage(data);
       return {
         success: true,
         message,
       };
-    } else {
+    } catch (cause) {
       return {
         success: false,
         error: new SocketFailedToParseMessageError(
-          `Received blob was unable to be converted to ArrayBuffer.`,
+          `Received ${describeMessageData(data)} was unable to be converted to an ArrayBuffer.`,
+          { cause },
         ),
       };
     }
@@ -73,7 +98,7 @@ export const parseMessageData = async (
     return {
       success: false,
       error: new SocketFailedToParseMessageError(
-        `Expected a string but received ${typeof data}.`,
+        `Expected a string or binary data but received ${describeMessageData(data)}.`,
       ),
     };
   }
@@ -81,12 +106,12 @@ export const parseMessageData = async (
   let serializedEvent: unknown;
   try {
     serializedEvent = JSON.parse(data);
-  } catch {
+  } catch (cause) {
     return {
       success: false,
-      error: new SocketUnknownMessageError(
-        `Received JSON was not a known message type.`,
-      ),
+      error: new SocketFailedToParseMessageError(`Received malformed JSON.`, {
+        cause,
+      }),
     };
   }
 

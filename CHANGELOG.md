@@ -45,6 +45,9 @@ recoverable notes.
 - `ConcurrentConnectAuthError` and `isConcurrentConnectAuthError`. A second
   `connect()` with credentials that differ from the in-flight attempt is now
   rejected rather than silently discarding the newer credentials.
+- Public error classes now expose stable `code` discriminants, and their guards
+  recognize equivalent errors created by another installed copy of the package.
+  Socket parsing errors also retain their originating exception as `cause`.
 
 #### Fixed
 
@@ -55,6 +58,9 @@ recoverable notes.
   returns the provider to `disconnected` instead of hanging; and final
   microphone data is preserved on stop.
 - Tool results sent from the client are now surfaced in `messages`.
+- Socket message parsing now distinguishes malformed JSON from valid JSON with
+  an unknown message type, reports unsupported input types precisely, and
+  accepts `Blob`, `ArrayBuffer`, and typed-array binary frames.
 - The deprecated `useSoundPlayer`, `FftStore`, and `useFftSubscription`
   compatibility surface remains available while consumers migrate to
   `VoiceProvider`, `usePlayerFft`, and `useMicFft`.

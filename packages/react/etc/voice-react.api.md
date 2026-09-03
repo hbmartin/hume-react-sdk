@@ -51,6 +51,7 @@ export interface AudioDevices {
 export class AudioDeviceSwitchError extends Error {
     constructor(kind: AudioDeviceKind, reason: AudioDeviceSwitchErrorReason, message: string, cause?: unknown);
     readonly cause: unknown;
+    readonly code: 'audio_device_switch';
     readonly kind: AudioDeviceKind;
     readonly reason: AudioDeviceSwitchErrorReason;
 }
@@ -88,6 +89,7 @@ export { CloseEvent_2 as CloseEvent }
 // @public
 export class ConcurrentConnectAuthError extends Error {
     constructor();
+    readonly code: 'concurrent_connect_auth';
     readonly reason: 'auth_conflict';
 }
 
@@ -189,12 +191,15 @@ export type ParsedAudioMessage = {
 };
 
 // @public
+export type ParsedMessageError = SocketFailedToParseMessageError | SocketUnknownMessageError;
+
+// @public
 export type ParsedMessageResult = {
     success: true;
     message: Hume.empathicVoice.SubscribeEvent | ParsedAudioMessage;
 } | {
     success: false;
-    error: Error;
+    error: ParsedMessageError;
 };
 
 // @public
@@ -223,12 +228,14 @@ export type SocketErrorReason = 'socket_connection_failure' | 'failed_to_send_au
 
 // @public
 export class SocketFailedToParseMessageError extends Error {
-    constructor(message?: string);
+    constructor(detail?: string, options?: ErrorOptions);
+    readonly code: 'failed_to_parse_message';
 }
 
 // @public
 export class SocketUnknownMessageError extends Error {
-    constructor(message?: string);
+    constructor(detail?: string, options?: ErrorOptions);
+    readonly code: 'unknown_message_type';
 }
 
 // Warning: (ae-forgotten-export) The symbol "ToolCallMessage" needs to be exported by the entry point index.d.ts
