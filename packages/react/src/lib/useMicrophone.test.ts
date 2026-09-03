@@ -124,8 +124,14 @@ const stubOwnedAudioContext = (
   return { context, contextClose };
 };
 
-const createStream = (tracks: MediaStreamTrack[] = []) =>
-  ({ getTracks: () => tracks }) as unknown as MediaStream;
+const createStream = (
+  tracks: MediaStreamTrack[] = [],
+  audioTracks: MediaStreamTrack[] = tracks,
+) =>
+  ({
+    getTracks: () => tracks,
+    getAudioTracks: () => audioTracks,
+  }) as unknown as MediaStream;
 
 const renderMicrophone = (
   callbacks: Pick<
@@ -289,6 +295,63 @@ describe('useMicrophone', () => {
 
     expect(result.current.isMuted).toBe(true);
     expect(track.enabled).toBe(false);
+  });
+
+  it('mutes only audio tracks and restores their previous enabled state', () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const enabledAudioTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const disabledAudioTrack = {
+      enabled: false,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const videoTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const stream = createStream(
+      [enabledAudioTrack, disabledAudioTrack, videoTrack],
+      [enabledAudioTrack, disabledAudioTrack],
+    );
+    const { result } = renderMicrophone();
+    result.current.start(stream, createAudioContext());
+
+    act(() => result.current.mute());
+
+    expect(enabledAudioTrack.enabled).toBe(false);
+    expect(disabledAudioTrack.enabled).toBe(false);
+    expect(videoTrack.enabled).toBe(true);
+
+    act(() => result.current.unmute());
+
+    expect(enabledAudioTrack.enabled).toBe(true);
+    expect(disabledAudioTrack.enabled).toBe(false);
+    expect(videoTrack.enabled).toBe(true);
+  });
+
+  it('clears a stale FFT snapshot when muted without an analyzer', () => {
+    let flushFft: FrameRequestCallback | undefined;
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        flushFft = callback;
+        return 1;
+      }),
+    );
+    const { result } = renderMicrophone();
+    result.current.fftStore.write(Array.from({ length: 24 }, () => 1));
+    act(() => flushFft?.(0));
+    expect(
+      result.current.fftStore.getSnapshot().some((value) => value > 0),
+    ).toBe(true);
+
+    act(() => result.current.mute());
+
+    expect(
+      result.current.fftStore.getSnapshot().every((value) => value === 0),
+    ).toBe(true);
   });
 
   it('invokes the public recording lifecycle callbacks', async () => {
