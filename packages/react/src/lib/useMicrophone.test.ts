@@ -2,7 +2,10 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { MimeType } from 'hume';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { VoiceDiagnosticEvent } from './diagnostics';
+import {
+  createVoiceDiagnosticsReporter,
+  type VoiceDiagnosticEvent,
+} from './diagnostics';
 import { useMicrophone } from './useMicrophone';
 
 type RecorderInstance = {
@@ -136,7 +139,7 @@ const createStream = (
 const renderMicrophone = (
   callbacks: Pick<
     Parameters<typeof useMicrophone>[0],
-    'onStartRecording' | 'onStopRecording'
+    'diagnostics' | 'onStartRecording' | 'onStopRecording'
   > = {},
 ) => {
   const onError = vi.fn();
@@ -352,6 +355,95 @@ describe('useMicrophone', () => {
     expect(
       result.current.fftStore.getSnapshot().every((value) => value === 0),
     ).toBe(true);
+  });
+
+  it('does not let the analyzer republish FFT data while muted', () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    let nextRafId = 1;
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        const id = nextRafId++;
+        rafCallbacks.set(id, callback);
+        return id;
+      }),
+    );
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn((id: number) => rafCallbacks.delete(id)),
+    );
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const getByteFrequencyData = vi.fn((data: Uint8Array) => data.fill(255));
+    const context = {
+      ...createAudioContext(),
+      createAnalyser: vi.fn(() => ({
+        fftSize: 0,
+        frequencyBinCount: 1024,
+        getByteFrequencyData,
+      })),
+    } as unknown as AudioContext;
+    const { result } = renderMicrophone();
+
+    result.current.start(createStream(), context);
+    act(() => {
+      const flush = rafCallbacks.get(1);
+      rafCallbacks.delete(1);
+      flush?.(0);
+    });
+    expect(
+      result.current.fftStore.getSnapshot().some((value) => value > 0),
+    ).toBe(true);
+
+    act(() => result.current.mute());
+    act(() => {
+      const draw = rafCallbacks.get(2);
+      rafCallbacks.delete(2);
+      draw?.(0);
+      const nextDraw = rafCallbacks.get(3);
+      rafCallbacks.delete(3);
+      nextDraw?.(0);
+    });
+
+    expect(getByteFrequencyData).toHaveBeenCalledOnce();
+    expect(
+      result.current.fftStore.getSnapshot().every((value) => value === 0),
+    ).toBe(true);
+  });
+
+  it('keeps mute state unchanged and reports when track enumeration fails', () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const track = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const stream = {
+      getTracks: () => [track],
+      getAudioTracks: () => {
+        throw new Error('audio track enumeration failed');
+      },
+    } as unknown as MediaStream;
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(stream, createAudioContext());
+
+    act(() => result.current.mute());
+
+    expect(result.current.isMuted).toBe(false);
+    expect(track.enabled).toBe(true);
+    expect(events.at(-1)).toMatchObject({
+      level: 'warn',
+      category: 'microphone',
+      name: 'control.change_failed',
+      details: {
+        control: 'microphone_mute',
+        value: true,
+        error: { message: 'audio track enumeration failed' },
+      },
+    });
   });
 
   it('invokes the public recording lifecycle callbacks', async () => {
@@ -727,6 +819,81 @@ describe('useMicrophone', () => {
 
     expect(result.current.isMuted).toBe(true);
     expect(candidateTrack.enabled).toBe(false);
+  });
+
+  it('applies a mute requested while a replacement is in progress', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(createStream([oldTrack]), context);
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(
+        createStream([candidateTrack]),
+        context,
+      );
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+
+    act(() => result.current.mute());
+    expect(candidateTrack.enabled).toBe(false);
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await replacement;
+    });
+
+    expect(result.current.isMuted).toBe(true);
+    expect(candidateTrack.enabled).toBe(false);
+  });
+
+  it('applies an unmute requested while a replacement is in progress', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(createStream([oldTrack]), context);
+    act(() => result.current.mute());
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(
+        createStream([candidateTrack]),
+        context,
+      );
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+
+    act(() => result.current.unmute());
+    expect(candidateTrack.enabled).toBe(true);
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await replacement;
+    });
+
+    expect(result.current.isMuted).toBe(false);
+    expect(candidateTrack.enabled).toBe(true);
   });
 
   it('queues stop behind an in-progress replacement', async () => {
