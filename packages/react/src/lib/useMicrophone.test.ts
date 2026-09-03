@@ -386,6 +386,8 @@ describe('useMicrophone', () => {
 
     result.current.start(createStream(), context);
     act(() => {
+      // The first RAF publishes the sample already read synchronously by
+      // startFftAnalyzer; the analyzer's next draw is RAF 2.
       const flush = rafCallbacks.get(1);
       rafCallbacks.delete(1);
       flush?.(0);
@@ -894,6 +896,123 @@ describe('useMicrophone', () => {
 
     expect(result.current.isMuted).toBe(false);
     expect(candidateTrack.enabled).toBe(true);
+  });
+
+  it('releases an owned audio context when final replacement mute reconciliation fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    stubOwnedAudioContext(contextClose);
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrackStop = vi.fn();
+    const candidateTrack = {
+      enabled: true,
+      stop: candidateTrackStop,
+    } as unknown as MediaStreamTrack;
+    const candidateStream = {
+      getTracks: () => [candidateTrack],
+      getAudioTracks: vi
+        .fn<() => MediaStreamTrack[]>()
+        .mockReturnValueOnce([candidateTrack])
+        .mockImplementationOnce(() => {
+          throw new Error('final mute reconciliation failed');
+        }),
+    } as unknown as MediaStream;
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+    }));
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream([oldTrack]));
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(candidateStream);
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+    act(() => result.current.mute());
+
+    let replacementError: unknown;
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      try {
+        await replacement;
+      } catch (error) {
+        replacementError = error;
+      }
+    });
+
+    expect(replacementError).toMatchObject({
+      message: 'final mute reconciliation failed',
+    });
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(contextClose).toHaveBeenCalledOnce();
+    expect(result.current.isMuted).toBe(false);
+
+    expect(() => result.current.start(createStream())).not.toThrow();
+    await act(() => result.current.stop());
+  });
+
+  it('does not close a shared audio context after replacement reconciliation fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    const context = {
+      ...createAudioContext(),
+      close: contextClose,
+    } as AudioContext;
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrackStop = vi.fn();
+    const candidateTrack = {
+      enabled: true,
+      stop: candidateTrackStop,
+    } as unknown as MediaStreamTrack;
+    const candidateStream = {
+      getTracks: () => [candidateTrack],
+      getAudioTracks: vi
+        .fn<() => MediaStreamTrack[]>()
+        .mockReturnValueOnce([candidateTrack])
+        .mockImplementationOnce(() => {
+          throw new Error('final mute reconciliation failed');
+        }),
+    } as unknown as MediaStream;
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+    }));
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream([oldTrack]), context);
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(candidateStream, context);
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+    act(() => result.current.mute());
+
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await expect(replacement).rejects.toThrow(
+        'final mute reconciliation failed',
+      );
+    });
+
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(contextClose).not.toHaveBeenCalled();
+
+    const nextContext = createAudioContext();
+    expect(() =>
+      result.current.start(createStream(), nextContext),
+    ).not.toThrow();
+    await act(() => result.current.stop());
   });
 
   it('queues stop behind an in-progress replacement', async () => {

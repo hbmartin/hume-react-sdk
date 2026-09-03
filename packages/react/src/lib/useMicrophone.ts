@@ -926,6 +926,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
       } catch (error) {
         reportMuteStateFailure(isMutedRef.current, error);
         disposeCandidate();
+        try {
+          await disposeMicrophoneResources();
+        } catch (cleanupError) {
+          reportClosureFailure(
+            'Failed to fully clean up after microphone replacement',
+            cleanupError,
+          );
+        }
         throw error;
       }
       pendingReplacementStream.current = null;
@@ -967,6 +975,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       disposeMicrophoneResources,
       diagnostics,
       fftStore,
+      reportClosureFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
