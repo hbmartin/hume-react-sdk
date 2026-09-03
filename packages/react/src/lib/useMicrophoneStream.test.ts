@@ -12,13 +12,10 @@ const getUserMediaMock = vi.fn<() => Promise<MediaStream>>();
 const createStream = (tracks: MediaStreamTrack[] = []) =>
   ({ getTracks: () => tracks }) as unknown as MediaStream;
 const runInAct = async <T>(callback: () => Promise<T>): Promise<T> => {
-  let outcome: PromiseSettledResult<T> | undefined;
-  await act(async () => {
-    [outcome] = await Promise.allSettled([callback()]);
+  const outcome = await act(async () => {
+    const [settled] = await Promise.allSettled([callback()]);
+    return settled;
   });
-  if (!outcome) {
-    throw new Error('The asynchronous hook operation did not settle.');
-  }
   if (outcome.status === 'rejected') {
     throw outcome.reason;
   }

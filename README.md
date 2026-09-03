@@ -26,7 +26,7 @@ Ships no UI at all. `<VoiceProvider>` manages the EVI WebSocket, microphone capt
 
 - **Best for:** a voice experience that matches your product's design, or that needs raw access to messages, tool calls, and prosody scores.
 - **Trade-off:** you build and maintain the entire interface.
-- **Requires:** React `>=18.2` in a bundled web app (Next.js, Vite, Webpack). Uses Web Audio and `getUserMedia`, so it does **not** run in React Native.
+- **Requires:** React `>=19` in a bundled web app (Next.js, Vite, Webpack). Uses Web Audio and `getUserMedia`, so it does **not** run in React Native.
 
 ### `@humeai/voice-embed-react` — Hume's widget, as a React component
 
@@ -34,7 +34,7 @@ Renders Hume's prebuilt voice widget (hosted at `voice-widget.hume.ai`) inside a
 
 - **Best for:** adding a working voice agent to an existing React app in minutes.
 - **Trade-off:** the widget's look and interaction model are Hume's, configurable but not replaceable.
-- **Requires:** React `>=18.2`. This is a thin wrapper over `@humeai/voice-embed` — same widget, same behavior.
+- **Requires:** React `>=19`. This is a thin wrapper over `@humeai/voice-embed` — same widget, same behavior.
 
 ### `@humeai/voice-embed` — Hume's widget, framework-agnostic
 
@@ -62,7 +62,7 @@ flowchart TD
 |                            | `@humeai/voice-react`                   | `@humeai/voice-embed-react`   | `@humeai/voice-embed`       |
 | :------------------------- | :-------------------------------------- | :---------------------------- | :-------------------------- |
 | **Who owns the UI**        | You                                     | Hume                          | Hume                        |
-| **Framework**              | React `>=18.2`                          | React `>=18.2`                | Any JS with a DOM           |
+| **Framework**              | React `>=19`                            | React `>=19`                  | Any JS with a DOM           |
 | **API shape**              | Provider + hooks                        | `<EmbeddedVoice />` component | `create()` / `mount()`      |
 | **Where it runs**          | In your page                            | In an iframe                  | In an iframe                |
 | **Visual customization**   | Complete                                | Widget config only            | Widget config only          |

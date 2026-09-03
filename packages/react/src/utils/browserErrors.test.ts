@@ -7,6 +7,8 @@ import {
   normalizeBrowserError,
 } from './browserErrors';
 
+const MAX_ACCEPTABLE_PROTOTYPE_READS = 100;
+
 describe('browser error normalization', () => {
   it.each([
     ['empty', ''],
@@ -377,7 +379,7 @@ describe('browser error normalization', () => {
     try {
       expect(getBrowserErrorName({})).toBeNull();
       expect(prototypeReads).toBeGreaterThan(1);
-      expect(prototypeReads).toBeLessThan(100);
+      expect(prototypeReads).toBeLessThan(MAX_ACCEPTABLE_PROTOTYPE_READS);
     } finally {
       vi.unstubAllGlobals();
     }

@@ -139,7 +139,13 @@ call did not end cleanly, which is worth distinguishing from a user hanging up.
 `parseMessageData` and `parseMessageType` never reject. They return a result
 whose failure branch carries a `SocketUnknownMessageError` or
 `SocketFailedToParseMessageError` — check `success` rather than wrapping the call
-in `try`/`catch`.
+in `try`/`catch`. The errors expose stable `unknown_message_type` and
+`failed_to_parse_message` codes for exhaustive handling, and retain the
+originating exception as `cause` when one is available.
+
+Text frames must contain a recognized EVI JSON event. Binary frames may be a
+`Blob`, an `ArrayBuffer`, or an `ArrayBuffer` view such as a typed array; binary
+data is returned as an `audio` message containing an `ArrayBuffer`.
 
 ## Reference
 

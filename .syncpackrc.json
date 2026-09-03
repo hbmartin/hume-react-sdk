@@ -2,7 +2,7 @@
   "$schema": "./node_modules/syncpack/schema.json",
   "versionGroups": [
     {
-      "label": "React 18 libraries and React 19 example are intentional",
+      "label": "Published React peer floors and installed React versions intentionally differ",
       "dependencies": [
         "react",
         "react-dom",

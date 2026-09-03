@@ -1,5 +1,26 @@
 import type { AudioDeviceKind } from '../models/connect-options';
 
+const hasErrorIdentity = (
+  error: unknown,
+  name: string,
+  code: string,
+): error is { code: string; message: string; name: string } => {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    name?: unknown;
+  };
+  return (
+    candidate.name === name &&
+    candidate.code === code &&
+    typeof candidate.message === 'string'
+  );
+};
+
 /** Why an audio device switch failed. */
 export type AudioDeviceSwitchErrorReason =
   | 'not_connected'
@@ -16,6 +37,9 @@ export type AudioDeviceSwitchErrorReason =
  * switch never interrupts an active conversation.
  */
 export class AudioDeviceSwitchError extends Error {
+  /** Stable identifier for programmatic error handling. */
+  readonly code = 'audio_device_switch' as const;
+
   /** Whether the failing device was a microphone or a speaker. */
   readonly kind: AudioDeviceKind;
 
@@ -39,10 +63,37 @@ export class AudioDeviceSwitchError extends Error {
   }
 }
 
+const hasAudioDeviceSwitchErrorIdentity = (error: unknown): boolean => {
+  if (
+    !hasErrorIdentity(error, 'AudioDeviceSwitchError', 'audio_device_switch')
+  ) {
+    return false;
+  }
+
+  const candidate = error as typeof error & {
+    cause?: unknown;
+    kind?: unknown;
+    reason?: unknown;
+  };
+  const hasKnownKind =
+    candidate.kind === 'audioinput' || candidate.kind === 'audiooutput';
+  const hasKnownReason =
+    candidate.reason === 'not_connected' ||
+    candidate.reason === 'unsupported' ||
+    candidate.reason === 'permission_denied' ||
+    candidate.reason === 'device_not_found' ||
+    candidate.reason === 'switch_failed' ||
+    candidate.reason === 'interrupted';
+
+  return hasKnownKind && hasKnownReason && 'cause' in candidate;
+};
+
 /** Check whether an unknown value is an audio device switch error. */
 export const isAudioDeviceSwitchError = (
   error: unknown,
-): error is AudioDeviceSwitchError => error instanceof AudioDeviceSwitchError;
+): error is AudioDeviceSwitchError =>
+  error instanceof AudioDeviceSwitchError ||
+  hasAudioDeviceSwitchErrorIdentity(error);
 
 /**
  * Why an explicit connection-generation identifier was rejected.
@@ -81,6 +132,9 @@ export class ConnectionGenerationError extends Error {
  * silently discarded.
  */
 export class ConcurrentConnectAuthError extends Error {
+  /** Stable identifier for programmatic error handling. */
+  readonly code = 'concurrent_connect_auth' as const;
+
   /** Always `'auth_conflict'`, for parity with the other error classes. */
   readonly reason = 'auth_conflict' as const;
 
@@ -92,18 +146,37 @@ export class ConcurrentConnectAuthError extends Error {
   }
 }
 
+const hasConcurrentConnectAuthErrorIdentity = (error: unknown): boolean => {
+  return (
+    hasErrorIdentity(
+      error,
+      'ConcurrentConnectAuthError',
+      'concurrent_connect_auth',
+    ) &&
+    (error as typeof error & { reason?: unknown }).reason === 'auth_conflict'
+  );
+};
+
 /** Check whether an unknown value is a concurrent-connect auth conflict. */
 export const isConcurrentConnectAuthError = (
   error: unknown,
 ): error is ConcurrentConnectAuthError =>
-  error instanceof ConcurrentConnectAuthError;
+  error instanceof ConcurrentConnectAuthError ||
+  hasConcurrentConnectAuthErrorIdentity(error);
+
+const withErrorDetail = (summary: string, detail?: string): string => {
+  return detail === undefined || detail === ''
+    ? summary
+    : `${summary} ${detail}`;
+};
 
 /** A socket message did not match any known EVI message type. */
 export class SocketUnknownMessageError extends Error {
-  constructor(message?: string) {
-    super(
-      `Unknown message type.${message !== undefined && message !== '' ? ' ' + message : ''}`,
-    );
+  /** Stable identifier for programmatic error handling. */
+  readonly code = 'unknown_message_type' as const;
+
+  constructor(detail?: string, options?: ErrorOptions) {
+    super(withErrorDetail('Unknown message type.', detail), options);
     this.name = 'SocketUnknownMessageError';
   }
 }
@@ -123,14 +196,21 @@ export class SocketUnknownMessageError extends Error {
 export const isSocketUnknownMessageError = (
   err: unknown,
 ): err is SocketUnknownMessageError => {
-  return err instanceof SocketUnknownMessageError;
+  return (
+    err instanceof SocketUnknownMessageError ||
+    hasErrorIdentity(err, 'SocketUnknownMessageError', 'unknown_message_type')
+  );
 };
 
 /** A socket message could not be parsed as EVI JSON or audio. */
 export class SocketFailedToParseMessageError extends Error {
-  constructor(message?: string) {
+  /** Stable identifier for programmatic error handling. */
+  readonly code = 'failed_to_parse_message' as const;
+
+  constructor(detail?: string, options?: ErrorOptions) {
     super(
-      `Failed to parse message from socket.${message !== undefined && message !== '' ? ' ' + message : ''}`,
+      withErrorDetail('Failed to parse message from socket.', detail),
+      options,
     );
     this.name = 'SocketFailedToParseMessageError';
   }
@@ -151,5 +231,12 @@ export class SocketFailedToParseMessageError extends Error {
 export const isSocketFailedToParseMessageError = (
   err: unknown,
 ): err is SocketFailedToParseMessageError => {
-  return err instanceof SocketFailedToParseMessageError;
+  return (
+    err instanceof SocketFailedToParseMessageError ||
+    hasErrorIdentity(
+      err,
+      'SocketFailedToParseMessageError',
+      'failed_to_parse_message',
+    )
+  );
 };
