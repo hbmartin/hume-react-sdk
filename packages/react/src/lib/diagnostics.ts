@@ -903,6 +903,8 @@ const getPrioritizedKeysByObject = (
     const { depth, path: parent, value } = current;
 
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+      if (priorityScanBudget.remainingKeys === 0) break;
+      priorityScanBudget.remainingKeys -= 1;
       const property = getOwnEnumerableDataProperty(value, key);
       if (property === null || property.value === undefined) continue;
       const path: PriorityPath = { key, object: value, parent };
@@ -1292,11 +1294,16 @@ const sanitizeValue = (
     }
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
-    const prioritized: string[] = [];
+    const prioritized =
+      priorityKeys === undefined
+        ? []
+        : [...priorityKeys].filter(
+            (key) => !PRIORITY_DIAGNOSTIC_KEY_SET.has(key),
+          );
     const remaining: string[] = [];
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
-      (priorityKeys?.has(key) === true ? prioritized : remaining).push(key);
+      if (priorityKeys?.has(key) !== true) remaining.push(key);
     }
     for (const key of [...prioritized, ...remaining]) {
       if (sanitizeEntry(key, true) === 'stop') break;
