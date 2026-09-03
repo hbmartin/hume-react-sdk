@@ -6,7 +6,7 @@ API and updating the documentation in particular.
 
 ## Getting set up
 
-Development requires Node `22.18` (see `.nvmrc`) and pnpm `11.24` (pinned by
+Development requires Node `22.18` (see `.nvmrc`) and pnpm `11.25.0` (pinned by
 `packageManager`). The published packages themselves support a lower Node
 floor; see each package's `engines` field.
 
