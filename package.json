@@ -34,9 +34,6 @@
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm typecheck:deps && pnpm format:check && pnpm check:deps && pnpm check:docs && pnpm check:fallow && pnpm check:packages && pnpm api-report:check && pnpm test",
     "release": "node tools/run-release.mjs"
   },
-  "dependencies": {
-    "vitepress": "1.6.4"
-  },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
     "@humeai/typescript-config": "workspace:*",
@@ -51,7 +48,8 @@
     "oxlint-tsgolint": "7.0.2001",
     "publint": "0.3.24",
     "syncpack": "15.3.3",
-    "turbo": "^2.10.12"
+    "turbo": "^2.10.12",
+    "vitepress": "1.6.4"
   },
   "browserslist": [
     "last 2 Chrome versions, last 2 iOS major versions, Firefox ESR, not dead"

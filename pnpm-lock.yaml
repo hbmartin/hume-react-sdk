@@ -15,10 +15,6 @@ pnpmfileChecksum: sha256-C2q0iyLJSGSh9A4ldqVDN3GHLzsEs9XAKYMS3dp7Up0=
 importers:
 
   .:
-    dependencies:
-      vitepress:
-        specifier: 1.6.4
-        version: 1.6.4(@algolia/client-search@5.57.0)(@types/node@22.20.1)(@types/react@18.3.3)(postcss@8.5.23)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(search-insights@2.17.3)(terser@5.43.1)(typescript@7.0.2)
     devDependencies:
       '@arethetypeswrong/cli':
         specifier: 0.18.5
@@ -62,6 +58,9 @@ importers:
       turbo:
         specifier: ^2.10.12
         version: 2.10.12
+      vitepress:
+        specifier: 1.6.4
+        version: 1.6.4(@algolia/client-search@5.57.0)(@types/node@22.20.1)(@types/react@18.3.3)(postcss@8.5.23)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(search-insights@2.17.3)(terser@5.43.1)(typescript@7.0.2)
 
   examples/next-app:
     dependencies:
