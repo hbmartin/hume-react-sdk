@@ -299,11 +299,22 @@ const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
 // across one emit. Share the same generous scan allowance across the event.
 const MAX_SCANNED_TOTAL_OBJECT_KEYS = MAX_SCANNED_OBJECT_KEYS;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
-const MAX_PRIORITY_SEARCH_NODES = 128;
-// Large arrays are commonly diagnostic payloads rather than useful paths to
-// errors. Limit each array's share of priority discovery so several earlier
-// arrays cannot exhaust the shared key-scan budget before later objects.
-const MAX_PRIORITY_ARRAY_INDEX_KEYS = 64;
+// Priority discovery gets bounded work independent of sanitization. Give it
+// enough nodes to inspect every top-level value plus a similarly sized nested
+// frontier without allowing an adversarial graph to grow without limit.
+const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS * 2;
+// Reserve at most half of the remaining per-event descriptor work for
+// discovery. Unused work is returned to sanitization after the search.
+const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
+  MAX_SCANNED_TOTAL_OBJECT_KEYS / 2,
+);
+// Share discovery work across its node allowance. Sampling both ends keeps
+// appended failures visible without letting one payload container starve later
+// siblings.
+const MAX_PRIORITY_KEYS_PER_OBJECT = Math.max(
+  1,
+  Math.floor(MAX_PRIORITY_SCANNED_TOTAL_KEYS / MAX_PRIORITY_SEARCH_NODES),
+);
 const PRIORITY_DIAGNOSTIC_KEYS = [
   'error',
   'errors',
@@ -756,13 +767,63 @@ const getEnumerableArrayIndexKeys = (
   const count = Math.min(
     length,
     MAX_ENUMERATED_OBJECT_KEYS,
-    MAX_PRIORITY_ARRAY_INDEX_KEYS,
+    MAX_PRIORITY_KEYS_PER_OBJECT,
     budget.remainingKeys,
   );
   budget.remainingKeys -= count;
-  const keys: string[] = [];
-  for (let index = 0; index < count; index += 1) keys.push(String(index));
+  const leadingCount = Math.ceil(count / 2);
+  const trailingCount = count - leadingCount;
+  const keys = Array.from({ length: leadingCount }, (_, index) =>
+    String(index),
+  );
+  for (let index = length - trailingCount; index < length; index += 1) {
+    keys.push(String(index));
+  }
   return { incomplete: length > count, keys };
+};
+
+const getEnumerablePriorityObjectKeys = (
+  value: object,
+  budget: OwnKeyScanBudget,
+): EnumeratedKeys => {
+  if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
+  let ownKeys: PropertyKey[];
+  try {
+    ownKeys = Reflect.ownKeys(value);
+  } catch {
+    return { incomplete: true, keys: [] };
+  }
+
+  const count = Math.min(
+    ownKeys.length,
+    MAX_PRIORITY_KEYS_PER_OBJECT,
+    budget.remainingKeys,
+  );
+  budget.remainingKeys -= count;
+  const leadingCount = Math.ceil(count / 2);
+  const trailingCount = count - leadingCount;
+  const indexes = Array.from({ length: leadingCount }, (_, index) => index);
+  for (
+    let index = ownKeys.length - trailingCount;
+    index < ownKeys.length;
+    index += 1
+  ) {
+    indexes.push(index);
+  }
+
+  const keys: string[] = [];
+  let incomplete = ownKeys.length > count;
+  for (const index of indexes) {
+    const key = ownKeys[index];
+    if (typeof key !== 'string') continue;
+    const descriptor = getOwnPropertyDescriptorSafely(value, key);
+    if (descriptor === null || descriptor === undefined) {
+      incomplete = true;
+      continue;
+    }
+    if (descriptor.enumerable === true) keys.push(key);
+  }
+  return { incomplete, keys };
 };
 
 const isPriorityDiagnosticObject = (value: object) =>
@@ -778,7 +839,7 @@ type PriorityPath = Readonly<{
 
 const getPrioritizedKeysByObject = (
   root: object,
-  ownKeyScanBudget: OwnKeyScanBudget,
+  priorityScanBudget: OwnKeyScanBudget,
   rootEnumeratedKeys: EnumeratedKeys,
 ) => {
   const prioritizedKeys = new WeakMap<object, Set<string>>();
@@ -850,11 +911,15 @@ const getPrioritizedKeysByObject = (
     }
 
     const isArray = isArrayValue(value);
-    const enumerated = isArray
-      ? getEnumerableArrayIndexKeys(value, ownKeyScanBudget)
-      : (enumeratedKeysByObject.get(value) ??
-        getEnumerableOwnKeys(value, ownKeyScanBudget));
-    if (!isArray && !enumeratedKeysByObject.has(value)) {
+    let enumerated: EnumeratedKeys;
+    if (value === root) {
+      enumerated = rootEnumeratedKeys;
+    } else if (isArray) {
+      enumerated = getEnumerableArrayIndexKeys(value, priorityScanBudget);
+    } else {
+      enumerated = getEnumerablePriorityObjectKeys(value, priorityScanBudget);
+    }
+    if (!isArray && value !== root && !enumerated.incomplete) {
       enumeratedKeysByObject.set(value, enumerated);
     }
     for (const key of enumerated.keys) {
@@ -1261,11 +1326,20 @@ const sanitizeDetails = (
   rootEnumeratedKeys: EnumeratedKeys,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
+  const priorityKeyAllowance = Math.min(
+    MAX_PRIORITY_SCANNED_TOTAL_KEYS,
+    Math.floor(ownKeyScanBudget.remainingKeys / 2),
+  );
+  const priorityScanBudget = { remainingKeys: priorityKeyAllowance };
+  ownKeyScanBudget.remainingKeys -= priorityKeyAllowance;
   const priorityDiscovery = getPrioritizedKeysByObject(
     details,
-    ownKeyScanBudget,
+    priorityScanBudget,
     rootEnumeratedKeys,
   );
+  // Discovery and sanitization remain independently usable without increasing
+  // the original total scan ceiling.
+  ownKeyScanBudget.remainingKeys += priorityScanBudget.remainingKeys;
   const budget: SanitizationBudget = {
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
     ownKeyScanBudget,

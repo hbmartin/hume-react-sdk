@@ -960,6 +960,54 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('finds an appended array error beyond the leading discovery sample', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const values: unknown[] = Array.from({ length: 65 }, (_, index) => index);
+    values[64] = new Error('Appended cleanup failure');
+
+    reporter.emit({
+      ...input,
+      details: {
+        noise: Array.from({ length: 10_000 }, (_, index) => index),
+        values,
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['values']).toMatchObject([
+      ...Array.from({ length: 64 }, (_, index) => index),
+      { message: 'Appended cleanup failure' },
+    ]);
+  });
+
+  it('does not let a wide object frontier hide a later nested error', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details: Record<string, unknown> = {
+      noise: Array.from({ length: 10_000 }, (_, index) => index),
+    };
+    for (let index = 0; index < 256; index += 1) {
+      details[`container-${index}`] = { payload: [] };
+    }
+    details['lateTarget'] = {
+      result: { failure: new Error('Late wide-frontier failure') },
+    };
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['lateTarget']).toMatchObject({
+      result: { failure: { message: 'Late wide-frontier failure' } },
+    });
+  });
+
   it('discovers nested errors beneath a priority key', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1296,8 +1344,8 @@ describe('voice diagnostics reporter', () => {
       },
     });
 
-    expect(firstOwnKeys).toHaveBeenCalledOnce();
-    expect(secondOwnKeys).not.toHaveBeenCalled();
+    expect(firstOwnKeys).toHaveBeenCalledTimes(2);
+    expect(secondOwnKeys).toHaveBeenCalledOnce();
     expect(descriptorReads).toBeLessThanOrEqual(16_000);
     expect(events[0]?.detailsTruncated).toBe(true);
   });
@@ -1333,7 +1381,7 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
-  it('counts symbol keys against the own-key scan limit', () => {
+  it('bounds symbol-key work across discovery and sanitization', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1361,7 +1409,8 @@ describe('voice diagnostics reporter', () => {
 
     reporter.emit({ ...input, details: { nested } });
 
-    expect(descriptorReads).not.toContain(trailingKey);
+    expect(descriptorReads).toContain(trailingKey);
+    expect(descriptorReads.length).toBeLessThanOrEqual(16_000);
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(events[0]?.details['nested']).toEqual({
       __humeDiagnosticTruncated: true,

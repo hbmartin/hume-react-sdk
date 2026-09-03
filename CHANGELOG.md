@@ -49,6 +49,12 @@ recoverable notes.
   recognize equivalent errors created by another installed copy of the package.
   Socket parsing errors also retain their originating exception as `cause`.
 
+#### Changed
+
+- **Breaking.** Runtime support now requires Node.js 22 or newer, and the React
+  and React DOM peer dependency floors are now 19. Upgrade Node.js and React
+  before installing this release.
+
 #### Fixed
 
 - Extensive connection, microphone, and audio-player lifecycle hardening.
@@ -58,9 +64,11 @@ recoverable notes.
   returns the provider to `disconnected` instead of hanging; and final
   microphone data is preserved on stop.
 - Tool results sent from the client are now surfaced in `messages`.
-- Socket message parsing now distinguishes malformed JSON from valid JSON with
-  an unknown message type, reports unsupported input types precisely, and
-  accepts `Blob`, `ArrayBuffer`, and typed-array binary frames.
+- **Breaking.** Socket message parsing now reports malformed JSON as
+  `SocketFailedToParseMessageError` instead of `SocketUnknownMessageError`.
+  Update handlers that distinguish these classes. Parsing also reports
+  unsupported input types precisely and accepts `Blob`, `ArrayBuffer`, and
+  typed-array binary frames.
 - The deprecated `useSoundPlayer`, `FftStore`, and `useFftSubscription`
   compatibility surface remains available while consumers migrate to
   `VoiceProvider`, `usePlayerFft`, and `useMicFft`.
@@ -92,6 +100,12 @@ recoverable notes.
   queued open request has been applied.
 - `cancelPendingOpen()`, which withdraws an open request that is still waiting
   for the iframe to become ready.
+
+#### Changed
+
+- **Breaking.** Both packages now require Node.js 22 or newer.
+  `@humeai/voice-embed-react` also raises its React and React DOM peer dependency
+  floors to 19. Upgrade those runtimes before installing this release.
 
 #### Fixed
 

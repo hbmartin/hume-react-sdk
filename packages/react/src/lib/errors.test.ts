@@ -81,4 +81,82 @@ describe('public error guards', () => {
     expect(error).not.toBeInstanceOf(identity.ownConstructor);
     expect(identity.guard(error)).toBe(true);
   });
+
+  it.each([
+    isAudioDeviceSwitchError,
+    isConcurrentConnectAuthError,
+    isSocketFailedToParseMessageError,
+    isSocketUnknownMessageError,
+  ])('does not throw for hostile identity accessors', (guard) => {
+    const error = Object.defineProperties(
+      {},
+      {
+        code: {
+          get() {
+            throw new Error('code getter should not run');
+          },
+        },
+        message: {
+          get() {
+            throw new Error('message getter should not run');
+          },
+        },
+        name: {
+          get() {
+            throw new Error('name getter should not run');
+          },
+        },
+      },
+    );
+
+    expect(() => guard(error)).not.toThrow();
+    expect(guard(error)).toBe(false);
+  });
+
+  it('does not invoke audio-device identity accessors', () => {
+    const error = Object.defineProperties(
+      {
+        code: 'audio_device_switch',
+        message: 'switch failed',
+        name: 'AudioDeviceSwitchError',
+      },
+      {
+        cause: {
+          get() {
+            throw new Error('cause getter should not run');
+          },
+        },
+        kind: {
+          get() {
+            throw new Error('kind getter should not run');
+          },
+        },
+        reason: {
+          get() {
+            throw new Error('reason getter should not run');
+          },
+        },
+      },
+    );
+
+    expect(isAudioDeviceSwitchError(error)).toBe(false);
+  });
+
+  it('does not throw when instanceof prototype traversal fails', () => {
+    const error = new Proxy(
+      {
+        code: 'unknown_message_type',
+        message: 'Unknown message type.',
+        name: 'SocketUnknownMessageError',
+      },
+      {
+        getPrototypeOf() {
+          throw new Error('prototype lookup failed');
+        },
+      },
+    );
+
+    expect(() => isSocketUnknownMessageError(error)).not.toThrow();
+    expect(isSocketUnknownMessageError(error)).toBe(true);
+  });
 });

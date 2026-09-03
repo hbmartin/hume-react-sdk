@@ -1,4 +1,13 @@
 import type { AudioDeviceKind } from '../models/connect-options';
+import { getDataProperty } from '../utils/aggregateErrors';
+
+const checkInstanceSafely = (check: () => boolean): boolean => {
+  try {
+    return check();
+  } catch {
+    return false;
+  }
+};
 
 const hasErrorIdentity = (
   error: unknown,
@@ -9,15 +18,10 @@ const hasErrorIdentity = (
     return false;
   }
 
-  const candidate = error as {
-    code?: unknown;
-    message?: unknown;
-    name?: unknown;
-  };
   return (
-    candidate.name === name &&
-    candidate.code === code &&
-    typeof candidate.message === 'string'
+    getDataProperty(error, 'name')?.value === name &&
+    getDataProperty(error, 'code')?.value === code &&
+    typeof getDataProperty(error, 'message')?.value === 'string'
   );
 };
 
@@ -70,29 +74,27 @@ const hasAudioDeviceSwitchErrorIdentity = (error: unknown): boolean => {
     return false;
   }
 
-  const candidate = error as typeof error & {
-    cause?: unknown;
-    kind?: unknown;
-    reason?: unknown;
-  };
-  const hasKnownKind =
-    candidate.kind === 'audioinput' || candidate.kind === 'audiooutput';
+  const kind = getDataProperty(error, 'kind')?.value;
+  const reason = getDataProperty(error, 'reason')?.value;
+  const hasKnownKind = kind === 'audioinput' || kind === 'audiooutput';
   const hasKnownReason =
-    candidate.reason === 'not_connected' ||
-    candidate.reason === 'unsupported' ||
-    candidate.reason === 'permission_denied' ||
-    candidate.reason === 'device_not_found' ||
-    candidate.reason === 'switch_failed' ||
-    candidate.reason === 'interrupted';
+    reason === 'not_connected' ||
+    reason === 'unsupported' ||
+    reason === 'permission_denied' ||
+    reason === 'device_not_found' ||
+    reason === 'switch_failed' ||
+    reason === 'interrupted';
 
-  return hasKnownKind && hasKnownReason && 'cause' in candidate;
+  return (
+    hasKnownKind && hasKnownReason && getDataProperty(error, 'cause') !== null
+  );
 };
 
 /** Check whether an unknown value is an audio device switch error. */
 export const isAudioDeviceSwitchError = (
   error: unknown,
 ): error is AudioDeviceSwitchError =>
-  error instanceof AudioDeviceSwitchError ||
+  checkInstanceSafely(() => error instanceof AudioDeviceSwitchError) ||
   hasAudioDeviceSwitchErrorIdentity(error);
 
 /**
@@ -152,8 +154,7 @@ const hasConcurrentConnectAuthErrorIdentity = (error: unknown): boolean => {
       error,
       'ConcurrentConnectAuthError',
       'concurrent_connect_auth',
-    ) &&
-    (error as typeof error & { reason?: unknown }).reason === 'auth_conflict'
+    ) && getDataProperty(error, 'reason')?.value === 'auth_conflict'
   );
 };
 
@@ -161,7 +162,7 @@ const hasConcurrentConnectAuthErrorIdentity = (error: unknown): boolean => {
 export const isConcurrentConnectAuthError = (
   error: unknown,
 ): error is ConcurrentConnectAuthError =>
-  error instanceof ConcurrentConnectAuthError ||
+  checkInstanceSafely(() => error instanceof ConcurrentConnectAuthError) ||
   hasConcurrentConnectAuthErrorIdentity(error);
 
 const withErrorDetail = (summary: string, detail?: string): string => {
@@ -197,7 +198,7 @@ export const isSocketUnknownMessageError = (
   err: unknown,
 ): err is SocketUnknownMessageError => {
   return (
-    err instanceof SocketUnknownMessageError ||
+    checkInstanceSafely(() => err instanceof SocketUnknownMessageError) ||
     hasErrorIdentity(err, 'SocketUnknownMessageError', 'unknown_message_type')
   );
 };
@@ -232,7 +233,7 @@ export const isSocketFailedToParseMessageError = (
   err: unknown,
 ): err is SocketFailedToParseMessageError => {
   return (
-    err instanceof SocketFailedToParseMessageError ||
+    checkInstanceSafely(() => err instanceof SocketFailedToParseMessageError) ||
     hasErrorIdentity(
       err,
       'SocketFailedToParseMessageError',

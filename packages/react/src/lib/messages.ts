@@ -1,6 +1,7 @@
 import { type Hume } from 'hume';
 import * as HumeSerialization from 'hume/serialization';
 
+import { getDataProperty } from '../utils/aggregateErrors';
 import {
   isBinaryMessageData,
   type ParsedAudioMessage,
@@ -53,8 +54,12 @@ const describeMessageData = (data: unknown): string => {
   }
 
   if (typeof data === 'object') {
-    const constructorName = (data as { constructor?: { name?: unknown } })
-      .constructor?.name;
+    const constructorValue = getDataProperty(data, 'constructor')?.value;
+    const constructorName =
+      (typeof constructorValue === 'object' && constructorValue !== null) ||
+      typeof constructorValue === 'function'
+        ? getDataProperty(constructorValue, 'name')?.value
+        : undefined;
     if (typeof constructorName === 'string' && constructorName !== '') {
       return constructorName;
     }

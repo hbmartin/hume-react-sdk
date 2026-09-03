@@ -7,13 +7,63 @@ export type ParsedAudioMessage = {
 
 export type BinaryMessageData = Blob | ArrayBuffer | ArrayBufferView;
 
+// oxlint-disable-next-line typescript/unbound-method -- invoked with the candidate receiver via Reflect.apply
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+)?.get;
+
+const blobSizeGetter = (() => {
+  if (typeof Blob === 'undefined') return undefined;
+  // oxlint-disable-next-line typescript/unbound-method -- invoked with the candidate receiver via Reflect.apply
+  return Object.getOwnPropertyDescriptor(Blob.prototype, 'size')?.get;
+})();
+
+const hasArrayBufferBrand = (data: unknown): data is ArrayBuffer => {
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    arrayBufferByteLengthGetter === undefined
+  ) {
+    return false;
+  }
+  try {
+    Reflect.apply(arrayBufferByteLengthGetter, data, []);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const hasBlobBrand = (data: unknown): data is Blob => {
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    blobSizeGetter === undefined
+  ) {
+    return false;
+  }
+  try {
+    Reflect.apply(blobSizeGetter, data, []);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isArrayBufferView = (data: unknown): data is ArrayBufferView => {
+  try {
+    return ArrayBuffer.isView(data);
+  } catch {
+    return false;
+  }
+};
+
 export const isBinaryMessageData = (
   data: unknown,
 ): data is BinaryMessageData => {
   return (
-    (typeof Blob !== 'undefined' && data instanceof Blob) ||
-    data instanceof ArrayBuffer ||
-    ArrayBuffer.isView(data)
+    hasBlobBrand(data) || hasArrayBufferBrand(data) || isArrayBufferView(data)
   );
 };
 
@@ -27,11 +77,11 @@ export const parseAudioMessage = async (
   data: BinaryMessageData,
 ): Promise<ParsedAudioMessage> => {
   let buffer: ArrayBuffer;
-  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+  if (hasBlobBrand(data)) {
     buffer = await data.arrayBuffer();
-  } else if (data instanceof ArrayBuffer) {
+  } else if (hasArrayBufferBrand(data)) {
     buffer = data;
-  } else if (ArrayBuffer.isView(data)) {
+  } else if (isArrayBufferView(data)) {
     buffer = copyViewToArrayBuffer(data);
   } else {
     throw new TypeError('Unsupported binary message data.');
