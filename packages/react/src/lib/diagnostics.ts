@@ -290,6 +290,10 @@ const MAX_SANITIZED_STRING_REDACTION_WORK = 262_144;
 const MAX_SANITIZED_TOTAL_REDACTION_WORK =
   MAX_SANITIZED_STRING_REDACTION_WORK * 4;
 const MAX_ENUMERATED_OBJECT_KEYS = MAX_SANITIZED_ENTRIES;
+// Non-enumerable properties do not consume the result-entry budget, but their
+// descriptors still execute proxy traps. Keep that inspection work separately
+// bounded while leaving enough headroom for ordinary objects with hidden state.
+const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
 const MAX_PRIORITY_SEARCH_NODES = 128;
 const PRIORITY_DIAGNOSTIC_KEYS = [
@@ -342,8 +346,6 @@ type BoundedRedaction = Readonly<{
 /** Registered secrets indexed for leftmost-longest matching; null when empty. */
 type RedactionMatcher = Readonly<{
   candidatesByFirstCodeUnit: ReadonlyMap<string, readonly string[]>;
-  /** Distinct code units that begin at least one secret. */
-  firstCodeUnits: readonly string[];
 }> | null;
 
 const createRedactionMatcher = (
@@ -363,18 +365,17 @@ const createRedactionMatcher = (
   }
   return {
     candidatesByFirstCodeUnit,
-    firstCodeUnits: [...candidatesByFirstCodeUnit.keys()],
   };
 };
 
 /**
  * Redact only the source prefix that can contribute to the bounded output.
  *
- * Literal spans are located and copied natively, so `maximumWork` meters only
- * the explicit code-unit comparisons spent matching candidate secrets. That
- * bounds failed candidate matching without charging ordinary text against the
- * budget. When the work runs out mid-comparison the result stops before the
- * unresolved candidate so no secret prefix is exposed.
+ * A first-code-unit index locates candidate starts without iterating every
+ * registered secret. `maximumWork` meters only the explicit code-unit
+ * comparisons spent matching candidates, so ordinary text does not consume
+ * the budget. When the work runs out mid-comparison the result stops before
+ * the unresolved candidate so no secret prefix is exposed.
  */
 const redactSecretsWithinLimits = (
   value: string,
@@ -390,33 +391,32 @@ const redactSecretsWithinLimits = (
       value: value.slice(0, consumedLength),
     };
   }
-  // Each literal code unit yields one output code unit and each matched secret
-  // yields REDACTED for at most one more code unit than its comparisons, so
-  // the cursor can never pass this prefix. Searching within it keeps a huge
-  // input from being scanned past the point where anything can be kept.
+  // Each literal output advances the source cursor once, and each matched
+  // secret advances it by one more than its comparisons. The cursor therefore
+  // cannot pass this prefix. Searching within it keeps a huge input from being
+  // scanned past the point where anything can be retained.
   const searchLimit = maximumOutputLength * 2 + maximumWork;
   const searchable =
     value.length > searchLimit ? value.slice(0, searchLimit) : value;
-  const { candidatesByFirstCodeUnit, firstCodeUnits } = matcher;
-  // The next known position of each first code unit, refreshed only once the
-  // cursor passes it, so every native scan covers a span of the source once.
-  const nextCandidateIndexes = firstCodeUnits.map(() => -1);
+  const { candidatesByFirstCodeUnit } = matcher;
 
   let cursor = 0;
   let consumedWork = 0;
   let sanitized = '';
   while (cursor < searchable.length && sanitized.length < maximumOutputLength) {
-    let candidateIndex = searchable.length;
-    let unit = 0;
-    for (const firstCodeUnit of firstCodeUnits) {
-      let next = nextCandidateIndexes[unit] ?? -1;
-      if (next < cursor) {
-        next = searchable.indexOf(firstCodeUnit, cursor);
-        if (next === -1) next = searchable.length;
-        nextCandidateIndexes[unit] = next;
-      }
-      if (next < candidateIndex) candidateIndex = next;
-      unit += 1;
+    // Scan candidate starts once in source order. Limiting the scan to the
+    // literal text that can still fit makes this work independent of how many
+    // distinct first code units are registered.
+    const literalLimit = Math.min(
+      searchable.length,
+      cursor + maximumOutputLength - sanitized.length,
+    );
+    let candidateIndex = cursor;
+    while (
+      candidateIndex < literalLimit &&
+      !candidatesByFirstCodeUnit.has(searchable.charAt(candidateIndex))
+    ) {
+      candidateIndex += 1;
     }
     if (candidateIndex > cursor) {
       const literalLength = Math.min(
@@ -425,8 +425,13 @@ const redactSecretsWithinLimits = (
       );
       sanitized += searchable.slice(cursor, cursor + literalLength);
       cursor += literalLength;
-      // Stop when the output filled mid-span or the search prefix ran out.
-      if (cursor < candidateIndex || cursor === searchable.length) break;
+      // Stop when the output filled or the search prefix ran out.
+      if (
+        sanitized.length === maximumOutputLength ||
+        cursor === searchable.length
+      ) {
+        break;
+      }
     }
 
     const firstCodeUnit = searchable.charAt(cursor);
@@ -439,6 +444,9 @@ const redactSecretsWithinLimits = (
           return { consumedWork, sourceTruncated: true, value: sanitized };
         }
         consumedWork += 1;
+        // `searchable` is a prefix of `value`, so cursor offsets stay aligned.
+        // Use the original string to keep match lookahead independent of the
+        // bounded candidate-start scan above.
         if (value.charCodeAt(cursor + offset) !== secret.charCodeAt(offset)) {
           continue candidateSearch;
         }
@@ -694,16 +702,37 @@ const isTerminalDiagnosticObject = (value: object) =>
 type EnumeratedKeys = { incomplete: boolean; keys: string[] };
 
 const getEnumerableOwnKeys = (value: object): EnumeratedKeys => {
-  let keys: string[];
+  let ownKeys: PropertyKey[];
   try {
-    keys = Object.keys(value);
+    ownKeys = Reflect.ownKeys(value);
   } catch {
     return { incomplete: true, keys: [] };
   }
-  if (keys.length <= MAX_ENUMERATED_OBJECT_KEYS) {
-    return { incomplete: false, keys };
+
+  const keys: string[] = [];
+  let scannedKeys = 0;
+  let incomplete = false;
+  for (const key of ownKeys) {
+    if (typeof key !== 'string') continue;
+    if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    scannedKeys += 1;
+    const descriptor = getOwnPropertyDescriptorSafely(value, key);
+    if (descriptor === null || descriptor === undefined) {
+      // One unavailable key must not discard siblings that can still be read.
+      incomplete = true;
+      continue;
+    }
+    if (descriptor.enumerable !== true) continue;
+    if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    keys.push(key);
   }
-  return { incomplete: true, keys: keys.slice(0, MAX_ENUMERATED_OBJECT_KEYS) };
+  return { incomplete, keys };
 };
 
 const getEnumerableArrayIndexKeys = (value: unknown[]): EnumeratedKeys => {

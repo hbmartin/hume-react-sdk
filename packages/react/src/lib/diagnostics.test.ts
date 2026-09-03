@@ -1190,6 +1190,42 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['nested']).toEqual({ own: 'preserved' });
   });
 
+  it('bounds descriptor checks for proxies with many non-enumerable keys', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const reportedKeyCount = 25_000;
+    const reportedKeys = Array.from(
+      { length: reportedKeyCount },
+      (_, index) => `hidden-${index}`,
+    );
+    let descriptorReads = 0;
+    const nested = new Proxy(
+      {},
+      {
+        ownKeys: () => reportedKeys,
+        getOwnPropertyDescriptor(target, key) {
+          descriptorReads += 1;
+          if (typeof key === 'string' && key.startsWith('hidden-')) {
+            return { configurable: true, enumerable: false, value: 1 };
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(descriptorReads).toBeGreaterThan(0);
+    expect(descriptorReads).toBeLessThan(reportedKeyCount);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
   it('does not enumerate terminal Date and binary values during discovery', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1281,6 +1317,34 @@ describe('voice diagnostics reporter', () => {
           if (key === 'unstable') {
             unstableDescriptorReads += 1;
             if (unstableDescriptorReads === 2) return undefined;
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details).toEqual({
+      __humeDiagnosticTruncated: true,
+      first: 1,
+      later: 3,
+    });
+  });
+
+  it('keeps top-level siblings when a descriptor check throws during enumeration', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details = new Proxy(
+      { first: 1, unstable: 2, later: 3 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'unstable') {
+            throw new Error('own-property check failed');
           }
           return Reflect.getOwnPropertyDescriptor(target, key);
         },
@@ -1506,6 +1570,31 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
+  it('does not inspect a candidate after literal output fills', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const oversizedSecret = 's'.repeat(300_000);
+    const outputThenSecret = `${'x'.repeat(16_384)}${oversizedSecret}`;
+    reporter.beginConnection(oversizedSecret);
+
+    reporter.emit({
+      ...input,
+      details: {
+        one: outputThenSecret,
+        two: outputThenSecret,
+        three: outputThenSecret,
+        four: outputThenSecret,
+        status: 'preserved',
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['status']).toBe('preserved');
+  });
+
   it('keeps later properties when one string exhausts its redaction work', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1618,6 +1707,26 @@ describe('voice diagnostics reporter', () => {
       wasClean: false,
       reason: 'abnormal closure',
     });
+  });
+
+  it('bounds candidate-start lookup with many distinct secret prefixes', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const firstCodeUnits = Array.from({ length: 16_384 }, (_, index) =>
+      String.fromCharCode(0x1000 + index),
+    );
+    for (const firstCodeUnit of firstCodeUnits) {
+      reporter.addRedactionValue(`${firstCodeUnit}\uffff`);
+    }
+    const message = firstCodeUnits.join('');
+
+    reporter.emit({ ...input, details: { message } });
+
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(events[0]?.details['message']).toBe(message);
   });
 
   it('bounds aggregate diagnostic string content', () => {
