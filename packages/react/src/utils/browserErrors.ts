@@ -17,8 +17,10 @@ const getNativeDomExceptionStringGetter = (
 ): DomExceptionStringGetter | undefined => {
   try {
     if (typeof DOMException === 'undefined') return undefined;
+    const visited = new WeakSet<object>();
     let current: object | null = DOMException.prototype;
-    while (current !== null) {
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
       const descriptor = Object.getOwnPropertyDescriptor(current, key);
       // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
       if (descriptor !== undefined) return descriptor.get;

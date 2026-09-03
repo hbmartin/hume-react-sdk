@@ -819,6 +819,16 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['chat']).toBe('[REDACTED]');
   });
 
+  it('keeps a truncated chat identifier within the per-string limit', () => {
+    const reporter = createVoiceDiagnosticsReporter(() => false);
+
+    reporter.setChatId('x'.repeat(20_000));
+
+    const chatId = reporter.getCorrelation().chatId;
+    expect(chatId).toHaveLength(16_384);
+    expect(chatId).toMatch(/\[Truncated\]$/);
+  });
+
   it('includes opted-in content while continuing to redact credentials', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1226,6 +1236,82 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('shares the own-key scan bound across every object in one emit', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const reportedKeys = Array.from(
+      { length: 16_000 },
+      (_, index) => `hidden-${index}`,
+    );
+    let descriptorReads = 0;
+    const createNested = (ownKeys: () => string[]) =>
+      new Proxy(
+        {},
+        {
+          ownKeys,
+          getOwnPropertyDescriptor(_target, key) {
+            if (typeof key === 'string' && key.startsWith('hidden-')) {
+              descriptorReads += 1;
+            }
+            return { configurable: true, enumerable: false, value: 1 };
+          },
+        },
+      );
+    const firstOwnKeys = vi.fn(() => reportedKeys);
+    const secondOwnKeys = vi.fn(() => reportedKeys);
+
+    reporter.emit({
+      ...input,
+      details: {
+        first: createNested(firstOwnKeys),
+        second: createNested(secondOwnKeys),
+      },
+    });
+
+    expect(firstOwnKeys).toHaveBeenCalledOnce();
+    expect(secondOwnKeys).not.toHaveBeenCalled();
+    expect(descriptorReads).toBeLessThanOrEqual(16_000);
+    expect(events[0]?.detailsTruncated).toBe(true);
+  });
+
+  it('counts symbol keys against the own-key scan limit', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const trailingKey = 'after-symbol-limit';
+    const reportedKeys: (string | symbol)[] = [
+      ...Array.from({ length: 16_000 }, (_, index) => Symbol(index)),
+      trailingKey,
+    ];
+    const descriptorReads: PropertyKey[] = [];
+    const nested = new Proxy(
+      {},
+      {
+        ownKeys: () => reportedKeys,
+        getOwnPropertyDescriptor(target, key) {
+          descriptorReads.push(key);
+          if (key === trailingKey) {
+            return { configurable: true, enumerable: true, value: 'omitted' };
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(descriptorReads).not.toContain(trailingKey);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
   it('does not enumerate terminal Date and binary values during discovery', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1246,11 +1332,9 @@ describe('voice diagnostics reporter', () => {
     expect(binaryOwnKeys).not.toHaveBeenCalled();
     expect(events[0]?.details).toMatchObject({
       binary: '[REDACTED]',
+      date: 'Invalid Date',
       when: '1970-01-01T00:00:00.000Z',
     });
-    // A proxied Date has no [[DateValue]] slot, so it can only serialize
-    // through the fallback; what matters is that it stayed a string.
-    expect(typeof events[0]?.details['date']).toBe('string');
   });
 
   it('does not enumerate array keys during discovery', () => {
@@ -1330,6 +1414,59 @@ describe('voice diagnostics reporter', () => {
       __humeDiagnosticTruncated: true,
       first: 1,
       later: 3,
+    });
+  });
+
+  it('keeps a priority key that appears after its initial merge probe', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let errorDescriptorReads = 0;
+    const details = new Proxy(
+      { error: 'appeared during enumeration' },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'error' && ++errorDescriptorReads === 1) return undefined;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.details).toEqual({
+      error: 'appeared during enumeration',
+    });
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+  });
+
+  it('marks a vanished snapshotted priority key incomplete', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let errorDescriptorReads = 0;
+    const nested = new Proxy(
+      { error: 'present only during enumeration' },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === 'error') {
+            errorDescriptorReads += 1;
+            if (errorDescriptorReads !== 2) return undefined;
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
     });
   });
 
