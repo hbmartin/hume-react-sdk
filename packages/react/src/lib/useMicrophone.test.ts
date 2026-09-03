@@ -349,12 +349,22 @@ describe('useMicrophone', () => {
     expect(
       result.current.fftStore.getSnapshot().some((value) => value > 0),
     ).toBe(true);
+    const onFftChange = vi.fn();
+    const unsubscribe = result.current.fftStore.subscribe(onFftChange);
 
     act(() => result.current.mute());
 
     expect(
       result.current.fftStore.getSnapshot().every((value) => value === 0),
     ).toBe(true);
+    expect(onFftChange).toHaveBeenCalledOnce();
+    const mutedSnapshot = result.current.fftStore.getSnapshot();
+
+    act(() => result.current.mute());
+
+    expect(onFftChange).toHaveBeenCalledOnce();
+    expect(result.current.fftStore.getSnapshot()).toBe(mutedSnapshot);
+    unsubscribe();
   });
 
   it('does not let the analyzer republish FFT data while muted', () => {
@@ -729,6 +739,101 @@ describe('useMicrophone', () => {
     await act(() => result.current.stop());
     expect(nextCandidateTrackStop).toHaveBeenCalledOnce();
     consoleWarn.mockRestore();
+  });
+
+  it('applies mute state to a retained stream whose cleanup failed', async () => {
+    const oldTrackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('old track cleanup failed');
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('old track cleanup retry failed');
+      })
+      .mockImplementationOnce(() => undefined);
+    const oldTrack = {
+      enabled: true,
+      stop: oldTrackStop,
+    } as unknown as MediaStreamTrack;
+    const candidateTrackStop = vi.fn();
+    const candidateTrack = {
+      enabled: true,
+      stop: candidateTrackStop,
+    } as unknown as MediaStreamTrack;
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(createStream([oldTrack]), context);
+
+    await act(() =>
+      result.current.replace(createStream([candidateTrack]), context),
+    );
+    act(() => result.current.mute());
+
+    expect(oldTrack.enabled).toBe(false);
+    expect(candidateTrack.enabled).toBe(false);
+    expect(result.current.isMuted).toBe(true);
+
+    await act(() => result.current.stop());
+    expect(oldTrackStop).toHaveBeenCalledTimes(3);
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    consoleWarn.mockRestore();
+  });
+
+  it('keeps the active stream muted when a retained stream cannot be muted', async () => {
+    const oldTrackStop = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('old track cleanup failed');
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('old track cleanup retry failed');
+      })
+      .mockImplementationOnce(() => undefined);
+    const oldTrack = {
+      enabled: true,
+      stop: oldTrackStop,
+    } as unknown as MediaStreamTrack;
+    const oldStream = {
+      getTracks: () => [oldTrack],
+      getAudioTracks: () => {
+        throw new Error('retained track enumeration failed');
+      },
+    } as unknown as MediaStream;
+    const candidateTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const { result } = renderMicrophone({ diagnostics });
+    const context = createAudioContext();
+    result.current.start(oldStream, context);
+
+    await act(() =>
+      result.current.replace(createStream([candidateTrack]), context),
+    );
+    act(() => result.current.mute());
+
+    expect(candidateTrack.enabled).toBe(false);
+    expect(result.current.isMuted).toBe(true);
+    expect(events.at(-1)).toMatchObject({
+      level: 'warn',
+      category: 'microphone',
+      name: 'control.change_failed',
+      details: {
+        control: 'microphone_mute',
+        value: true,
+        error: { message: 'retained track enumeration failed' },
+      },
+    });
+
+    await act(() => result.current.stop());
   });
 
   it('does not retry an older retained stream twice when the current stream also fails', async () => {
@@ -1261,6 +1366,83 @@ describe('useMicrophone', () => {
     await waitFor(() =>
       expect(onAudioCaptured).toHaveBeenCalledWith(stillActiveBuffer),
     );
+  });
+
+  it('releases a replacement candidate when no MIME type is available', async () => {
+    vi.stubGlobal('MediaRecorder', undefined);
+    const candidateTrackStop = vi.fn();
+    const { result } = renderMicrophone();
+
+    await act(async () => {
+      await expect(
+        result.current.replace(
+          createStream([
+            {
+              enabled: true,
+              stop: candidateTrackStop,
+            } as unknown as MediaStreamTrack,
+          ]),
+        ),
+      ).rejects.toThrow('No MimeType specified');
+    });
+
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('releases a replacement candidate when the microphone is not recording', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const candidateTrackStop = vi.fn();
+    const { result } = renderMicrophone();
+
+    await act(async () => {
+      await expect(
+        result.current.replace(
+          createStream([
+            {
+              enabled: true,
+              stop: candidateTrackStop,
+            } as unknown as MediaStreamTrack,
+          ]),
+        ),
+      ).rejects.toThrow('The microphone is not recording.');
+    });
+
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('releases a replacement candidate when the audio context changes', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const oldTrackStop = vi.fn();
+    const candidateTrackStop = vi.fn();
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(
+      createStream([
+        {
+          enabled: true,
+          stop: oldTrackStop,
+        } as unknown as MediaStreamTrack,
+      ]),
+      context,
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.replace(
+          createStream([
+            {
+              enabled: true,
+              stop: candidateTrackStop,
+            } as unknown as MediaStreamTrack,
+          ]),
+          createAudioContext(),
+        ),
+      ).rejects.toThrow('The microphone audio context changed.');
+    });
+
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(oldTrackStop).not.toHaveBeenCalled();
+    await act(() => result.current.stop());
   });
 
   it('reports an error and refuses to record when MediaRecorder is absent', () => {

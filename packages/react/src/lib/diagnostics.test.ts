@@ -1233,7 +1233,7 @@ describe('voice diagnostics reporter', () => {
     expect(descriptorReads).toBeLessThan(20_000);
   });
 
-  it('charges fixed priority probes against the shared key-scan budget', () => {
+  it('bounds fixed priority probes and ordinary key scans across an event', () => {
     const reporter = createVoiceDiagnosticsReporter(() => ({ logger: false }));
     const priorityKeys = new Set(['error', 'errors', 'failures', 'cause']);
     let priorityProbeReads = 0;
@@ -1297,7 +1297,7 @@ describe('voice diagnostics reporter', () => {
       },
     });
 
-    expect(priorityProbeReads + hiddenKeyReads).toBeLessThanOrEqual(16_000);
+    expect(priorityProbeReads + hiddenKeyReads).toBeLessThanOrEqual(24_000);
   });
 
   it('keeps AggregateError errors array-shaped when its budget is exhausted', () => {
@@ -1330,6 +1330,33 @@ describe('voice diagnostics reporter', () => {
     expect(Array.isArray(serializedErrors)).toBe(true);
     expect((serializedErrors as unknown[]).at(-1)).toEqual({
       __humeDiagnosticTruncated: true,
+    });
+  });
+
+  it('prioritizes a trailing AggregateError before its parent array exhausts the object budget', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const aggregate = new AggregateError(
+      [new Error('Nested cleanup failure')],
+      'Aggregate cleanup failure',
+    );
+
+    reporter.emit({
+      ...input,
+      details: {
+        values: [...Array.from({ length: 997 }, () => ({})), aggregate],
+      },
+    });
+
+    const values = events[0]?.details['values'];
+    if (!Array.isArray(values)) throw new Error('Expected diagnostic array.');
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(values.at(-1)).toMatchObject({
+      name: 'AggregateError',
+      errors: [{ message: 'Nested cleanup failure' }],
     });
   });
 
@@ -1478,7 +1505,7 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
-  it('shares the own-key scan bound across every object in one emit', () => {
+  it('bounds own-key and priority scans across every object in one emit', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1515,7 +1542,7 @@ describe('voice diagnostics reporter', () => {
 
     expect(firstOwnKeys).toHaveBeenCalledTimes(2);
     expect(secondOwnKeys).toHaveBeenCalledOnce();
-    expect(descriptorReads).toBeLessThanOrEqual(16_000);
+    expect(descriptorReads).toBeLessThanOrEqual(24_000);
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
@@ -1526,7 +1553,7 @@ describe('voice diagnostics reporter', () => {
       onEvent: (event) => events.push(event),
     }));
     const hiddenKeys = Array.from(
-      { length: 7_995 },
+      { length: 15_995 },
       (_, index) => `hidden-${index}`,
     );
     const details = new Proxy(

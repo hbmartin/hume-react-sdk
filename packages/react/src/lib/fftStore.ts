@@ -42,8 +42,13 @@ export class FftStore {
 
   clear(): void {
     this._buffer.fill(0);
-    this._dirty = true;
-    this._flush();
+    this._dirty = false;
+    if (this._snapshot.every((value) => value === 0)) return;
+
+    this._snapshot = EMPTY_FFT;
+    for (const listener of this._listeners) {
+      listener();
+    }
   }
 
   private _scheduleFlush(): void {
