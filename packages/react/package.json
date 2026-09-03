@@ -64,26 +64,24 @@
     "pack": "npm pack"
   },
   "dependencies": {
-    "date-fns": "^3.6.0",
+    "date-fns": "^4.4.0",
     "hume": "0.16.1",
-    "type-fest": "^4.26.0",
-    "zod": "^3.22.4"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@humeai/typescript-config": "workspace:*",
     "@humeai/vitest-config": "workspace:*",
-    "@testing-library/react": "^14.2.2",
-    "@testing-library/react-hooks": "^8.0.1",
+    "@testing-library/react": "^16.3.3",
     "@total-typescript/shoehorn": "^0.1.2",
     "@types/node": "22.20.1",
-    "@types/react": "^18.2.56",
-    "@types/react-dom": "^18.2.19",
-    "jsdom": "^24.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "jsdom": "^30.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsup": "8.5.1",
     "typescript": "7.0.2",
-    "vitest": "^3.2.6"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "react": ">=18.2.0",

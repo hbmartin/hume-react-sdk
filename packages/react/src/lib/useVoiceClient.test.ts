@@ -26,13 +26,15 @@ vi.mock('hume', () => ({
       ToolType: { Function: 'function' },
     },
   },
-  HumeClient: vi.fn(() => ({
-    empathicVoice: {
-      chat: {
-        connect: humeMocks.connect,
+  HumeClient: vi.fn(function HumeClientMock() {
+    return {
+      empathicVoice: {
+        chat: {
+          connect: humeMocks.connect,
+        },
       },
-    },
-  })),
+    };
+  }),
 }));
 
 type SocketHandler = (value: never) => void;

@@ -113,40 +113,48 @@ describe('useSoundPlayer', () => {
       return source;
     });
 
-    globalThis.AudioContext = vi.fn().mockImplementation(() => ({
-      createAnalyser: () => ({
-        fftSize: 2048,
-        frequencyBinCount: 1024,
-        connect: vi.fn(),
-        disconnect: disconnectAnalyserNode,
-        getByteFrequencyData: vi.fn(),
-      }),
-      createGain: () => {
-        const setValueAtTime = vi.fn();
-        gainSetters.push(setValueAtTime);
+    globalThis.AudioContext = vi
+      .fn()
+      .mockImplementation(function AudioContextMock() {
         return {
-          connect: vi.fn(),
-          disconnect: disconnectGainNode,
-          gain: { setValueAtTime },
+          createAnalyser: () => ({
+            fftSize: 2048,
+            frequencyBinCount: 1024,
+            connect: vi.fn(),
+            disconnect: disconnectAnalyserNode,
+            getByteFrequencyData: vi.fn(),
+          }),
+          createGain: () => {
+            const setValueAtTime = vi.fn();
+            gainSetters.push(setValueAtTime);
+            return {
+              connect: vi.fn(),
+              disconnect: disconnectGainNode,
+              gain: { setValueAtTime },
+            };
+          },
+          createBufferSource,
+          destination: {},
+          decodeAudioData,
+          close: closeAudioContext,
+          get state() {
+            return audioContextState;
+          },
+          resume: resumeAudioContext,
+          sampleRate: 48000,
+          currentTime: 0,
         };
-      },
-      createBufferSource,
-      destination: {},
-      decodeAudioData,
-      close: closeAudioContext,
-      get state() {
-        return audioContextState;
-      },
-      resume: resumeAudioContext,
-      sampleRate: 48000,
-      currentTime: 0,
-    }));
+      });
 
-    globalThis.AudioWorkletNode = vi.fn().mockImplementation(() => ({
-      port: fakePort,
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-    }));
+    globalThis.AudioWorkletNode = vi
+      .fn()
+      .mockImplementation(function AudioWorkletNodeMock() {
+        return {
+          port: fakePort,
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        };
+      });
   });
 
   afterEach(() => {
@@ -371,16 +379,20 @@ describe('useSoundPlayer', () => {
     const secondWorkletDisconnect = vi.fn();
     globalThis.AudioWorkletNode = vi
       .fn()
-      .mockImplementationOnce(() => ({
-        port: firstPort,
-        connect: vi.fn(),
-        disconnect: firstWorkletDisconnect,
-      }))
-      .mockImplementationOnce(() => ({
-        port: secondPort,
-        connect: vi.fn(),
-        disconnect: secondWorkletDisconnect,
-      }));
+      .mockImplementationOnce(function FirstAudioWorkletNodeMock() {
+        return {
+          port: firstPort,
+          connect: vi.fn(),
+          disconnect: firstWorkletDisconnect,
+        };
+      })
+      .mockImplementationOnce(function SecondAudioWorkletNodeMock() {
+        return {
+          port: secondPort,
+          connect: vi.fn(),
+          disconnect: secondWorkletDisconnect,
+        };
+      });
     const createContext = (
       analyserDisconnect: Mock,
       gainDisconnect: Mock,
@@ -420,8 +432,12 @@ describe('useSoundPlayer', () => {
     );
     globalThis.AudioContext = vi
       .fn()
-      .mockReturnValueOnce(firstContext)
-      .mockReturnValueOnce(secondContext);
+      .mockImplementationOnce(function FirstAudioContextMock() {
+        return firstContext;
+      })
+      .mockImplementationOnce(function SecondAudioContextMock() {
+        return secondContext;
+      });
     const onPlayAudio = vi.fn();
     const { result } = renderHook(() =>
       useSoundPlayer({
@@ -520,16 +536,20 @@ describe('useSoundPlayer', () => {
     const ownedWorkletDisconnect = vi.fn();
     globalThis.AudioWorkletNode = vi
       .fn()
-      .mockImplementationOnce(() => ({
-        port: sharedPort,
-        connect: vi.fn(),
-        disconnect: sharedWorkletDisconnect,
-      }))
-      .mockImplementationOnce(() => ({
-        port: ownedPort,
-        connect: vi.fn(),
-        disconnect: ownedWorkletDisconnect,
-      }));
+      .mockImplementationOnce(function SharedAudioWorkletNodeMock() {
+        return {
+          port: sharedPort,
+          connect: vi.fn(),
+          disconnect: sharedWorkletDisconnect,
+        };
+      })
+      .mockImplementationOnce(function OwnedAudioWorkletNodeMock() {
+        return {
+          port: ownedPort,
+          connect: vi.fn(),
+          disconnect: ownedWorkletDisconnect,
+        };
+      });
 
     const sharedAnalyserDisconnect = vi.fn();
     const sharedGainDisconnect = vi.fn();
@@ -566,7 +586,11 @@ describe('useSoundPlayer', () => {
       sharedContextClose,
     );
     const ownedContext = createContext(vi.fn(), vi.fn(), ownedContextClose);
-    globalThis.AudioContext = vi.fn().mockReturnValueOnce(ownedContext);
+    globalThis.AudioContext = vi
+      .fn()
+      .mockImplementationOnce(function OwnedAudioContextMock() {
+        return ownedContext;
+      });
 
     const { result } = renderHook(() =>
       useSoundPlayer({
@@ -1283,8 +1307,12 @@ describe('useSoundPlayer', () => {
     const secondContext = createContext(vi.fn(() => secondAnalyser));
     globalThis.AudioContext = vi
       .fn()
-      .mockReturnValueOnce(firstContext)
-      .mockReturnValueOnce(secondContext);
+      .mockImplementationOnce(function FirstAudioContextMock() {
+        return firstContext;
+      })
+      .mockImplementationOnce(function SecondAudioContextMock() {
+        return secondContext;
+      });
 
     const { result } = renderHook(() =>
       useSoundPlayer({

@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react-hooks';
+import { act, renderHook } from '@testing-library/react';
 import { checkForAudioTracks } from 'hume';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +11,19 @@ vi.mock('hume', () => ({
 const getUserMediaMock = vi.fn<() => Promise<MediaStream>>();
 const createStream = (tracks: MediaStreamTrack[] = []) =>
   ({ getTracks: () => tracks }) as unknown as MediaStream;
+const runInAct = async <T>(callback: () => Promise<T>): Promise<T> => {
+  let outcome: PromiseSettledResult<T> | undefined;
+  await act(async () => {
+    [outcome] = await Promise.allSettled([callback()]);
+  });
+  if (!outcome) {
+    throw new Error('The asynchronous hook operation did not settle.');
+  }
+  if (outcome.status === 'rejected') {
+    throw outcome.reason;
+  }
+  return outcome.value;
+};
 const originalMediaDevices = Object.getOwnPropertyDescriptor(
   window.navigator,
   'mediaDevices',
@@ -49,9 +62,11 @@ describe('useGetMicrophoneStream', () => {
   it('getStream function works correctly', async () => {
     const { result } = renderHook(() => useMicrophoneStream());
 
-    await result.current.getStream({
-      deviceId: 'test-device-id',
-    });
+    await runInAct(() =>
+      result.current.getStream({
+        deviceId: 'test-device-id',
+      }),
+    );
 
     expect(result.current.permission).toBe('granted');
 
@@ -79,7 +94,7 @@ describe('useGetMicrophoneStream', () => {
     } as unknown as MediaStream;
     getUserMediaMock.mockResolvedValueOnce(currentStream);
     const { result } = renderHook(() => useMicrophoneStream());
-    await result.current.getStream({});
+    await runInAct(() => result.current.getStream({}));
 
     result.current.stopStream(staleStream);
     result.current.stopStream();
@@ -92,7 +107,9 @@ describe('useGetMicrophoneStream', () => {
     Reflect.deleteProperty(window.navigator, 'mediaDevices');
     const { result } = renderHook(() => useMicrophoneStream());
 
-    await expect(result.current.getStream({})).rejects.toMatchObject({
+    await expect(
+      runInAct(() => result.current.getStream({})),
+    ).rejects.toMatchObject({
       name: 'NotSupportedError',
       message: 'Microphone capture is not supported.',
     });
@@ -106,7 +123,9 @@ describe('useGetMicrophoneStream', () => {
       getUserMediaMock.mockRejectedValueOnce({ name });
       const { result } = renderHook(() => useMicrophoneStream());
 
-      await expect(result.current.getStream({})).rejects.toMatchObject({
+      await expect(
+        runInAct(() => result.current.getStream({})),
+      ).rejects.toMatchObject({
         name,
       });
 
@@ -125,7 +144,7 @@ describe('useGetMicrophoneStream', () => {
     });
     const { result } = renderHook(() => useMicrophoneStream());
 
-    await expect(result.current.getStream({})).rejects.toThrow(
+    await expect(runInAct(() => result.current.getStream({}))).rejects.toThrow(
       'No audio tracks',
     );
 
@@ -146,7 +165,9 @@ describe('useGetMicrophoneStream', () => {
     });
     const { result } = renderHook(() => useMicrophoneStream());
 
-    await expect(result.current.getStream({})).rejects.toBe(validationError);
+    await expect(runInAct(() => result.current.getStream({}))).rejects.toBe(
+      validationError,
+    );
   });
 
   it('stops remaining tracks and preserves validation when one stop fails', async () => {
@@ -168,7 +189,9 @@ describe('useGetMicrophoneStream', () => {
     });
     const { result } = renderHook(() => useMicrophoneStream());
 
-    await expect(result.current.getStream({})).rejects.toBe(validationError);
+    await expect(runInAct(() => result.current.getStream({}))).rejects.toBe(
+      validationError,
+    );
     expect(finalTrackStop).toHaveBeenCalledOnce();
   });
 
@@ -182,7 +205,7 @@ describe('useGetMicrophoneStream', () => {
     } as unknown as MediaStream;
     getUserMediaMock.mockResolvedValueOnce(stream);
     const { result } = renderHook(() => useMicrophoneStream());
-    await result.current.getStream({});
+    await runInAct(() => result.current.getStream({}));
 
     expect(() => result.current.stopStream()).toThrow(
       'First track failed to stop',
@@ -214,12 +237,12 @@ describe('useGetMicrophoneStream', () => {
       .mockResolvedValueOnce(retainedStream)
       .mockResolvedValueOnce(currentStream);
     const { result } = renderHook(() => useMicrophoneStream());
-    await result.current.getStream({});
+    await runInAct(() => result.current.getStream({}));
 
     expect(() => result.current.stopStream()).toThrow(
       'Retained stream failed to stop',
     );
-    await result.current.getStream({});
+    await runInAct(() => result.current.getStream({}));
     result.current.stopStream();
 
     expect(retainedTrackStop).toHaveBeenCalledTimes(2);
@@ -249,8 +272,8 @@ describe('useGetMicrophoneStream', () => {
         ]),
       );
     const { result } = renderHook(() => useMicrophoneStream());
-    await result.current.getStream({});
-    await result.current.getStream({});
+    await runInAct(() => result.current.getStream({}));
+    await runInAct(() => result.current.getStream({}));
 
     const cleanupError = (() => {
       try {
@@ -290,7 +313,7 @@ describe('useGetMicrophoneStream', () => {
     const stream = { getTracks } as unknown as MediaStream;
     getUserMediaMock.mockResolvedValueOnce(stream);
     const { result } = renderHook(() => useMicrophoneStream());
-    await result.current.getStream({});
+    await runInAct(() => result.current.getStream({}));
 
     expect(() => result.current.stopStream()).toThrow(
       'Track enumeration failed',

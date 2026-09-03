@@ -1,8 +1,4 @@
-import {
-  act,
-  renderHook,
-  type RenderHookResult,
-} from '@testing-library/react-hooks';
+import { act, renderHook, type RenderHookResult } from '@testing-library/react';
 import { fromPartial } from '@total-typescript/shoehorn';
 import type { Hume } from 'hume';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -73,7 +69,7 @@ const MODEL_CONFIG: Hume.empathicVoice.Inference = {
 };
 
 describe('useMessages hook', () => {
-  let hook: RenderHookResult<unknown, ReturnType<typeof useMessages>>;
+  let hook: RenderHookResult<ReturnType<typeof useMessages>, unknown>;
   let userMessage: UserTranscriptMessage;
   let agentMessage: AssistantTranscriptMessage;
 

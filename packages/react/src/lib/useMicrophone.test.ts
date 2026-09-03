@@ -117,7 +117,9 @@ const stubOwnedAudioContext = (
   } as AudioContext;
   vi.stubGlobal(
     'AudioContext',
-    vi.fn(() => context),
+    vi.fn(function AudioContextMock() {
+      return context;
+    }),
   );
   return { context, contextClose };
 };
@@ -1000,7 +1002,9 @@ describe('useMicrophone', () => {
     } as unknown as AudioContext;
     vi.stubGlobal(
       'AudioContext',
-      vi.fn(() => context),
+      vi.fn(function AudioContextMock() {
+        return context;
+      }),
     );
     const trackStop = vi.fn();
     const stream = {
