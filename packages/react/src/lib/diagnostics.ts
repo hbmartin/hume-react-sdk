@@ -300,6 +300,10 @@ const MAX_SCANNED_OBJECT_KEYS = MAX_ENUMERATED_OBJECT_KEYS * 16;
 const MAX_SCANNED_TOTAL_OBJECT_KEYS = MAX_SCANNED_OBJECT_KEYS;
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
 const MAX_PRIORITY_SEARCH_NODES = 128;
+// Large arrays are commonly diagnostic payloads rather than useful paths to
+// errors. Limit each array's share of priority discovery so several earlier
+// arrays cannot exhaust the shared key-scan budget before later objects.
+const MAX_PRIORITY_ARRAY_INDEX_KEYS = 64;
 const PRIORITY_DIAGNOSTIC_KEYS = [
   'error',
   'errors',
@@ -752,6 +756,7 @@ const getEnumerableArrayIndexKeys = (
   const count = Math.min(
     length,
     MAX_ENUMERATED_OBJECT_KEYS,
+    MAX_PRIORITY_ARRAY_INDEX_KEYS,
     budget.remainingKeys,
   );
   budget.remainingKeys -= count;

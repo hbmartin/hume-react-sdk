@@ -935,6 +935,31 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('does not let earlier arrays starve later priority discovery', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details: Record<string, unknown> = {};
+    for (let index = 0; index < 16; index += 1) {
+      details[`noise-${index}`] = Array.from(
+        { length: 1_000 },
+        (_, itemIndex) => itemIndex,
+      );
+    }
+    details['lateTarget'] = {
+      result: { failure: new Error('Late nested cleanup failure') },
+    };
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['lateTarget']).toMatchObject({
+      result: { failure: { message: 'Late nested cleanup failure' } },
+    });
+  });
+
   it('discovers nested errors beneath a priority key', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
