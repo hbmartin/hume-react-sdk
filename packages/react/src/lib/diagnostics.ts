@@ -713,12 +713,12 @@ const getEnumerableOwnKeys = (value: object): EnumeratedKeys => {
   let scannedKeys = 0;
   let incomplete = false;
   for (const key of ownKeys) {
-    if (typeof key !== 'string') continue;
     if (scannedKeys === MAX_SCANNED_OBJECT_KEYS) {
       incomplete = true;
       break;
     }
     scannedKeys += 1;
+    if (typeof key !== 'string') continue;
     const descriptor = getOwnPropertyDescriptorSafely(value, key);
     if (descriptor === null || descriptor === undefined) {
       // One unavailable key must not discard siblings that can still be read.

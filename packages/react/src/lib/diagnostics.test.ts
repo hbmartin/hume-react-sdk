@@ -1226,6 +1226,41 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('counts symbol keys against the own-key scan limit', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const trailingKey = 'after-symbol-limit';
+    const reportedKeys: (string | symbol)[] = [
+      ...Array.from({ length: 16_000 }, (_, index) => Symbol(index)),
+      trailingKey,
+    ];
+    const descriptorReads: PropertyKey[] = [];
+    const nested = new Proxy(
+      {},
+      {
+        ownKeys: () => reportedKeys,
+        getOwnPropertyDescriptor(target, key) {
+          descriptorReads.push(key);
+          if (key === trailingKey) {
+            return { configurable: true, enumerable: true, value: 'omitted' };
+          }
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details: { nested } });
+
+    expect(descriptorReads).not.toContain(trailingKey);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['nested']).toEqual({
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
   it('does not enumerate terminal Date and binary values during discovery', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
