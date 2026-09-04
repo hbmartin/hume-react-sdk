@@ -1684,6 +1684,7 @@ export const createVoiceDiagnosticsReporter = (
       chatId = undefined;
       connectionId = undefined;
     },
+    // fallow-ignore-next-line complexity -- diagnostic delivery isolates redaction, sampling, logging, and consumer callback failures
     emit(input) {
       const configuration = getConfiguration(getOptions());
       if (

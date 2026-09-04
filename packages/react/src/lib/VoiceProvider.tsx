@@ -667,6 +667,7 @@ export const useCallDurationTimestamp = (): string | null => {
  * </VoiceProvider>
  * ```
  */
+// fallow-ignore-next-line complexity -- provider state intentionally coordinates behavior-sensitive socket, microphone, and audio lifecycles
 export const VoiceProvider: FC<VoiceProviderProps> = ({
   children,
   clearMessagesOnDisconnect = true,
@@ -2524,6 +2525,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           failures,
         );
       };
+      // fallow-ignore-next-line complexity -- teardown ordering preserves ownership across asynchronous audio and socket cleanup
       const rawCleanup = (async () => {
         if (cleanupsToAwait.length > 0) {
           await Promise.allSettled(cleanupsToAwait);

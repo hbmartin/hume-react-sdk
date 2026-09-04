@@ -25,6 +25,7 @@
     "no-debugger": "error",
     "no-duplicate-imports": "error",
     "no-nested-ternary": "error",
+    "no-undef": "error",
     "no-unused-vars": "off",
     "typescript/await-thenable": "error",
     "typescript/consistent-type-exports": "error",
@@ -54,7 +55,16 @@
     ],
     "typescript/only-throw-error": "error",
     "typescript/prefer-promise-reject-errors": "error",
-    "typescript/restrict-plus-operands": "error",
+    "typescript/restrict-plus-operands": [
+      "error",
+      {
+        "allowAny": false,
+        "allowBoolean": false,
+        "allowNullish": false,
+        "allowNumberAndString": false,
+        "allowRegExp": false
+      }
+    ],
     "typescript/restrict-template-expressions": "error",
     "typescript/strict-boolean-expressions": "error",
     "typescript/switch-exhaustiveness-check": "error",
@@ -96,8 +106,7 @@
     "**/.next/**",
     "**/coverage/**",
     "examples/next-app/next-env.d.ts",
-    "packages/react/src/worklets/audio-worklet-20250702.js",
-    "tools/lint-contract/fixtures/**"
+    "packages/react/src/worklets/audio-worklet-20250702.js"
   ],
   "overrides": [
     {

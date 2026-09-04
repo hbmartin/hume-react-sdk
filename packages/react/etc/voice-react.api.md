@@ -9,20 +9,14 @@ import { Hume } from 'hume';
 import { PropsWithChildren } from 'react';
 import z from 'zod';
 
-// Warning: (ae-forgotten-export) The symbol "AssistantEnd" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type AssistantEndMessage = WithReceivedAt<AssistantEnd>;
+export type AssistantEndMessage = WithReceivedAt<Hume.empathicVoice.AssistantEnd>;
 
-// Warning: (ae-forgotten-export) The symbol "AssistantProsody" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type AssistantProsodyMessage = WithReceivedAt<AssistantProsody>;
+export type AssistantProsodyMessage = WithReceivedAt<Hume.empathicVoice.AssistantProsody>;
 
-// Warning: (ae-forgotten-export) The symbol "AssistantMessage" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type AssistantTranscriptMessage = WithReceivedAt<AssistantMessage>;
+export type AssistantTranscriptMessage = WithReceivedAt<Hume.empathicVoice.AssistantMessage>;
 
 // @public
 export interface AudioConstraints {
@@ -59,15 +53,11 @@ export class AudioDeviceSwitchError extends Error {
 // @public
 export type AudioDeviceSwitchErrorReason = 'not_connected' | 'unsupported' | 'permission_denied' | 'device_not_found' | 'switch_failed' | 'interrupted';
 
-// Warning: (ae-forgotten-export) The symbol "AudioInput" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type AudioMessage = WithReceivedAt<AudioInput>;
+export type AudioMessage = WithReceivedAt<Hume.empathicVoice.AudioInput>;
 
-// Warning: (ae-forgotten-export) The symbol "AudioOutput" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type AudioOutputMessage = WithReceivedAt<AudioOutput>;
+export type AudioOutputMessage = WithReceivedAt<Hume.empathicVoice.AudioOutput>;
 
 // @public
 export type AudioPlayerErrorReason = 'audio_player_initialization_failure' | 'audio_worklet_load_failure' | 'audio_player_not_initialized' | 'malformed_audio' | 'audio_player_closure_failure';
@@ -77,10 +67,8 @@ export type AudioPlayerErrorReason = 'audio_player_initialization_failure' | 'au
 // @public
 export type AuthStrategy = z.infer<typeof AuthStrategySchema>;
 
-// Warning: (ae-forgotten-export) The symbol "ChatMetadata" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type ChatMetadataMessage = WithReceivedAt<ChatMetadata>;
+export type ChatMetadataMessage = WithReceivedAt<Hume.empathicVoice.ChatMetadata>;
 
 // @public
 type CloseEvent_2 = Parameters<NonNullable<Hume.empathicVoice.chat.ChatSocket.EventHandlers['close']>>[0];
@@ -170,15 +158,11 @@ export const isSocketFailedToParseMessageError: (err: unknown) => err is SocketF
 // @public
 export const isSocketUnknownMessageError: (err: unknown) => err is SocketUnknownMessageError;
 
-// Warning: (ae-forgotten-export) The symbol "WebSocketError" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type JSONErrorMessage = WithReceivedAt<WebSocketError>;
+export type JSONErrorMessage = WithReceivedAt<Hume.empathicVoice.WebSocketError>;
 
-// Warning: (ae-forgotten-export) The symbol "JsonMessage" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type JSONMessage = WithReceivedAt<JsonMessage>;
+export type JSONMessage = WithReceivedAt<Hume.empathicVoice.JsonMessage>;
 
 // @public
 export type MicErrorReason = 'mic_permission_denied' | 'mic_initialization_failure' | 'mic_closure_failure' | 'mime_types_not_supported';
@@ -238,10 +222,8 @@ export class SocketUnknownMessageError extends Error {
     readonly code: 'unknown_message_type';
 }
 
-// Warning: (ae-forgotten-export) The symbol "ToolCallMessage" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type ToolCall = WithReceivedAt<ToolCallMessage>;
+export type ToolCall = WithReceivedAt<Hume.empathicVoice.ToolCallMessage>;
 
 // @public
 export type ToolCallErrorSource = 'handler_failure' | 'invalid_response' | 'send_failure';
@@ -263,15 +245,11 @@ export type ToolCallHandler = (message: {
     }) => Hume.empathicVoice.ToolErrorMessage;
 }) => Promise<Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage>;
 
-// Warning: (ae-forgotten-export) The symbol "ToolErrorMessage" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type ToolError = WithReceivedAt<ToolErrorMessage>;
+export type ToolError = WithReceivedAt<Hume.empathicVoice.ToolErrorMessage>;
 
-// Warning: (ae-forgotten-export) The symbol "ToolResponseMessage" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type ToolResponse = WithReceivedAt<ToolResponseMessage>;
+export type ToolResponse = WithReceivedAt<Hume.empathicVoice.ToolResponseMessage>;
 
 // @public
 export interface ToolStatusEntry {
@@ -319,15 +297,11 @@ export const useMicFft: () => FftSnapshot;
 // @public
 export const usePlayerFft: () => FftSnapshot;
 
-// Warning: (ae-forgotten-export) The symbol "UserInterruption" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
+export type UserInterruptionMessage = WithReceivedAt<Hume.empathicVoice.UserInterruption>;
 
-// Warning: (ae-forgotten-export) The symbol "UserMessage" needs to be exported by the entry point index.d.ts
-//
 // @public
-export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
+export type UserTranscriptMessage = WithReceivedAt<Hume.empathicVoice.UserMessage>;
 
 // @public @deprecated
 export const useSoundPlayer: (props: UseSoundPlayerProps) => {

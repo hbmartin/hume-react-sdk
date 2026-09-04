@@ -14,7 +14,6 @@
     "examples/next-app/next-env.d.ts",
     ".fallow-baselines/**",
     "packages/core/**",
-    "tools/lint-contract/fixtures/**",
   ],
   "ignoreDependencies": [
     // Invoked through its api-documenter CLI binary by the docs generator.
@@ -31,6 +30,7 @@
       "examples/vite-app/tsconfig.json",
       "examples/vite-app-embed/tsconfig.json",
       "examples/vite-app-embed/tsconfig.node.json",
+      "tools/quality-gate/tsconfig.json",
       "tools/lint-contract/tsconfig.json",
       "tools/vitest-config/tsconfig.json",
     ],
@@ -171,6 +171,8 @@
   },
   "audit": {
     "gate": "new-only",
-    "typeAware": true,
+    // The audit wrapper runs a mandatory complete semantic dead-code pass first;
+    // disabling it here avoids an unrelated bounded type-coupling payload in the combined report.
+    "typeAware": false,
   },
 }

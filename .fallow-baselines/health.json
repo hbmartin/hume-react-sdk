@@ -31,9 +31,6 @@
     },
     "packages/react/src/lib/VoiceProvider.tsx": {
       "complexity_critical": {
-        "count": 2
-      },
-      "complexity_moderate": {
         "count": 1
       },
       "crap_critical": {
@@ -45,10 +42,10 @@
         "count": 1
       },
       "complexity_high": {
-        "count": 3
+        "count": 2
       },
       "complexity_moderate": {
-        "count": 3
+        "count": 1
       },
       "crap_critical": {
         "count": 1
@@ -63,12 +60,6 @@
       "complexity_critical": {
         "count": 2
       },
-      "complexity_high": {
-        "count": 1
-      },
-      "complexity_moderate": {
-        "count": 1
-      },
       "crap_critical": {
         "count": 1
       }
@@ -76,12 +67,6 @@
     "packages/react/src/lib/useSoundPlayer.ts": {
       "complexity_critical": {
         "count": 1
-      },
-      "complexity_high": {
-        "count": 1
-      },
-      "complexity_moderate": {
-        "count": 3
       },
       "crap_moderate": {
         "count": 1
@@ -136,26 +121,11 @@
         "count": 1
       }
     },
-    "packages/react/src/lib/VoiceProvider.tsx\u0000VoiceProvider": {
-      "complexity_critical": {
-        "count": 1
-      }
-    },
     "packages/react/src/lib/VoiceProvider.tsx\u0000connectAttempt": {
       "complexity_critical": {
         "count": 1
       },
       "crap_critical": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/VoiceProvider.tsx\u0000rawCleanup": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/diagnostics.ts\u0000emit": {
-      "complexity_moderate": {
         "count": 1
       }
     },
@@ -169,18 +139,8 @@
         "count": 1
       }
     },
-    "packages/react/src/lib/diagnostics.ts\u0000mergeOwnDataProperties": {
-      "complexity_high": {
-        "count": 1
-      }
-    },
     "packages/react/src/lib/diagnostics.ts\u0000redactSecretsWithinLimits": {
       "complexity_high": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/diagnostics.ts\u0000sanitizeEntry": {
-      "complexity_moderate": {
         "count": 1
       }
     },
@@ -197,11 +157,6 @@
         "count": 1
       }
     },
-    "packages/react/src/lib/useMicrophone.ts\u0000applyMuteStateToActiveStreams": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
     "packages/react/src/lib/useMicrophone.ts\u0000disposeMicrophoneResources": {
       "complexity_critical": {
         "count": 1
@@ -210,23 +165,8 @@
         "count": 1
       }
     },
-    "packages/react/src/lib/useMicrophone.ts\u0000performReplace": {
-      "complexity_high": {
-        "count": 1
-      }
-    },
     "packages/react/src/lib/useMicrophone.ts\u0000useMicrophone": {
       "complexity_critical": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/useSoundPlayer.ts\u0000addToQueue": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/useSoundPlayer.ts\u0000initPlayer": {
-      "complexity_high": {
         "count": 1
       }
     },
@@ -235,18 +175,8 @@
         "count": 1
       }
     },
-    "packages/react/src/lib/useSoundPlayer.ts\u0000stopAll": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
     "packages/react/src/lib/useSoundPlayer.ts\u0000useSoundPlayerImplementation": {
       "complexity_critical": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/useSoundPlayer.ts\u0000waitForQueueToDrain": {
-      "complexity_moderate": {
         "count": 1
       }
     },
@@ -268,8 +198,8 @@
   "target_keys": [
     "packages/react/src/lib/VoiceProvider.tsx:complexity",
     "packages/react/src/lib/diagnostics.ts:complexity",
-    "packages/react/src/lib/useSoundPlayer.ts:complexity",
     "packages/react/src/lib/useMicrophone.ts:complexity",
+    "packages/react/src/lib/useSoundPlayer.ts:complexity",
     "examples/next-app/components/ExampleComponent.tsx:complexity"
   ]
 }

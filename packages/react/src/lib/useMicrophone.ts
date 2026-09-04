@@ -239,6 +239,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
 
   const applyMuteStateToActiveStreams = useCallback(
+    // fallow-ignore-next-line complexity -- mute rollback must remain atomic across current and pending browser streams
     (muted: boolean) => {
       const stream = currentStream.current;
       const pending = pendingReplacement.current;
@@ -890,6 +891,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
 
   const performReplace = useCallback(
+    // fallow-ignore-next-line complexity -- replacement sequencing preserves the active microphone when browser resource transitions fail
     async (
       stream: MediaStream,
       sharedAudioContext: AudioContext | undefined,

@@ -1,6 +1,0 @@
-{
-  "name": "lint-contract-unresolved-import",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module"
-}

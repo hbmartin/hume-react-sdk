@@ -6,14 +6,7 @@ import {
   useCallDurationTimestamp,
   useVoice,
 } from '@humeai/voice-react';
-import {
-  type Dispatch,
-  type SetStateAction,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
 
@@ -244,8 +237,8 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
 
   const selectDevice = async (
     value: string,
-    setSelectedDeviceId: Dispatch<SetStateAction<string | null>>,
-    setIsSwitching: Dispatch<SetStateAction<boolean>>,
+    setSelectedDeviceId: (deviceId: string | null) => void,
+    setIsSwitching: (isSwitching: boolean) => void,
     switchDevice: (deviceId: string | null) => Promise<void>,
     fallbackErrorMessage: string,
   ) => {

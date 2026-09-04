@@ -88,8 +88,8 @@ export class FftStore {
     return EMPTY_FFT;
   };
 
-  /** Reset pending work, subscribers, and buffered data without disabling reuse. */
   destroy(): void {
+    // Reset pending work, subscribers, and buffered data without disabling reuse.
     this._dirty = false;
     if (this._rafId !== null) {
       cancelAnimationFrame(this._rafId);

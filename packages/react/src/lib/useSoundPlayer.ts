@@ -393,6 +393,7 @@ const useSoundPlayerImplementation = (
   );
 
   const initPlayer = useCallback(
+    // fallow-ignore-next-line complexity -- initialization rollback spans behavior-sensitive Web Audio resources and generation ownership
     async (
       speakerDeviceId?: string,
       sharedAudioContext?: AudioContext,
@@ -547,6 +548,7 @@ const useSoundPlayerImplementation = (
           resources.worklet = worklet;
           worklet.connect(analyser);
 
+          // fallow-ignore-next-line complexity -- the worklet protocol handler must validate ownership and every audio control message before mutating playback state
           worklet.port.onmessage = (e: MessageEvent) => {
             if (
               generation !== playerGeneration.current ||
@@ -715,6 +717,7 @@ const useSoundPlayerImplementation = (
   );
 
   const addToQueue = useCallback(
+    // fallow-ignore-next-line complexity -- queue validation and generation checks preserve ordered streaming audio playback
     async (message: AudioOutputMessage) => {
       const generation = playerGeneration.current;
       const resources = playerResources.current;
@@ -816,6 +819,7 @@ const useSoundPlayerImplementation = (
    * `stopAll` directly instead, cutting audio immediately.
    */
   const waitForQueueToDrain = useCallback(
+    // fallow-ignore-next-line complexity -- drain completion races queue progress against a bounded disconnect timeout
     async (timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<boolean> => {
       const startedAt = getMonotonicTime();
       const finish = (drained: boolean) => {
@@ -901,6 +905,7 @@ const useSoundPlayerImplementation = (
   );
 
   const stopAll = useCallback(
+    // fallow-ignore-next-line complexity -- shutdown aggregates independent Web Audio cleanup failures without abandoning later resources
     async (expectedContext?: AudioContext) => {
       if (
         expectedContext &&
