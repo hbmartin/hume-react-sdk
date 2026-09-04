@@ -775,6 +775,12 @@ describe('useMicrophone', () => {
     expect(candidateTrack.enabled).toBe(false);
     expect(result.current.isMuted).toBe(true);
 
+    act(() => result.current.unmute());
+
+    expect(oldTrack.enabled).toBe(false);
+    expect(candidateTrack.enabled).toBe(true);
+    expect(result.current.isMuted).toBe(false);
+
     await act(() => result.current.stop());
     expect(oldTrackStop).toHaveBeenCalledTimes(3);
     expect(candidateTrackStop).toHaveBeenCalledOnce();
@@ -825,10 +831,11 @@ describe('useMicrophone', () => {
     expect(events.at(-1)).toMatchObject({
       level: 'warn',
       category: 'microphone',
-      name: 'control.change_failed',
+      name: 'resource.cleanup_failed',
       details: {
-        control: 'microphone_mute',
-        value: true,
+        resource: 'microphone',
+        message:
+          'Failed to mute a retained microphone stream after cleanup failed.',
         error: { message: 'retained track enumeration failed' },
       },
     });
@@ -1025,10 +1032,14 @@ describe('useMicrophone', () => {
           throw new Error('final mute reconciliation failed');
         }),
     } as unknown as MediaStream;
+    const events: VoiceDiagnosticEvent[] = [];
     const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
       logger: false,
+      onEvent: (event) => events.push(event),
     }));
-    const { result } = renderMicrophone({ diagnostics });
+    const onStopRecording = vi.fn();
+    const { result } = renderMicrophone({ diagnostics, onStopRecording });
     result.current.start(createStream([oldTrack]));
     const oldRecorder = recorders[0];
     if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
@@ -1056,9 +1067,26 @@ describe('useMicrophone', () => {
     });
     expect(candidateTrackStop).toHaveBeenCalledOnce();
     expect(contextClose).toHaveBeenCalledOnce();
-    expect(result.current.isMuted).toBe(false);
+    expect(result.current.isMuted).toBe(true);
+    expect(onStopRecording).toHaveBeenCalledOnce();
+    expect(
+      events.filter((event) => event.name === 'microphone.recording_stopped'),
+    ).toHaveLength(1);
+    expect(
+      events.filter(
+        (event) =>
+          event.name === 'control.changed' &&
+          event.details['control'] === 'microphone_mute' &&
+          event.details['value'] === false,
+      ),
+    ).toHaveLength(0);
 
-    expect(() => result.current.start(createStream())).not.toThrow();
+    const nextTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    expect(() => result.current.start(createStream([nextTrack]))).not.toThrow();
+    expect(nextTrack.enabled).toBe(false);
     await act(() => result.current.stop());
   });
 
@@ -1112,6 +1140,7 @@ describe('useMicrophone', () => {
 
     expect(candidateTrackStop).toHaveBeenCalledOnce();
     expect(contextClose).not.toHaveBeenCalled();
+    expect(result.current.isMuted).toBe(true);
 
     const nextContext = createAudioContext();
     expect(() =>
@@ -1387,6 +1416,52 @@ describe('useMicrophone', () => {
     });
 
     expect(candidateTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('attempts every candidate track and retries failed candidate cleanup', async () => {
+    vi.stubGlobal('MediaRecorder', undefined);
+    const firstTrackStop = vi.fn().mockImplementationOnce(() => {
+      throw new Error('candidate track cleanup failed');
+    });
+    const secondTrackStop = vi.fn();
+    const candidateStream = createStream([
+      {
+        enabled: true,
+        stop: firstTrackStop,
+      } as unknown as MediaStreamTrack,
+      {
+        enabled: true,
+        stop: secondTrackStop,
+      } as unknown as MediaStreamTrack,
+    ]);
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { result } = renderMicrophone({ diagnostics });
+
+    await expect(result.current.replace(candidateStream)).rejects.toThrow(
+      'No MimeType specified',
+    );
+
+    expect(firstTrackStop).toHaveBeenCalledOnce();
+    expect(secondTrackStop).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toMatchObject({
+      level: 'warn',
+      category: 'microphone',
+      name: 'resource.cleanup_failed',
+      details: {
+        resource: 'microphone',
+        message:
+          'Failed to release an uncommitted replacement microphone stream.',
+        error: { message: 'candidate track cleanup failed' },
+      },
+    });
+
+    await act(() => result.current.stop());
+    expect(firstTrackStop).toHaveBeenCalledTimes(2);
+    expect(secondTrackStop).toHaveBeenCalledTimes(2);
   });
 
   it('releases a replacement candidate when the microphone is not recording', async () => {
