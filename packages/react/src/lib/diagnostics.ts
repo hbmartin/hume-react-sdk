@@ -1073,6 +1073,7 @@ const markSanitizedObjectTruncated = (
   setSanitizedProperty(result, TRUNCATED_PROPERTY, true);
 };
 
+// fallow-ignore-next-line complexity -- bounded descriptor sampling preserves priority, collision, and truncation semantics across adversarial objects
 const mergeOwnDataProperties = (
   target: Record<string, unknown>,
   sources: readonly (Record<string, unknown> | undefined)[],
@@ -1446,6 +1447,7 @@ const sanitizeValue = (
       getEnumerableOwnKeys(value, budget.ownKeyScanBudget);
     const result: Record<string, VoiceDiagnosticValue> = {};
     let nextCollisionByKey: Map<string, number> | undefined;
+    // fallow-ignore-next-line complexity -- one entry must atomically enforce descriptor safety, key collisions, redaction, and the shared output budget
     const sanitizeEntry = (
       key: string,
       expected: boolean,
