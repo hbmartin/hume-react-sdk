@@ -1008,6 +1008,28 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('searches a second object frontier for a late nested error', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details: Record<string, unknown> = {};
+    for (let index = 0; index < 999; index += 1) {
+      details[`container-${index}`] = {};
+    }
+    details['lateTarget'] = {
+      failure: new Error('Failure beyond the first object frontier'),
+    };
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['lateTarget']).toMatchObject({
+      failure: { message: 'Failure beyond the first object frontier' },
+    });
+  });
+
   it('discovers nested errors beneath a priority key', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1243,6 +1265,35 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
+  it('reserves merge work and root order for non-priority sensitive details', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let detailDescriptorReads = 0;
+    const detailProperties = Object.fromEntries(
+      Array.from({ length: 5_000 }, (_, index) => [`detail-${index}`, index]),
+    );
+    const details = new Proxy(detailProperties, {
+      getOwnPropertyDescriptor(target, key) {
+        detailDescriptorReads += 1;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+
+    reporter.emit({
+      ...input,
+      details,
+      sensitiveDetails: { content: 'Preserved sensitive content' },
+    });
+
+    expect(detailDescriptorReads).toBeLessThan(2_100);
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['content']).toBe('Preserved sensitive content');
+  });
+
   it('bounds priority discovery work across repeated object references', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1276,9 +1327,9 @@ describe('voice diagnostics reporter', () => {
     const priorityKeys = new Set(['error', 'errors', 'failures', 'cause']);
     let priorityProbeReads = 0;
     // With the root, scan consumer, and noise array, this frontier fills the
-    // 1,000-node discovery allowance.
+    // 2,000-node discovery allowance.
     const targets = Array.from(
-      { length: 997 },
+      { length: 1_997 },
       () => ({}) as Record<string, unknown>,
     );
     const frontier = targets.map(
@@ -1293,8 +1344,8 @@ describe('voice diagnostics reporter', () => {
         }),
     );
     for (const [index, target] of targets.entries()) {
-      for (let offset = 1; offset <= 4; offset += 1) {
-        const child = frontier[index * 4 + offset];
+      for (let offset = 1; offset <= 2; offset += 1) {
+        const child = frontier[index * 2 + offset];
         if (child === undefined) break;
         target[`child-${offset}`] = child;
       }
@@ -1713,9 +1764,9 @@ describe('voice diagnostics reporter', () => {
 
     reporter.emit({ ...input, details });
 
-    // Discovery spends at most its reserved 8,000-key budget. Sanitization can
+    // Discovery spends at most its reserved 12,000-key budget. Sanitization can
     // inspect at most another 1,000 entries under its separate output budget.
-    expect(indexDescriptorReads).toBeLessThanOrEqual(9_000);
+    expect(indexDescriptorReads).toBeLessThanOrEqual(13_000);
   });
 
   it('keeps enumerating after an own key disappears', () => {

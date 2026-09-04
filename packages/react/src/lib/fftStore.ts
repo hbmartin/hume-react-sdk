@@ -43,12 +43,13 @@ export class FftStore {
   clear(): void {
     this._buffer.fill(0);
     this._dirty = false;
+    if (this._rafId !== null) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+    }
     if (this._snapshot.every((value) => value === 0)) return;
 
-    this._snapshot = EMPTY_FFT;
-    for (const listener of this._listeners) {
-      listener();
-    }
+    this._publish(EMPTY_FFT);
   }
 
   private _scheduleFlush(): void {
@@ -62,7 +63,11 @@ export class FftStore {
   private _flush(): void {
     if (!this._dirty) return;
     this._dirty = false;
-    this._snapshot = Object.freeze([...this._buffer]);
+    this._publish(Object.freeze([...this._buffer]));
+  }
+
+  private _publish(snapshot: FftSnapshot): void {
+    this._snapshot = snapshot;
     for (const listener of this._listeners) {
       listener();
     }
