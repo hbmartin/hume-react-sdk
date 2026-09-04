@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,10 @@ import {
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
-import { parseJsonc } from '../quality-gate/quality-gate-utils.mjs';
+import {
+  parseJsonc,
+  resolveAuditBase,
+} from '../quality-gate/quality-gate-utils.mjs';
 
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 const oxlint = resolve(repositoryRoot, 'node_modules/.bin/oxlint');
@@ -173,6 +177,11 @@ const runFallow = (root, command, extraArgs = []) => {
     ],
     { cwd: repositoryRoot, encoding: 'utf8' },
   );
+  if (!existsSync(reportPath)) {
+    throw new Error(
+      `Fallow ${command} wrote no report:\n${result.stdout}${result.stderr}`,
+    );
+  }
   const report = readFileSync(reportPath, 'utf8');
   const parsed = /** @type {FallowFixtureReport} */ (
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- fixture assertions validate each stable Fallow JSON field before relying on it
@@ -728,6 +737,77 @@ void test('baseline policy rejects growth and lower floors but permits shrinkage
   );
 });
 
+void test('baseline policy rejects missing coverage metrics', (t) => {
+  const base = createFixture(t, 'policy-metric-base', policyStateFiles());
+  const currentFiles = policyStateFiles();
+  const coverage =
+    /** @type {{ thresholds: Record<string, Partial<Record<'branches' | 'functions' | 'lines' | 'statements', number>>> }} */ (
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- this fixture intentionally removes a field from a known policy shape
+      JSON.parse(currentFiles['coverage-policy.json'])
+    );
+  delete coverage.thresholds['src/**'].branches;
+  currentFiles['coverage-policy.json'] = JSON.stringify(coverage);
+  const current = createFixture(t, 'policy-metric-current', currentFiles);
+
+  const result = runPolicyComparison(base, current);
+
+  assert.notEqual(
+    result.status,
+    0,
+    'missing coverage metric unexpectedly passed',
+  );
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /coverage floor is invalid for src\/\*\* branches/,
+  );
+});
+
+void test('bootstrap still protects compatible baseline state', (t) => {
+  const baseFiles = policyStateFiles();
+  delete baseFiles['.fallow-baselines/policy.json'];
+  const base = createFixture(t, 'policy-bootstrap-base', baseFiles);
+  const current = createFixture(
+    t,
+    'policy-bootstrap-current',
+    policyStateFiles({
+      identities: ['src/index.ts\\u0000work', 'src/new.ts\\u0000newWork'],
+      fingerprints: ['dup:stable:2', 'dup:new:2'],
+    }),
+  );
+
+  const result = runPolicyComparison(base, current);
+
+  assert.notEqual(
+    result.status,
+    0,
+    'bootstrap baseline growth unexpectedly passed',
+  );
+  assert.match(`${result.stdout}${result.stderr}`, /added identity/);
+  assert.match(`${result.stdout}${result.stderr}`, /fingerprint/);
+});
+
+void test('JSONC parsing preserves strings and supports both comment forms', () => {
+  assert.deepEqual(
+    parseJsonc(`{
+      // Keep commas and brackets inside quoted values.
+      "value": ", }",
+      /* Block comments are valid JSONC. */
+      "items": ["x,]",],
+    }`),
+    { items: ['x,]'], value: ', }' },
+  );
+  assert.throws(
+    () => parseJsonc('{ /* unterminated'),
+    /Unterminated JSONC block comment/,
+  );
+});
+
+void test('the implicit audit base resolves to the target branch', () => {
+  const { base, mergeBase } = resolveAuditBase(undefined);
+  assert.ok(base === 'origin/main' || base === 'main', base);
+  assert.notEqual(mergeBase, '');
+});
+
 void test('scripts encode the complete gate and cannot casually bless debt', () => {
   const packageJson = /** @type {{ scripts: Record<string, string> }} */ (
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the repository manifest is version-controlled and every consumed script key is asserted below
@@ -742,7 +822,11 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
     return script;
   };
   const check = requireScript('check');
-  assert.ok(check.indexOf('test:coverage') < check.indexOf('check:fallow'));
+  const coverageIndex = check.indexOf('test:coverage');
+  const fallowIndex = check.indexOf('check:fallow');
+  assert.ok(coverageIndex >= 0, 'check script must run test:coverage');
+  assert.ok(fallowIndex >= 0, 'check script must run check:fallow');
+  assert.ok(coverageIndex < fallowIndex);
   assert.match(requireScript('check:fallow'), /dead-code.*health.*dupes/);
   assert.equal(
     Object.values(scripts).some((script) =>
@@ -763,6 +847,7 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
   assert.match(auditScript, /changed-since/);
   assert.match(auditScript, /type-aware-require/);
   assert.match(auditScript, /complete/);
+  assert.match(auditScript, /Fallow audit failed/);
 
   const previewScript = readFileSync(
     resolve(repositoryRoot, 'tools/quality-gate/preview-fallow-baselines.mjs'),

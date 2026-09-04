@@ -809,6 +809,71 @@ type SampledEnumerableOwnKeyOptions = Readonly<{
   ownKeysSnapshot?: readonly PropertyKey[];
 }>;
 
+const getOwnKeysForSampling = (
+  value: object,
+  snapshot: readonly PropertyKey[] | undefined,
+) => {
+  if (snapshot !== undefined) return snapshot;
+  try {
+    return Reflect.ownKeys(value);
+  } catch {
+    return null;
+  }
+};
+
+const inspectSampledOwnKey = (
+  value: object,
+  ownKeys: readonly PropertyKey[],
+  index: number,
+) => {
+  const key = ownKeys[index];
+  if (typeof key !== 'string') return { entry: null, incomplete: false };
+  const descriptor = getOwnPropertyDescriptorSafely(value, key);
+  if (descriptor === null || descriptor === undefined) {
+    return { entry: null, incomplete: true };
+  }
+  if (descriptor.enumerable !== true) {
+    return { entry: null, incomplete: false };
+  }
+  return { entry: { descriptor, index, key }, incomplete: false };
+};
+
+const createEmptySampledKeys = (
+  captureDescriptors: boolean,
+): EnumeratedKeys | SampledEnumerableOwnKeys =>
+  captureDescriptors
+    ? { descriptors: new Map(), incomplete: true, keys: [] }
+    : { incomplete: true, keys: [] };
+
+const sampleEnumerableEntries = (
+  value: object,
+  ownKeys: readonly PropertyKey[],
+  indexes: readonly number[],
+  budget: OwnKeyScanBudget,
+  captureDescriptors: boolean,
+) => {
+  const entries: Array<{ index: number; key: string }> = [];
+  const descriptors = captureDescriptors
+    ? new Map<string, PropertyDescriptor>()
+    : undefined;
+  let incomplete = false;
+  let inspectedKeys = 0;
+  for (const index of indexes) {
+    if (entries.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    inspectedKeys += 1;
+    budget.remainingKeys -= 1;
+    const inspected = inspectSampledOwnKey(value, ownKeys, index);
+    incomplete ||= inspected.incomplete;
+    if (inspected.entry === null) continue;
+    entries.push({ index: inspected.entry.index, key: inspected.entry.key });
+    descriptors?.set(inspected.entry.key, inspected.entry.descriptor);
+  }
+  return { descriptors, entries, incomplete, inspectedKeys };
+};
+
 function getSampledEnumerableOwnKeys(
   value: object,
   budget: OwnKeyScanBudget,
@@ -831,52 +896,25 @@ function getSampledEnumerableOwnKeys(
 ): EnumeratedKeys | SampledEnumerableOwnKeys {
   const captureDescriptors = options?.captureDescriptors ?? false;
   if (budget.remainingKeys === 0) {
-    return captureDescriptors
-      ? { descriptors: new Map(), incomplete: true, keys: [] }
-      : { incomplete: true, keys: [] };
+    return createEmptySampledKeys(captureDescriptors);
   }
-  let ownKeys: readonly PropertyKey[];
-  if (options?.ownKeysSnapshot === undefined) {
-    try {
-      ownKeys = Reflect.ownKeys(value);
-    } catch {
-      return captureDescriptors
-        ? { descriptors: new Map(), incomplete: true, keys: [] }
-        : { incomplete: true, keys: [] };
-    }
-  } else {
-    ownKeys = options.ownKeysSnapshot;
-  }
+  const ownKeys = getOwnKeysForSampling(value, options?.ownKeysSnapshot);
+  if (ownKeys === null) return createEmptySampledKeys(captureDescriptors);
 
   const count = Math.min(
     ownKeys.length,
     maximumScannedKeys,
     budget.remainingKeys,
   );
-  const entries: Array<{ index: number; key: string }> = [];
-  const descriptors = captureDescriptors
-    ? new Map<string, PropertyDescriptor>()
-    : undefined;
-  let inspectedKeys = 0;
-  let incomplete = ownKeys.length > count;
-  for (const index of getLeadingAndTrailingIndexes(ownKeys.length, count)) {
-    if (entries.length === MAX_ENUMERATED_OBJECT_KEYS) {
-      incomplete = true;
-      break;
-    }
-    inspectedKeys += 1;
-    budget.remainingKeys -= 1;
-    const key = ownKeys[index];
-    if (typeof key !== 'string') continue;
-    const descriptor = getOwnPropertyDescriptorSafely(value, key);
-    if (descriptor === null || descriptor === undefined) {
-      incomplete = true;
-      continue;
-    }
-    if (descriptor.enumerable !== true) continue;
-    entries.push({ index, key });
-    descriptors?.set(key, descriptor);
-  }
+  const sampled = sampleEnumerableEntries(
+    value,
+    ownKeys,
+    getLeadingAndTrailingIndexes(ownKeys.length, count),
+    budget,
+    captureDescriptors,
+  );
+  const { descriptors, entries, inspectedKeys } = sampled;
+  let incomplete = sampled.incomplete || ownKeys.length > count;
   incomplete ||= inspectedKeys < count;
   entries.sort((left, right) => left.index - right.index);
   const keys = entries.map(({ key }) => key);
@@ -927,6 +965,131 @@ type PriorityPath = Readonly<{
   parent: PriorityPath | null;
 }>;
 
+type PriorityQueueEntry = Readonly<{
+  depth: number;
+  path: PriorityPath | null;
+  value: object;
+}>;
+
+type PrioritySearchState = {
+  enumeratedKeysByObject: WeakMap<object, EnumeratedKeys>;
+  prioritizedKeys: WeakMap<object, Set<string>>;
+  priorityScanBudget: OwnKeyScanBudget;
+  queue: PriorityQueueEntry[];
+  root: object;
+  rootEnumeratedKeys: EnumeratedKeys;
+  scheduled: WeakSet<object>;
+  scheduledNodes: number;
+};
+
+const markPriorityPath = (
+  prioritizedKeys: WeakMap<object, Set<string>>,
+  path: PriorityPath,
+) => {
+  let current: PriorityPath | null = path;
+  while (current !== null) {
+    const { key, object } = current;
+    const keys = prioritizedKeys.get(object) ?? new Set<string>();
+    keys.add(key);
+    prioritizedKeys.set(object, keys);
+    current = current.parent;
+  }
+};
+
+const schedulePriorityObject = (
+  state: PrioritySearchState,
+  value: object,
+  depth: number,
+  path: PriorityPath,
+) => {
+  if (
+    depth > MAX_PRIORITY_SEARCH_DEPTH ||
+    state.scheduledNodes === MAX_PRIORITY_SEARCH_NODES ||
+    state.scheduled.has(value)
+  ) {
+    return;
+  }
+  state.scheduled.add(value);
+  state.queue.push({ depth, path, value });
+  state.scheduledNodes += 1;
+};
+
+const visitPriorityChild = (
+  state: PrioritySearchState,
+  child: unknown,
+  depth: number,
+  path: PriorityPath,
+) => {
+  if (
+    typeof child !== 'object' ||
+    child === null ||
+    isTerminalDiagnosticObject(child)
+  ) {
+    return;
+  }
+  if (isPriorityDiagnosticObject(child)) {
+    markPriorityPath(state.prioritizedKeys, path);
+  } else {
+    schedulePriorityObject(state, child, depth, path);
+  }
+};
+
+const getPriorityEnumeratedKeys = (
+  state: PrioritySearchState,
+  value: object,
+) => {
+  if (value === state.root) return state.rootEnumeratedKeys;
+  return isArrayValue(value)
+    ? getEnumerableArrayIndexKeys(value, state.priorityScanBudget)
+    : getEnumerablePriorityObjectKeys(value, state.priorityScanBudget);
+};
+
+const visitPriorityProperties = (
+  state: PrioritySearchState,
+  value: object,
+  depth: number,
+  parent: PriorityPath | null,
+) => {
+  for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+    if (state.priorityScanBudget.remainingKeys === 0) break;
+    state.priorityScanBudget.remainingKeys -= 1;
+    const property = getOwnEnumerableDataProperty(value, key);
+    if (property === null || property.value === undefined) continue;
+    const path: PriorityPath = { key, object: value, parent };
+    markPriorityPath(state.prioritizedKeys, path);
+    visitPriorityChild(state, property.value, depth + 1, path);
+  }
+};
+
+const visitPriorityObject = (
+  state: PrioritySearchState,
+  current: PriorityQueueEntry,
+) => {
+  const { depth, path: parent, value } = current;
+  visitPriorityProperties(state, value, depth, parent);
+
+  const isArray = isArrayValue(value);
+  const enumerated = getPriorityEnumeratedKeys(state, value);
+  if (!isArray && value !== state.root && !enumerated.incomplete) {
+    state.enumeratedKeysByObject.set(value, enumerated);
+  }
+  for (const key of enumerated.keys) {
+    if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+    const property = getOwnEnumerableDataProperty(value, key);
+    if (property === null) {
+      // A snapshotted own key changed or became unavailable before it was
+      // read. Array holes are ordinary.
+      if (!isArray) enumerated.incomplete = true;
+      continue;
+    }
+    visitPriorityChild(state, property.value, depth + 1, {
+      key,
+      object: value,
+      parent,
+    });
+  }
+};
+
 const getPrioritizedKeysByObject = (
   root: object,
   priorityScanBudget: OwnKeyScanBudget,
@@ -935,96 +1098,26 @@ const getPrioritizedKeysByObject = (
   const prioritizedKeys = new WeakMap<object, Set<string>>();
   const enumeratedKeysByObject = new WeakMap<object, EnumeratedKeys>();
   enumeratedKeysByObject.set(root, rootEnumeratedKeys);
-  const markPath = (path: PriorityPath) => {
-    let current: PriorityPath | null = path;
-    while (current !== null) {
-      const { key, object } = current;
-      const keys = prioritizedKeys.get(object) ?? new Set<string>();
-      keys.add(key);
-      prioritizedKeys.set(object, keys);
-      current = current.parent;
-    }
-  };
-  const queue: Array<
-    Readonly<{
-      depth: number;
-      path: PriorityPath | null;
-      value: object;
-    }>
-  > = [{ depth: 0, path: null, value: root }];
+  const queue: PriorityQueueEntry[] = [{ depth: 0, path: null, value: root }];
   // Explore a shared object through its first breadth-first path only. Walking
   // every alias would make the bounded search exponential on ordinary DAGs.
   const scheduled = new WeakSet();
   scheduled.add(root);
+  const state: PrioritySearchState = {
+    enumeratedKeysByObject,
+    prioritizedKeys,
+    priorityScanBudget,
+    queue,
+    root,
+    rootEnumeratedKeys,
+    scheduled,
+    scheduledNodes: 1,
+  };
   let cursor = 0;
-  let scheduledNodes = 1;
-
-  const schedule = (value: object, depth: number, path: PriorityPath) => {
-    if (
-      depth > MAX_PRIORITY_SEARCH_DEPTH ||
-      scheduledNodes === MAX_PRIORITY_SEARCH_NODES ||
-      scheduled.has(value)
-    ) {
-      return;
-    }
-    scheduled.add(value);
-    queue.push({ depth, path, value });
-    scheduledNodes += 1;
-  };
-  const visitChild = (child: unknown, depth: number, path: PriorityPath) => {
-    if (
-      typeof child !== 'object' ||
-      child === null ||
-      isTerminalDiagnosticObject(child)
-    ) {
-      return;
-    }
-    if (isPriorityDiagnosticObject(child)) {
-      markPath(path);
-    } else {
-      schedule(child, depth, path);
-    }
-  };
-
   while (cursor < queue.length) {
     const current = queue[cursor];
     cursor += 1;
-    if (current === undefined) continue;
-    const { depth, path: parent, value } = current;
-
-    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-      if (priorityScanBudget.remainingKeys === 0) break;
-      priorityScanBudget.remainingKeys -= 1;
-      const property = getOwnEnumerableDataProperty(value, key);
-      if (property === null || property.value === undefined) continue;
-      const path: PriorityPath = { key, object: value, parent };
-      markPath(path);
-      visitChild(property.value, depth + 1, path);
-    }
-
-    const isArray = isArrayValue(value);
-    let enumerated: EnumeratedKeys;
-    if (value === root) {
-      enumerated = rootEnumeratedKeys;
-    } else if (isArray) {
-      enumerated = getEnumerableArrayIndexKeys(value, priorityScanBudget);
-    } else {
-      enumerated = getEnumerablePriorityObjectKeys(value, priorityScanBudget);
-    }
-    if (!isArray && value !== root && !enumerated.incomplete) {
-      enumeratedKeysByObject.set(value, enumerated);
-    }
-    for (const key of enumerated.keys) {
-      if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
-      const property = getOwnEnumerableDataProperty(value, key);
-      if (property === null) {
-        // A snapshotted own key changed or became unavailable before it was
-        // read. Array holes are ordinary.
-        if (!isArray) enumerated.incomplete = true;
-        continue;
-      }
-      visitChild(property.value, depth + 1, { key, object: value, parent });
-    }
+    if (current !== undefined) visitPriorityObject(state, current);
   }
 
   return { enumeratedKeysByObject, prioritizedKeys };
@@ -1186,7 +1279,6 @@ const mergeOwnDataProperties = (
       });
       if (
         sourceMerge.prioritize &&
-        !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) &&
         prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_ENTRIES
       ) {
         prioritizedMergedKeys.add(key);
@@ -1504,48 +1596,109 @@ const sanitizeValue = (
       return 'complete';
     };
 
-    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-      const expected = enumerated.keys.includes(key);
-      const outcome = sanitizeEntry(key, expected);
-      if (outcome === 'stop') return result;
-      if (outcome === 'retry' && sanitizeEntry(key, true) === 'stop') {
-        return result;
-      }
-    }
-    if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
-    if (priorityKeys !== undefined) {
-      const sensitivePriorityKeys =
-        value === budget.sensitiveDetailsRoot
-          ? budget.prioritizedSensitiveKeys
-          : undefined;
-      for (const key of priorityKeys) {
-        if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
-        if (sensitivePriorityKeys?.has(key) === true) continue;
-        if (sanitizeEntry(key, true) === 'stop') return result;
-      }
-    }
     const sensitivePriorityKeys =
       value === budget.sensitiveDetailsRoot
         ? budget.prioritizedSensitiveKeys
         : undefined;
+    const ordinaryPriorityEntries: Array<{
+      expected: boolean;
+      key: string;
+    }> = [];
+    for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+      if (sensitivePriorityKeys?.has(key) === true) continue;
+      ordinaryPriorityEntries.push({
+        expected: enumerated.keys.includes(key),
+        key,
+      });
+    }
+    if (priorityKeys !== undefined) {
+      for (const key of priorityKeys) {
+        if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+        if (sensitivePriorityKeys?.has(key) === true) continue;
+        ordinaryPriorityEntries.push({ expected: true, key });
+      }
+    }
+
+    const sanitizePriorityEntry = (key: string, expected: boolean) => {
+      const outcome = sanitizeEntry(key, expected);
+      return !(
+        outcome === 'stop' ||
+        (outcome === 'retry' && sanitizeEntry(key, true) === 'stop')
+      );
+    };
+    const remainingEntriesBeforePriorityDetails = budget.remainingEntries;
+    const sensitiveEntryReserve =
+      sensitivePriorityKeys === undefined || sensitivePriorityKeys.size === 0
+        ? 0
+        : Math.min(
+            remainingEntriesBeforePriorityDetails,
+            MAX_PRIORITIZED_SENSITIVE_ENTRIES,
+          );
+    budget.remainingEntries =
+      remainingEntriesBeforePriorityDetails - sensitiveEntryReserve;
+    let ordinaryPriorityIndex = 0;
+    for (
+      ;
+      ordinaryPriorityIndex < ordinaryPriorityEntries.length;
+      ordinaryPriorityIndex += 1
+    ) {
+      const entry = ordinaryPriorityEntries[ordinaryPriorityIndex];
+      if (
+        entry === undefined ||
+        !sanitizePriorityEntry(entry.key, entry.expected)
+      ) {
+        break;
+      }
+    }
+    if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
+    const consumedOrdinaryPriorityEntries =
+      remainingEntriesBeforePriorityDetails -
+      sensitiveEntryReserve -
+      budget.remainingEntries;
+    budget.remainingEntries =
+      remainingEntriesBeforePriorityDetails - consumedOrdinaryPriorityEntries;
+
     if (sensitivePriorityKeys !== undefined) {
       const remainingEntriesBeforeSensitiveDetails = budget.remainingEntries;
       const sensitiveEntryAllowance = Math.min(
         remainingEntriesBeforeSensitiveDetails,
-        MAX_PRIORITIZED_SENSITIVE_ENTRIES,
+        sensitiveEntryReserve,
       );
-      budget.remainingEntries = sensitiveEntryAllowance;
+      let remainingSensitiveEntries = sensitiveEntryAllowance;
       try {
-        for (const key of sensitivePriorityKeys) {
-          if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
-          if (sanitizeEntry(key, true) === 'stop') break;
+        const entries = [...sensitivePriorityKeys];
+        for (const [index, key] of entries.entries()) {
+          const reservedRootEntries = entries.length - index - 1;
+          const entryAllowance = Math.max(
+            0,
+            remainingSensitiveEntries - reservedRootEntries,
+          );
+          budget.remainingEntries = entryAllowance;
+          const outcome = sanitizeEntry(key, true);
+          const consumedEntries = entryAllowance - budget.remainingEntries;
+          remainingSensitiveEntries -= consumedEntries;
+          if (outcome === 'stop') break;
         }
       } finally {
         const consumedSensitiveEntries =
-          sensitiveEntryAllowance - budget.remainingEntries;
+          sensitiveEntryAllowance - remainingSensitiveEntries;
         budget.remainingEntries =
           remainingEntriesBeforeSensitiveDetails - consumedSensitiveEntries;
+      }
+    }
+
+    for (
+      ;
+      ordinaryPriorityIndex < ordinaryPriorityEntries.length;
+      ordinaryPriorityIndex += 1
+    ) {
+      const entry = ordinaryPriorityEntries[ordinaryPriorityIndex];
+      if (
+        entry === undefined ||
+        !sanitizePriorityEntry(entry.key, entry.expected)
+      ) {
+        return result;
       }
     }
     for (const key of enumerated.keys) {

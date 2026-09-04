@@ -1404,6 +1404,77 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details).toMatchObject(sensitiveDetails);
   });
 
+  it('reserves sensitive entries before traversing a wide ordinary priority value', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const wideError = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [`error-${index}`, index]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { error: wideError },
+      sensitiveDetails: { content: 'Preserved sensitive content' },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['error']).toMatchObject({ 'error-0': 0 });
+    expect(events[0]?.details['content']).toBe('Preserved sensitive content');
+  });
+
+  it('does not let a sensitive priority value consume the ordinary reserve', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const wideSensitiveError = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`error-${index}`, index]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { phase: 'preserved' },
+      sensitiveDetails: { error: wideSensitiveError },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['phase']).toBe('preserved');
+    expect(events[0]?.details['error']).toMatchObject({
+      'error-0': 0,
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
+  it('reserves a root entry for each prioritized sensitive field', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const wideSensitiveContent = Object.fromEntries(
+      Array.from({ length: 600 }, (_, index) => [`content-${index}`, index]),
+    );
+
+    reporter.emit({
+      ...input,
+      sensitiveDetails: {
+        content: wideSensitiveContent,
+        extra: 'Preserved sensitive field',
+      },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['content']).toMatchObject({ 'content-0': 0 });
+    expect(events[0]?.details['extra']).toBe('Preserved sensitive field');
+  });
+
   it('reuses sampled descriptors while merging ordinary keys', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({

@@ -42,9 +42,6 @@
         "count": 1
       },
       "complexity_high": {
-        "count": 2
-      },
-      "complexity_moderate": {
         "count": 1
       },
       "crap_critical": {
@@ -126,16 +123,6 @@
         "count": 1
       },
       "crap_critical": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/diagnostics.ts\u0000getPrioritizedKeysByObject": {
-      "complexity_high": {
-        "count": 1
-      }
-    },
-    "packages/react/src/lib/diagnostics.ts\u0000getSampledEnumerableOwnKeys": {
-      "complexity_moderate": {
         "count": 1
       }
     },
