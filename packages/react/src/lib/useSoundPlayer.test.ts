@@ -1181,6 +1181,39 @@ describe('useSoundPlayer', () => {
     expect(result.current.queueLength).toBe(0);
   });
 
+  it('rejects invalid worklet queue lengths without publishing them', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'queueLength', length: 2 },
+      } as MessageEvent);
+    });
+
+    for (const length of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+      act(() => {
+        fakePort.onmessage?.({
+          data: { type: 'queueLength', length },
+        } as MessageEvent);
+      });
+      expect(result.current.queueLength).toBe(2);
+    }
+
+    expect(onError).toHaveBeenCalledTimes(4);
+    expect(onError).toHaveBeenLastCalledWith(
+      'Audio worklet returned an invalid control message.',
+      'malformed_audio',
+    );
+  });
+
   it('reports the first teardown failure instead of retrying a detached player', async () => {
     const onError = vi.fn();
     const { result } = renderHook(() =>

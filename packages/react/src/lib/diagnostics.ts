@@ -321,8 +321,8 @@ const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
 // shared descriptor allowance.
 const MAX_PRIORITY_KEYS_PER_OBJECT = PRIORITY_DIAGNOSTIC_KEYS.length;
 // Spend at most half of the output-entry budget while sanitizing prioritized
-// sensitive details. The same limit also bounds how many sensitive root keys
-// are queued, since every retained root key consumes at least one entry.
+// sensitive details. All merged sensitive root keys are tracked separately so
+// keys beyond this cap cannot re-enter the ordinary-priority pass.
 const MAX_PRIORITIZED_SENSITIVE_ENTRIES = Math.floor(MAX_SANITIZED_ENTRIES / 2);
 const REDACTED_KEYS = new Set([
   'apikey',
@@ -522,6 +522,7 @@ type SanitizationBudget = {
   remainingRedactionWork: number;
   remainingStringLength: number;
   sensitiveDetailsRoot: object;
+  sensitiveRootKeys: ReadonlySet<string>;
   truncated: boolean;
 };
 
@@ -1268,7 +1269,8 @@ const mergeOwnDataProperties = (
     }
   }
 
-  const prioritizedMergedKeys = new Set<string>();
+  const mergedSensitiveKeys = new Set<string>();
+  const prioritizedSensitiveKeys = new Set<string>();
   for (const sourceMerge of sourceMerges) {
     for (const [key, value] of Object.entries(sourceMerge.properties)) {
       Object.defineProperty(target, key, {
@@ -1277,16 +1279,16 @@ const mergeOwnDataProperties = (
         value,
         writable: true,
       });
-      if (
-        sourceMerge.prioritize &&
-        prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_ENTRIES
-      ) {
-        prioritizedMergedKeys.add(key);
+      if (sourceMerge.prioritize) {
+        mergedSensitiveKeys.add(key);
+        if (prioritizedSensitiveKeys.size < MAX_PRIORITIZED_SENSITIVE_ENTRIES) {
+          prioritizedSensitiveKeys.add(key);
+        }
       }
     }
   }
 
-  return { incomplete, prioritizedMergedKeys };
+  return { incomplete, mergedSensitiveKeys, prioritizedSensitiveKeys };
 };
 
 const sanitizeValue = (
@@ -1601,12 +1603,16 @@ const sanitizeValue = (
       value === budget.sensitiveDetailsRoot
         ? budget.prioritizedSensitiveKeys
         : undefined;
+    const sensitiveRootKeys =
+      value === budget.sensitiveDetailsRoot
+        ? budget.sensitiveRootKeys
+        : undefined;
     const ordinaryPriorityEntries: Array<{
       expected: boolean;
       key: string;
     }> = [];
     for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
-      if (sensitivePriorityKeys?.has(key) === true) continue;
+      if (sensitiveRootKeys?.has(key) === true) continue;
       ordinaryPriorityEntries.push({
         expected: enumerated.keys.includes(key),
         key,
@@ -1615,7 +1621,7 @@ const sanitizeValue = (
     if (priorityKeys !== undefined) {
       for (const key of priorityKeys) {
         if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
-        if (sensitivePriorityKeys?.has(key) === true) continue;
+        if (sensitiveRootKeys?.has(key) === true) continue;
         ordinaryPriorityEntries.push({ expected: true, key });
       }
     }
@@ -1704,7 +1710,7 @@ const sanitizeValue = (
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       if (priorityKeys?.has(key) === true) continue;
-      if (sensitivePriorityKeys?.has(key) === true) continue;
+      if (sensitiveRootKeys?.has(key) === true) continue;
       if (sanitizeEntry(key, true) === 'stop') break;
     }
     return result;
@@ -1736,7 +1742,8 @@ const sanitizeDetails = (
   ownKeyScanBudget: OwnKeyScanBudget,
   priorityScanBudget: OwnKeyScanBudget,
   rootEnumeratedKeys: EnumeratedKeys,
-  initiallyPrioritizedKeys: ReadonlySet<string>,
+  sensitiveRootKeys: ReadonlySet<string>,
+  prioritizedSensitiveKeys: ReadonlySet<string>,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
   const priorityDiscovery = getPrioritizedKeysByObject(
@@ -1751,12 +1758,13 @@ const sanitizeDetails = (
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
     ownKeyScanBudget,
     prioritizedKeys: priorityDiscovery.prioritizedKeys,
-    prioritizedSensitiveKeys: initiallyPrioritizedKeys,
+    prioritizedSensitiveKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
     remainingRedactionWork: MAX_SANITIZED_TOTAL_REDACTION_WORK,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,
     sensitiveDetailsRoot: details,
+    sensitiveRootKeys,
     truncated: initiallyTruncated,
   };
   const sanitized = sanitizeValue(details, matcher, new WeakSet(), budget);
@@ -1877,7 +1885,8 @@ export const createVoiceDiagnosticsReporter = (
           ownKeyScanBudget,
           priorityScanBudget,
           rootEnumeratedKeys,
-          merged.prioritizedMergedKeys,
+          merged.mergedSensitiveKeys,
+          merged.prioritizedSensitiveKeys,
           merged.incomplete,
         );
         details = sanitized.details;

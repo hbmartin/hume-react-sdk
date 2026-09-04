@@ -17,7 +17,7 @@ const coveredRoots = [
   'examples/vite-app-embed/src/',
 ];
 
-const getTrackedCoverageInputs = () => {
+export const getTrackedCoverageInputs = () => {
   const result = spawnSync('git', ['ls-files', '-z'], {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -35,6 +35,7 @@ const getTrackedCoverageInputs = () => {
           /\.(?:ts|tsx)$/.test(path) &&
           !path.endsWith('.d.ts')) ||
         path === 'vitest.config.mts' ||
+        path === 'tools/vitest-config/base.mjs' ||
         path === 'coverage-policy.json' ||
         path === 'pnpm-lock.yaml' ||
         path === 'package.json' ||

@@ -8,9 +8,11 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
+import { getTrackedCoverageInputs } from '../quality-gate/check-coverage-map.mjs';
 import {
   parseJsonc,
   resolveAuditBase,
@@ -59,14 +61,19 @@ const createFixture = (
 /**
  * @param {string} path
  * @param {string} tsconfig
+ * @param {OxlintRunOptions} [options]
  */
-const runOxlint = (path, tsconfig) => {
+const runOxlint = (
+  path,
+  tsconfig,
+  { config = oxlintConfig, cwd = repositoryRoot } = {},
+) => {
   const result = spawnSync(
     oxlint,
     [
       '--disable-nested-config',
       '--config',
-      oxlintConfig,
+      config,
       '--tsconfig',
       tsconfig,
       '--type-aware',
@@ -76,13 +83,22 @@ const runOxlint = (path, tsconfig) => {
       'json',
       path,
     ],
-    { cwd: repositoryRoot, encoding: 'utf8' },
+    { cwd, encoding: 'utf8' },
   );
   assert.equal(result.error, undefined);
+  /** @type {unknown} */
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    assert.fail(
+      `Oxlint wrote no valid JSON for ${path}:\n${result.stdout}${result.stderr}`,
+    );
+  }
   const report =
     /** @type {{ diagnostics: { code: string }[], number_of_files: number }} */ (
       // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Oxlint owns this stable JSON reporter schema and the assertions below validate the consumed fields
-      JSON.parse(result.stdout)
+      parsed
     );
   return { report, result };
 };
@@ -91,9 +107,10 @@ const runOxlint = (path, tsconfig) => {
  * @param {string} path
  * @param {string} tsconfig
  * @param {string} expectedRule
+ * @param {OxlintRunOptions} [options]
  */
-const expectOxlintRule = (path, tsconfig, expectedRule) => {
-  const { report, result } = runOxlint(path, tsconfig);
+const expectOxlintRule = (path, tsconfig, expectedRule, options) => {
+  const { report, result } = runOxlint(path, tsconfig, options);
   assert.notEqual(result.status, 0, `${path} unexpectedly passed Oxlint`);
   assert.ok(
     report.diagnostics.some(({ code }) => code === expectedRule),
@@ -106,9 +123,10 @@ const expectOxlintRule = (path, tsconfig, expectedRule) => {
 /**
  * @param {string} path
  * @param {string} tsconfig
+ * @param {OxlintRunOptions} [options]
  */
-const expectOxlintPass = (path, tsconfig) => {
-  const { report, result } = runOxlint(path, tsconfig);
+const expectOxlintPass = (path, tsconfig, options) => {
+  const { report, result } = runOxlint(path, tsconfig, options);
   assert.equal(
     result.status,
     0,
@@ -401,41 +419,71 @@ void test('unused underscore exemptions apply only to parameters and caught erro
 });
 
 void test('production paths receive separated browser and Node environments', (t) => {
-  const browserRoot = createFixture(
+  const root = createFixture(
     t,
-    'lint-contract-browser',
+    'hume-production-environments',
     {
-      'browser.ts': 'export const href = window.location.href;',
-      'node.ts': 'export const cwd = process.cwd();',
+      '.oxlintrc.json': readFileSync(oxlintConfig, 'utf8'),
+      'packages/react/tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          lib: ['DOM', 'ES2022'],
+          module: 'ESNext',
+          moduleResolution: 'Bundler',
+          strict: true,
+          target: 'ES2022',
+        },
+        include: ['src/**/*.ts'],
+      }),
+      'packages/react/src/browser.ts':
+        'export const href = window.location.href;',
+      'packages/react/src/node.ts': 'export const cwd = process.cwd();',
+      'tools/quality-gate/tsconfig.json': JSON.stringify({
+        compilerOptions: {
+          allowJs: true,
+          checkJs: true,
+          module: 'NodeNext',
+          moduleResolution: 'NodeNext',
+          noEmit: true,
+          strict: true,
+          target: 'ES2022',
+          typeRoots: [resolve(repositoryRoot, 'node_modules/@types')],
+          types: ['node'],
+        },
+        include: ['*.mjs'],
+      }),
+      'tools/quality-gate/browser.mjs':
+        'export const href = window.location.href;',
+      'tools/quality-gate/node.mjs': 'export const cwd = process.cwd();',
     },
-    resolve(repositoryRoot, 'packages/react/src'),
+    tmpdir(),
   );
-  const nodeRoot = createFixture(
-    t,
-    'lint-contract-node',
-    {
-      'browser.mjs': 'export const href = window.location.href;',
-      'node.mjs': 'export const cwd = process.cwd();',
-    },
-    resolve(repositoryRoot, 'tools/quality-gate'),
-  );
+  const options = {
+    config: resolve(root, '.oxlintrc.json'),
+    cwd: repositoryRoot,
+  };
+  const browserTsconfig = resolve(root, 'packages/react/tsconfig.json');
+  const nodeTsconfig = resolve(root, 'tools/quality-gate/tsconfig.json');
   expectOxlintPass(
-    resolve(browserRoot, 'browser.ts'),
-    resolve(repositoryRoot, 'packages/react/tsconfig.json'),
+    resolve(root, 'packages/react/src/browser.ts'),
+    browserTsconfig,
+    options,
   );
   expectOxlintRule(
-    resolve(browserRoot, 'node.ts'),
-    resolve(repositoryRoot, 'packages/react/tsconfig.json'),
+    resolve(root, 'packages/react/src/node.ts'),
+    browserTsconfig,
     'eslint(no-undef)',
+    options,
   );
   expectOxlintPass(
-    resolve(nodeRoot, 'node.mjs'),
-    resolve(repositoryRoot, 'tools/quality-gate/tsconfig.json'),
+    resolve(root, 'tools/quality-gate/node.mjs'),
+    nodeTsconfig,
+    options,
   );
   expectOxlintRule(
-    resolve(nodeRoot, 'browser.mjs'),
-    resolve(repositoryRoot, 'tools/quality-gate/tsconfig.json'),
+    resolve(root, 'tools/quality-gate/browser.mjs'),
+    nodeTsconfig,
     'eslint(no-undef)',
+    options,
   );
 });
 
@@ -786,6 +834,38 @@ void test('bootstrap still protects compatible baseline state', (t) => {
   assert.match(`${result.stdout}${result.stderr}`, /fingerprint/);
 });
 
+void test('Fallow coverage validation rejects nonnumeric match counts', (t) => {
+  const validator = resolve(
+    repositoryRoot,
+    'tools/quality-gate/check-fallow-coverage.mjs',
+  );
+  for (const field of ['istanbul_matched', 'istanbul_files_matched']) {
+    const root = createFixture(t, `fallow-coverage-${field}`, {
+      'report.json': JSON.stringify({
+        findings: [],
+        kind: 'health',
+        summary: {
+          baseline_staleness: { stale_entries: 0 },
+          coverage_model: 'istanbul',
+          istanbul_files_matched: 2,
+          istanbul_matched: 10,
+          [field]: 'invalid',
+        },
+      }),
+    });
+    const result = spawnSync(
+      process.execPath,
+      [validator, resolve(root, 'report.json')],
+      { cwd: repositoryRoot, encoding: 'utf8' },
+    );
+    assert.notEqual(result.status, 0, `${field} unexpectedly passed`);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /Fallow did not consume Istanbul coverage/,
+    );
+  }
+});
+
 void test('JSONC parsing preserves strings and supports both comment forms', () => {
   assert.deepEqual(
     parseJsonc(`{
@@ -854,7 +934,13 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
     'utf8',
   );
   assert.match(previewScript, /\.fallow-preview/);
+  assert.match(previewScript, /'--complexity'/);
+  assert.match(previewScript, /'--score'/);
   assert.doesNotMatch(previewScript, /\.fallow-baselines\/health\.json/);
+  assert.ok(
+    getTrackedCoverageInputs().includes('tools/vitest-config/base.mjs'),
+    'shared Vitest config must invalidate stale coverage',
+  );
 
   const config = /** @type {OxlintContractConfig} */ (
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the production config is schema-validated by Oxlint and the consumed fields are asserted below
@@ -875,5 +961,6 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
 
 /** @typedef {{ entry?: string[], projects?: string[], rules?: Record<string, string>, boundaries?: unknown, duplicates?: unknown }} FallowFixtureConfig */
 /** @typedef {{ private_type_leaks: unknown[], boundary_coverage_violations: unknown[], unresolved_imports: unknown[], clone_groups: unknown[], _meta: { type_aware: { executed: boolean, projects: { status: string }[] } } }} FallowFixtureReport */
+/** @typedef {{ config?: string, cwd?: string }} OxlintRunOptions */
 /** @typedef {{ identities?: string[], fingerprints?: string[], statements?: number }} PolicyFixtureOptions */
 /** @typedef {{ categories: { suspicious: string }, rules: Record<string, string>, overrides: { rules?: Record<string, string> }[] }} OxlintContractConfig */

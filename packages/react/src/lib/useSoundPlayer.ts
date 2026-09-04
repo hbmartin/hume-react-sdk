@@ -39,7 +39,10 @@ const isWorkletMessage = (value: unknown): value is WorkletMessage => {
   const type = getDataProperty(value, 'type')?.value;
   if (type === 'ended' || type === 'worklet_closed') return true;
   if (type === 'queueLength') {
-    return typeof getDataProperty(value, 'length')?.value === 'number';
+    const length = getDataProperty(value, 'length')?.value;
+    return (
+      typeof length === 'number' && Number.isSafeInteger(length) && length >= 0
+    );
   }
   return (
     type === 'start_clip' &&

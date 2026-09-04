@@ -1358,6 +1358,32 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['sensitive-0']).toBe(0);
   });
 
+  it('does not reclassify sensitive error-bearing keys beyond the priority cap', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const sensitiveDetails = Object.fromEntries(
+      Array.from({ length: 800 }, (_, index) => [
+        `sensitive-${index}`,
+        { error: new Error(`Sensitive failure ${index}`) },
+      ]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { phase: 'preserved' },
+      sensitiveDetails,
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['phase']).toBe('preserved');
+    expect(events[0]?.details['sensitive-0']).toBeDefined();
+    expect(events[0]?.details['sensitive-500']).toBeUndefined();
+  });
+
   it('does not let nested sensitive content consume the ordinary entry reserve', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({

@@ -89,15 +89,9 @@ export class FftStore {
   };
 
   destroy(): void {
-    // Reset pending work, subscribers, and buffered data without disabling reuse.
-    this._dirty = false;
-    if (this._rafId !== null) {
-      cancelAnimationFrame(this._rafId);
-      this._rafId = null;
-    }
-    this._listeners.clear();
-    this._buffer.fill(0);
-    this._snapshot = EMPTY_FFT;
+    // This store is intentionally reusable. Preserve active subscriptions and
+    // publish the reset snapshot so mounted consumers can observe the reset.
+    this.clear();
   }
 }
 

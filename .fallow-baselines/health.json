@@ -182,11 +182,5 @@
     }
   },
   "runtime_coverage_findings": [],
-  "target_keys": [
-    "packages/react/src/lib/VoiceProvider.tsx:complexity",
-    "packages/react/src/lib/diagnostics.ts:complexity",
-    "packages/react/src/lib/useMicrophone.ts:complexity",
-    "packages/react/src/lib/useSoundPlayer.ts:complexity",
-    "examples/next-app/components/ExampleComponent.tsx:complexity"
-  ]
+  "target_keys": []
 }

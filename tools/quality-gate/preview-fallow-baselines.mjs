@@ -13,6 +13,8 @@ const health = run('pnpm', [
   'fallow',
   'health',
   '--no-cache',
+  '--complexity',
+  '--score',
   '--coverage',
   'coverage/coverage-final.json',
   '--baseline-mode',

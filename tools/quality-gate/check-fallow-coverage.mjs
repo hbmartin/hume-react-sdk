@@ -16,14 +16,21 @@ const summary =
 if (summary === undefined)
   throw new Error('Fallow report has no health summary.');
 
-const matched = summary.istanbul_matched ?? 0;
-const matchedFiles = summary.istanbul_files_matched ?? 0;
+/**
+ * @param {unknown} value
+ * @returns {value is number}
+ */
+const isPositiveSafeInteger = (value) =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+const matched = summary.istanbul_matched;
+const matchedFiles = summary.istanbul_files_matched;
 const model = summary.coverage_model;
 const consistency = summary.coverage_source_consistency;
 
 if (
-  matched <= 0 ||
-  matchedFiles <= 0 ||
+  !isPositiveSafeInteger(matched) ||
+  !isPositiveSafeInteger(matchedFiles) ||
   model === 'static_estimated' ||
   consistency === 'static_estimated'
 ) {
@@ -60,7 +67,7 @@ console.log(
  * @typedef {object} HealthSummary
  * @property {string} [coverage_model]
  * @property {string} [coverage_source_consistency]
- * @property {number} [istanbul_matched]
- * @property {number} [istanbul_files_matched]
+ * @property {unknown} [istanbul_matched]
+ * @property {unknown} [istanbul_files_matched]
  * @property {{ stale_entries?: number }} [baseline_staleness]
  */
