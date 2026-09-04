@@ -244,7 +244,7 @@ export const ChatConnected = () => {
                   <div
                     key={
                       message.receivedAt.toISOString() +
-                      message.message.content +
+                      (message.message.content ?? '') +
                       JSON.stringify(message.time)
                     }
                   >

@@ -170,15 +170,11 @@ async function runRelease(arguments_, releaseTag) {
         const parsed = /** @type {unknown} */ (JSON.parse(line));
         if (
           !Array.isArray(parsed) ||
-          !(
-            /** @type {unknown[]} */ (parsed).every(
-              (argument) => typeof argument === 'string',
-            )
-          )
+          !parsed.every((argument) => typeof argument === 'string')
         ) {
           throw new Error('The pnpm invocation log was malformed.');
         }
-        return /** @type {string[]} */ (parsed);
+        return parsed;
       });
   } finally {
     await rm(temporaryDirectory, { force: true, recursive: true });
@@ -252,7 +248,7 @@ await test('published version-skewed workspace dependencies pass validation', as
         if (typeof url === 'string') requestedUrls.push(url);
         else if (url instanceof URL) requestedUrls.push(url.href);
         else requestedUrls.push(url.url);
-        return /** @type {Response} */ ({ ok: true, status: 200 });
+        return new Response(null, { status: 200 });
       },
       registryUrl: 'https://registry.example.test/npm/',
     },
@@ -275,7 +271,7 @@ await test('registry validation forwards npm token authentication', async () => 
       fetchImplementation: async (_url, init) => {
         const headers = new Headers(init?.headers);
         authorization = headers.get('authorization');
-        return /** @type {Response} */ ({ ok: true, status: 200 });
+        return new Response(null, { status: 200 });
       },
       registryToken: 'test-token',
       registryUrl: 'https://registry.example.test/npm/',
@@ -303,7 +299,7 @@ await test('registry validation does not forward ambient npm tokens', async () =
         fetchImplementation: async (_url, init) => {
           const headers = new Headers(init?.headers);
           authorization = headers.get('authorization');
-          return /** @type {Response} */ ({ ok: true, status: 200 });
+          return new Response(null, { status: 200 });
         },
         registryUrl: 'https://registry.example.test/npm/',
       },
@@ -327,10 +323,7 @@ await test('unpublished version-skewed workspace dependencies block publication'
         ],
       },
       {
-        fetchImplementation: async () => /** @type {Response} */ ({
-          ok: false,
-          status: 404,
-        }),
+        fetchImplementation: async () => new Response(null, { status: 404 }),
       },
     ),
     /@humeai\/dependency@1\.0\.0 has not been published/,
@@ -350,9 +343,9 @@ await test('transient registry failures are retried with a bounded attempt count
         attempts += 1;
         if (attempts === 1) throw new Error('temporary network failure');
         if (attempts === 2) {
-          return /** @type {Response} */ ({ ok: false, status: 503 });
+          return new Response(null, { status: 503 });
         }
-        return /** @type {Response} */ ({ ok: true, status: 200 });
+        return new Response(null, { status: 200 });
       },
       maxAttempts: 3,
       retryDelayMs: 0,
@@ -374,7 +367,7 @@ await test('non-retryable registry responses fail without extra requests', async
       {
         fetchImplementation: async () => {
           attempts += 1;
-          return /** @type {Response} */ ({ ok: false, status: 401 });
+          return new Response(null, { status: 401 });
         },
         maxAttempts: 3,
         retryDelayMs: 0,

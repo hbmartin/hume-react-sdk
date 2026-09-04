@@ -19,14 +19,14 @@ export const Voice = ({ configId }: { configId?: string }) => {
             })
             .safeParse(JSON.parse(toolCall.parameters));
 
-          if (args.success === false) {
+          if (!args.success) {
             throw new Error(
               'Tool response did not match the expected weather tool schema',
             );
           }
 
           const location: unknown = await fetch(
-            `https://geocode.maps.co/search?q=${String(args.data.location)}&api_key=${process.env.NEXT_PUBLIC_GEOCODE_API_KEY}`,
+            `https://geocode.maps.co/search?q=${args.data.location}&api_key=${process.env.NEXT_PUBLIC_GEOCODE_API_KEY}`,
           ).then((res) => res.json());
 
           const locationResults = z
@@ -38,7 +38,7 @@ export const Voice = ({ configId }: { configId?: string }) => {
             )
             .safeParse(location);
 
-          if (locationResults.success === false) {
+          if (!locationResults.success) {
             throw new Error(
               'Location results did not match the expected schema',
             );
@@ -61,7 +61,7 @@ export const Voice = ({ configId }: { configId?: string }) => {
               }),
             })
             .safeParse(result);
-          if (json.success === false) {
+          if (!json.success) {
             throw new Error('Point metadata did not match the expected schema');
           }
           const { properties } = json.data;
@@ -78,7 +78,7 @@ export const Voice = ({ configId }: { configId?: string }) => {
               }),
             })
             .safeParse(forecastResult);
-          if (forecastJson.success === false) {
+          if (!forecastJson.success) {
             throw new Error('Forecast did not match the expected schema');
           }
           const forecast = forecastJson.data.properties.periods;

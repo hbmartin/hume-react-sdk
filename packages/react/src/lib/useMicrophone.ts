@@ -31,6 +31,30 @@ const MICROPHONE_ALREADY_STARTED_MESSAGE =
 const MICROPHONE_OPERATION_IN_PROGRESS_MESSAGE =
   'A microphone operation is still in progress. Wait for it before starting again.';
 const RECORDER_FINAL_DATA_TIMEOUT_MS = 1_000;
+const noop = () => {};
+
+const getMonotonicTime = () => {
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
+  return globalThis.performance?.now() ?? Date.now();
+};
+
+const settleBeforeDeadline = async (
+  operation: PromiseLike<unknown>,
+  deadline: number,
+): Promise<boolean> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const completed = await Promise.race([
+    Promise.resolve(operation).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timeoutId = setTimeout(
+        () => resolve(false),
+        Math.max(0, deadline - Date.now()),
+      );
+    }),
+  ]);
+  if (timeoutId !== undefined) clearTimeout(timeoutId);
+  return completed;
+};
 
 const createMicrophoneAbortError = () =>
   new DOMException(
@@ -53,6 +77,19 @@ type DisposeMicrophoneOptions = {
   restoreOnFailure?: boolean;
 };
 
+type PendingMicrophoneReplacement = {
+  needsMuteReconciliation: boolean;
+  stream: MediaStream;
+};
+
+const hasTrackThatIsNotMuted = (tracks: readonly MediaStreamTrack[]) => {
+  try {
+    return tracks.some((track) => track.enabled);
+  } catch {
+    return true;
+  }
+};
+
 /**
  * Configuration for the deprecated low-level microphone hook.
  *
@@ -73,18 +110,13 @@ export type MicrophoneProps = {
  */
 export const useMicrophone = (props: MicrophoneProps) => {
   const { onAudioCaptured } = props;
-  const fallbackDiagnostics = useRef<VoiceDiagnosticsReporter | null>(null);
-  if (fallbackDiagnostics.current === null) {
-    fallbackDiagnostics.current = createVoiceDiagnosticsReporter(
-      () => undefined,
-    );
-  }
+  const [fallbackDiagnostics] = useState(() =>
+    createVoiceDiagnosticsReporter(() => undefined),
+  );
   const onErrorRef = useLatestRef(props.onError);
   const onStartRecordingRef = useLatestRef(props.onStartRecording);
   const onStopRecordingRef = useLatestRef(props.onStopRecording);
-  const diagnostics = useLatestRef(
-    props.diagnostics ?? fallbackDiagnostics.current,
-  );
+  const diagnostics = useLatestRef(props.diagnostics ?? fallbackDiagnostics);
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(false);
   const enabledStateBeforeMute = useRef<WeakMap<
@@ -92,11 +124,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
     boolean
   > | null>(null);
   const currentStream = useRef<MediaStream | null>(null);
-  const pendingReplacementStream = useRef<MediaStream | null>(null);
-  const streamsNeedingMuteReconciliation = useRef(new WeakSet<MediaStream>());
+  const pendingReplacement = useRef<PendingMicrophoneReplacement | null>(null);
   const retiredStreams = useRef(new Set<MediaStream>());
 
-  const fftStore = useRef(new FftStore()).current;
+  const [fftStore] = useState(() => new FftStore());
 
   const currentAnalyzer = useRef<AnalyserNode | null>(null);
   const fftAnimationId = useRef<number | null>(null);
@@ -130,12 +161,25 @@ export const useMicrophone = (props: MicrophoneProps) => {
       if (muted) {
         const failures: unknown[] = [];
         tracks.forEach((track) => {
+          const hadSavedState = enabledStates.has(track);
+          let enabledBeforeUpdate = false;
+          let canRollback = false;
           try {
-            if (!enabledStates.has(track)) {
-              enabledStates.set(track, track.enabled);
+            enabledBeforeUpdate = track.enabled;
+            canRollback = true;
+            if (!hadSavedState) {
+              enabledStates.set(track, enabledBeforeUpdate);
             }
             track.enabled = false;
           } catch (error) {
+            if (canRollback) {
+              try {
+                track.enabled = enabledBeforeUpdate;
+                if (!hadSavedState) enabledStates.delete(track);
+              } catch {
+                // Retain the saved state so a later unmute can retry recovery.
+              }
+            }
             // Keep successful disables in place. A microphone mute must make as
             // much fail-closed progress as possible when one nonstandard track
             // rejects its enabled-state update.
@@ -151,21 +195,17 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       const updates: Array<{
         enabled: boolean;
-        hadSavedState: boolean;
         savedState: boolean;
         track: MediaStreamTrack;
       }> = [];
 
       try {
         tracks.forEach((track) => {
-          const hadSavedState = enabledStates.has(track);
+          if (!enabledStates.has(track)) return;
           const savedState = enabledStates.get(track) ?? false;
-
-          if (!hadSavedState) return;
 
           updates.push({
             enabled: track.enabled,
-            hadSavedState,
             savedState,
             track,
           });
@@ -182,11 +222,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           } catch {
             // Best-effort rollback for a nonstandard track implementation.
           }
-          if (update.hadSavedState) {
-            enabledStates.set(update.track, update.savedState);
-          } else {
-            enabledStates.delete(update.track);
-          }
+          enabledStates.set(update.track, update.savedState);
         }
 
         throw error;
@@ -203,22 +239,41 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
 
   const applyMuteStateToActiveStreams = useCallback(
+    // fallow-ignore-next-line complexity -- mute rollback must remain atomic across current and pending browser streams
     (muted: boolean) => {
       const stream = currentStream.current;
-      const pendingStream = pendingReplacementStream.current;
+      const pending = pendingReplacement.current;
+      const pendingStream = pending?.stream ?? null;
+
+      const updatePendingReconciliation = (needsReconciliation: boolean) => {
+        if (pending !== null && pendingReplacement.current === pending) {
+          pending.needsMuteReconciliation = needsReconciliation;
+        }
+      };
 
       if (!muted) {
-        // Enumerate every active stream before enabling any track so a failed
-        // enumeration cannot leave a partially unmuted microphone.
-        const tracks = [...(stream?.getAudioTracks() ?? [])];
-        if (pendingStream && pendingStream !== stream) {
-          tracks.push(...pendingStream.getAudioTracks());
+        let pendingTracks: MediaStreamTrack[] | null = null;
+        try {
+          // Enumerate every active stream before enabling any track so a failed
+          // enumeration cannot leave a partially unmuted microphone.
+          const tracks = [...(stream?.getAudioTracks() ?? [])];
+          if (pendingStream && pendingStream !== stream) {
+            pendingTracks = pendingStream.getAudioTracks();
+            tracks.push(...pendingTracks);
+          }
+          applyMuteStateToTracks(tracks, false);
+        } catch (error) {
+          updatePendingReconciliation(
+            pendingTracks !== null && hasTrackThatIsNotMuted(pendingTracks),
+          );
+          throw error;
         }
-        applyMuteStateToTracks(tracks, false);
+        updatePendingReconciliation(false);
         return;
       }
 
       const failures: unknown[] = [];
+      let pendingTracks: MediaStreamTrack[] | null = null;
       const activeStreams =
         pendingStream !== null && pendingStream !== stream
           ? [stream, pendingStream]
@@ -226,17 +281,27 @@ export const useMicrophone = (props: MicrophoneProps) => {
       for (const activeStream of activeStreams) {
         if (activeStream === null) continue;
         try {
-          applyMuteStateToStream(activeStream, true);
+          const tracks = activeStream.getAudioTracks();
+          if (activeStream === pendingStream) pendingTracks = tracks;
+          applyMuteStateToTracks(tracks, true);
         } catch (error) {
           appendCleanupFailures(failures, error);
         }
       }
-      throwCleanupFailures(
-        failures,
-        'Failed to mute one or more active microphone streams.',
-      );
+      if (failures.length > 0) {
+        const enabledStates = enabledStateBeforeMute.current;
+        updatePendingReconciliation(
+          pendingTracks?.some((track) => enabledStates?.has(track) === true) ===
+            true,
+        );
+        throwCleanupFailures(
+          failures,
+          'Failed to mute one or more active microphone streams.',
+        );
+      }
+      updatePendingReconciliation(false);
     },
-    [applyMuteStateToStream, applyMuteStateToTracks],
+    [applyMuteStateToTracks],
   );
 
   const applyMuteStateToRetiredStreams = useCallback(
@@ -256,7 +321,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const reportMuteStateFailure = useCallback(
     (muted: boolean, error: unknown) => {
-      diagnostics.current?.emit({
+      diagnostics.current.emit({
         level: 'warn',
         category: 'microphone',
         name: 'control.change_failed',
@@ -268,12 +333,13 @@ export const useMicrophone = (props: MicrophoneProps) => {
         },
       });
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics],
   );
 
   const reportRetiredStreamMuteFailure = useCallback(
     (error: unknown) => {
-      diagnostics.current?.emit({
+      diagnostics.current.emit({
         level: 'warn',
         category: 'microphone',
         name: 'resource.cleanup_failed',
@@ -285,6 +351,20 @@ export const useMicrophone = (props: MicrophoneProps) => {
         },
       });
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
+    [diagnostics],
+  );
+
+  const reportDataReadFailure = useCallback(
+    (message: string, error: unknown) => {
+      diagnostics.current.emit({
+        level: 'warn',
+        category: 'microphone',
+        name: 'resource.cleanup_failed',
+        details: { resource: 'microphone', message, error },
+      });
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics],
   );
 
@@ -364,7 +444,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             buffer.byteLength > 0 &&
             generation === recordingGeneration.current
           ) {
-            if (diagnostics.current?.isEnabled('debug')) {
+            if (diagnostics.current.isEnabled('debug')) {
               diagnostics.current.emit({
                 level: 'debug',
                 category: 'microphone',
@@ -372,20 +452,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
                 details: { byteLength: buffer.byteLength },
               });
             }
-            sendAudio.current?.(buffer);
+            sendAudio.current(buffer);
           }
         })
-        .catch((err) => {
-          diagnostics.current?.emit({
-            level: 'warn',
-            category: 'microphone',
-            name: 'resource.cleanup_failed',
-            details: {
-              resource: 'microphone',
-              message: 'Failed to read captured microphone data.',
-              error: err,
-            },
-          });
+        .catch((err: unknown) => {
+          reportDataReadFailure(
+            'Failed to read captured microphone data.',
+            err,
+          );
         });
       pendingDataTasks.current.add(task);
       void task.then(
@@ -393,7 +467,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
         () => pendingDataTasks.current.delete(task),
       );
     },
-    [diagnostics, sendAudio],
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
+    [diagnostics, reportDataReadFailure, sendAudio],
   );
 
   const startFftAnalyzer = useCallback(
@@ -487,14 +562,19 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       let recorderStopped = true;
       if (recorderToStop) {
-        const removeDataHandler = () => {
+        const removeRecorderListener = <
+          EventName extends keyof MediaRecorderEventMap,
+        >(
+          type: EventName,
+          listener: (
+            this: MediaRecorder,
+            event: MediaRecorderEventMap[EventName],
+          ) => unknown,
+        ) => {
           try {
-            recorderToStop.removeEventListener(
-              'dataavailable',
-              recorderHandlerToRemove,
-            );
+            recorderToStop.removeEventListener(type, listener);
           } catch (error) {
-            diagnostics.current?.emit({
+            diagnostics.current.emit({
               level: 'warn',
               category: 'microphone',
               name: 'resource.cleanup_failed',
@@ -506,7 +586,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
             });
           }
         };
-        let resolveRecorderStop = () => {};
+        const removeDataHandler = () => {
+          removeRecorderListener('dataavailable', recorderHandlerToRemove);
+        };
+        let resolveRecorderStop = noop;
         const recorderStopEvent = new Promise<void>((resolve) => {
           resolveRecorderStop = resolve;
         });
@@ -515,7 +598,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           try {
             recorderToStop.removeEventListener('stop', handleRecorderStop);
           } catch (error) {
-            diagnostics.current?.emit({
+            diagnostics.current.emit({
               level: 'warn',
               category: 'microphone',
               name: 'resource.cleanup_failed',
@@ -529,27 +612,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
           resolveRecorderStop();
         };
         const removeStopHandler = () => {
-          try {
-            recorderToStop.removeEventListener('stop', handleRecorderStop);
-          } catch (error) {
-            diagnostics.current?.emit({
-              level: 'warn',
-              category: 'microphone',
-              name: 'resource.cleanup_failed',
-              details: {
-                resource: 'microphone',
-                message: 'Recorder listener cleanup failed.',
-                error,
-              },
-            });
-          }
+          removeRecorderListener('stop', handleRecorderStop);
         };
         let stopListenerAttached = false;
         try {
           recorderToStop.addEventListener('stop', handleRecorderStop);
           stopListenerAttached = true;
         } catch (error) {
-          diagnostics.current?.emit({
+          diagnostics.current.emit({
             level: 'warn',
             category: 'microphone',
             name: 'resource.cleanup_failed',
@@ -584,19 +654,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
         const finalDataDeadline = Date.now() + RECORDER_FINAL_DATA_TIMEOUT_MS;
 
         if (recorderStopped && stopListenerAttached) {
-          let timeoutId: ReturnType<typeof setTimeout> | undefined;
-          const stopEventReceived = await Promise.race([
-            recorderStopEvent.then(() => true),
-            new Promise<boolean>((resolve) => {
-              timeoutId = setTimeout(
-                () => resolve(false),
-                Math.max(0, finalDataDeadline - Date.now()),
-              );
-            }),
-          ]);
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
+          const stopEventReceived = await settleBeforeDeadline(
+            recorderStopEvent,
+            finalDataDeadline,
+          );
           if (!stopEventReceived) {
             recorderStopped = false;
             removeDataHandler();
@@ -610,31 +671,21 @@ export const useMicrophone = (props: MicrophoneProps) => {
         }
 
         if (recorderStopped && pendingDataTasks.current.size > 0) {
-          const flushStartedAt = globalThis.performance?.now() ?? Date.now();
-          let timeoutId: ReturnType<typeof setTimeout> | undefined;
-          const finalDataFlushed = await Promise.race([
-            Promise.allSettled(pendingDataTasks.current).then(() => true),
-            new Promise<boolean>((resolve) => {
-              timeoutId = setTimeout(
-                () => resolve(false),
-                Math.max(0, finalDataDeadline - Date.now()),
-              );
-            }),
-          ]);
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
+          const flushStartedAt = getMonotonicTime();
+          const finalDataFlushed = await settleBeforeDeadline(
+            Promise.allSettled(pendingDataTasks.current),
+            finalDataDeadline,
+          );
           if (!finalDataFlushed) {
             failures.push(
               new Error('Recorder cleanup failed: final audio data timed out'),
             );
           }
-          diagnostics.current?.emit({
+          diagnostics.current.emit({
             level: finalDataFlushed ? 'info' : 'warn',
             category: 'microphone',
             name: 'microphone.flush_completed',
-            durationMs:
-              (globalThis.performance?.now() ?? Date.now()) - flushStartedAt,
+            durationMs: getMonotonicTime() - flushStartedAt,
             details: { completed: finalDataFlushed },
           });
         }
@@ -683,7 +734,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       if (wasRecording && recorderStopped && recordingLifecycle === 'stop') {
-        diagnostics.current?.emit({
+        diagnostics.current.emit({
           level: 'info',
           category: 'microphone',
           name: 'microphone.recording_stopped',
@@ -709,6 +760,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       throwCleanupFailures(failures, 'Microphone resource cleanup failed.');
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
     [
       dataHandler,
       diagnostics,
@@ -722,7 +774,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   const reportClosureFailure = useCallback(
     (message: string, error: unknown) => {
       const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-      onErrorRef.current?.(`${message}: ${detail}`, 'mic_closure_failure');
+      onErrorRef.current(`${message}: ${detail}`, 'mic_closure_failure');
     },
     [onErrorRef],
   );
@@ -772,7 +824,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       } catch (e: unknown) {
         stopFftAnalyzer();
         const message = getBrowserErrorMessage(e) ?? 'Unknown error';
-        diagnostics.current?.emit({
+        diagnostics.current.emit({
           level: 'warn',
           category: 'microphone',
           name: 'microphone.analyzer_failed',
@@ -791,7 +843,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         nextRecorder.addEventListener('dataavailable', dataHandler);
         nextRecorder.start(100);
         recordingStarted.current = true;
-        diagnostics.current?.emit({
+        diagnostics.current.emit({
           level: 'info',
           category: 'microphone',
           name: 'microphone.recording_started',
@@ -800,7 +852,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         try {
           onStartRecordingRef.current?.();
         } catch (callbackError) {
-          diagnostics.current?.emit({
+          diagnostics.current.emit({
             level: 'warn',
             category: 'consumer',
             name: 'consumer.callback_failed',
@@ -814,7 +866,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       } catch (e) {
         void enqueueMicrophoneOperation(() =>
           disposeMicrophoneResources(),
-        ).catch((cleanupError) => {
+        ).catch((cleanupError: unknown) => {
           reportClosureFailure(
             'Failed to fully roll back microphone initialization',
             cleanupError,
@@ -823,6 +875,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         throw e;
       }
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
     [
       applyMuteStateToStream,
       dataHandler,
@@ -838,6 +891,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
   );
 
   const performReplace = useCallback(
+    // fallow-ignore-next-line complexity -- replacement sequencing preserves the active microphone when browser resource transitions fail
     async (
       stream: MediaStream,
       sharedAudioContext: AudioContext | undefined,
@@ -853,7 +907,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           // The uncommitted stream remains caller-owned after rejection. Do
           // not retain it in the committed-stream retry set, where a permanent
           // failure would poison every later teardown.
-          diagnostics.current?.emit({
+          diagnostics.current.emit({
             level: 'warn',
             category: 'microphone',
             name: 'resource.cleanup_failed',
@@ -911,20 +965,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
             if (candidateMode === 'buffering') {
               candidateBuffers.push(buffer);
             } else if (candidateGeneration === recordingGeneration.current) {
-              sendAudio.current?.(buffer);
+              sendAudio.current(buffer);
             }
           })
           .catch((error: unknown) => {
-            diagnostics.current?.emit({
-              level: 'warn',
-              category: 'microphone',
-              name: 'resource.cleanup_failed',
-              details: {
-                resource: 'microphone',
-                message: 'Failed to read replacement microphone data.',
-                error,
-              },
-            });
+            reportDataReadFailure(
+              'Failed to read replacement microphone data.',
+              error,
+            );
           });
         candidateDataChain = task;
         const tasks =
@@ -938,9 +986,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
       let candidateRecorder: MediaRecorder | null = null;
       let candidateStarted = false;
       const disposeCandidate = () => {
-        streamsNeedingMuteReconciliation.current.delete(stream);
-        if (pendingReplacementStream.current === stream) {
-          pendingReplacementStream.current = null;
+        if (pendingReplacement.current?.stream === stream) {
+          pendingReplacement.current = null;
         }
         candidateMode = 'disposed';
         if (candidateRecorder) {
@@ -974,7 +1021,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
         );
         candidateRecorder.start(100);
         candidateStarted = true;
-        pendingReplacementStream.current = stream;
+        pendingReplacement.current = {
+          needsMuteReconciliation: false,
+          stream,
+        };
       } catch (error) {
         disposeCandidate();
         throw error;
@@ -1016,7 +1066,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         // The replacement is already recording. Keep it authoritative even if
         // a nonstandard old recorder or track did not clean up cleanly. Failed
         // streams stay retained so later replacements or teardown retry them.
-        diagnostics.current?.emit({
+        diagnostics.current.emit({
           level: 'warn',
           category: 'microphone',
           name: 'resource.cleanup_failed',
@@ -1034,10 +1084,14 @@ export const useMicrophone = (props: MicrophoneProps) => {
         throw createMicrophoneAbortError();
       }
 
-      if (streamsNeedingMuteReconciliation.current.has(stream)) {
+      const registeredCandidate = pendingReplacement.current;
+      if (
+        registeredCandidate.stream === stream &&
+        registeredCandidate.needsMuteReconciliation
+      ) {
         try {
           applyMuteStateToStream(stream, isMutedRef.current);
-          streamsNeedingMuteReconciliation.current.delete(stream);
+          registeredCandidate.needsMuteReconciliation = false;
         } catch (error) {
           reportMuteStateFailure(isMutedRef.current, error);
           disposeCandidate();
@@ -1052,7 +1106,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           throw error;
         }
       }
-      pendingReplacementStream.current = null;
+      pendingReplacement.current = null;
 
       recordingGeneration.current += 1;
       candidateGeneration = recordingGeneration.current;
@@ -1067,7 +1121,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       } catch (error) {
         stopFftAnalyzer();
         const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-        diagnostics.current?.emit({
+        diagnostics.current.emit({
           level: 'warn',
           category: 'microphone',
           name: 'microphone.analyzer_failed',
@@ -1084,14 +1138,16 @@ export const useMicrophone = (props: MicrophoneProps) => {
         void task.finally(() => pendingDataTasks.current.delete(task));
       });
       const bufferedCandidateAudio = candidateBuffers.splice(0);
-      bufferedCandidateAudio.forEach((buffer) => sendAudio.current?.(buffer));
+      bufferedCandidateAudio.forEach((buffer) => sendAudio.current(buffer));
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
     [
       applyMuteStateToStream,
       disposeMicrophoneResources,
       diagnostics,
       fftStore,
       reportClosureFailure,
+      reportDataReadFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
@@ -1134,76 +1190,68 @@ export const useMicrophone = (props: MicrophoneProps) => {
     reportClosureFailure,
   ]);
 
-  const mute = useCallback(() => {
-    let activeMuteFailed = false;
-    try {
-      applyMuteStateToActiveStreams(true);
-      const pendingStream = pendingReplacementStream.current;
-      if (pendingStream !== null) {
-        streamsNeedingMuteReconciliation.current.delete(pendingStream);
+  const mute = useCallback(
+    () => {
+      let activeMuteFailed = false;
+      try {
+        applyMuteStateToActiveStreams(true);
+      } catch (error) {
+        reportMuteStateFailure(true, error);
+        activeMuteFailed = true;
       }
-    } catch (error) {
-      reportMuteStateFailure(true, error);
-      const pendingStream = pendingReplacementStream.current;
-      if (pendingStream !== null) {
-        streamsNeedingMuteReconciliation.current.add(pendingStream);
-      }
-      activeMuteFailed = true;
-    }
-    const retiredFailures = applyMuteStateToRetiredStreams(true);
-    retiredFailures.forEach(reportRetiredStreamMuteFailure);
-    if (activeMuteFailed) return;
+      const retiredFailures = applyMuteStateToRetiredStreams(true);
+      retiredFailures.forEach(reportRetiredStreamMuteFailure);
+      if (activeMuteFailed) return;
 
-    isMutedRef.current = true;
-    pauseFftAnalyzer();
-    fftStore.clear();
-    setIsMuted(true);
-    diagnostics.current?.emit({
-      level: 'info',
-      category: 'microphone',
-      name: 'control.changed',
-      details: { control: 'microphone_mute', value: true },
-    });
-  }, [
-    applyMuteStateToActiveStreams,
-    applyMuteStateToRetiredStreams,
-    diagnostics,
-    fftStore,
-    reportMuteStateFailure,
-    reportRetiredStreamMuteFailure,
-    pauseFftAnalyzer,
-  ]);
+      isMutedRef.current = true;
+      pauseFftAnalyzer();
+      fftStore.clear();
+      setIsMuted(true);
+      diagnostics.current.emit({
+        level: 'info',
+        category: 'microphone',
+        name: 'control.changed',
+        details: { control: 'microphone_mute', value: true },
+      });
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
+    [
+      applyMuteStateToActiveStreams,
+      applyMuteStateToRetiredStreams,
+      diagnostics,
+      fftStore,
+      reportMuteStateFailure,
+      reportRetiredStreamMuteFailure,
+      pauseFftAnalyzer,
+    ],
+  );
 
-  const unmute = useCallback(() => {
-    try {
-      applyMuteStateToActiveStreams(false);
-      const pendingStream = pendingReplacementStream.current;
-      if (pendingStream !== null) {
-        streamsNeedingMuteReconciliation.current.delete(pendingStream);
+  const unmute = useCallback(
+    () => {
+      try {
+        applyMuteStateToActiveStreams(false);
+      } catch (error) {
+        reportMuteStateFailure(false, error);
+        return;
       }
-    } catch (error) {
-      reportMuteStateFailure(false, error);
-      const pendingStream = pendingReplacementStream.current;
-      if (pendingStream !== null) {
-        streamsNeedingMuteReconciliation.current.add(pendingStream);
-      }
-      return;
-    }
-    isMutedRef.current = false;
-    resumeFftAnalyzer();
-    setIsMuted(false);
-    diagnostics.current?.emit({
-      level: 'info',
-      category: 'microphone',
-      name: 'control.changed',
-      details: { control: 'microphone_mute', value: false },
-    });
-  }, [
-    applyMuteStateToActiveStreams,
-    diagnostics,
-    reportMuteStateFailure,
-    resumeFftAnalyzer,
-  ]);
+      isMutedRef.current = false;
+      resumeFftAnalyzer();
+      setIsMuted(false);
+      diagnostics.current.emit({
+        level: 'info',
+        category: 'microphone',
+        name: 'control.changed',
+        details: { control: 'microphone_mute', value: false },
+      });
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
+    [
+      applyMuteStateToActiveStreams,
+      diagnostics,
+      reportMuteStateFailure,
+      resumeFftAnalyzer,
+    ],
+  );
 
   useEffect(() => {
     microphoneMounted.current = true;
@@ -1221,8 +1269,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
           return;
         }
         await disposeMicrophoneResources();
-      }).catch((e) => {
-        cleanupDiagnostics?.emit({
+      }).catch((e: unknown) => {
+        cleanupDiagnostics.emit({
           level: 'error',
           category: 'microphone',
           name: 'resource.cleanup_failed',
@@ -1248,7 +1296,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       // React tree rather than surface a mic error.
       mimeTypeResult = getBrowserSupportedMimeType();
     } catch (e) {
-      diagnostics.current?.emit({
+      diagnostics.current.emit({
         level: 'error',
         category: 'microphone',
         name: 'resource.cleanup_failed',
@@ -1267,7 +1315,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
     if (mimeTypeResult.success) {
       mimeTypeRef.current = mimeTypeResult.mimeType;
-      diagnostics.current?.emit({
+      diagnostics.current.emit({
         level: 'info',
         category: 'microphone',
         name: 'microphone.mime_type_selected',

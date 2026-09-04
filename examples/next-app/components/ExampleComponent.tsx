@@ -185,7 +185,7 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   }, []);
 
   useEffect(() => {
-    if (accessToken === null) return;
+    if (accessToken === null) return undefined;
 
     const expiringToken = accessToken;
     const expiresAfterMs = Math.max(
@@ -202,7 +202,7 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   }, [accessToken]);
 
   useEffect(() => {
-    if (HUME_VOICE_HOSTNAME === null) return;
+    if (HUME_VOICE_HOSTNAME === null) return undefined;
 
     let cancelled = false;
     let refreshTimer: number | undefined;
@@ -235,51 +235,52 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     };
   }, [refreshAccessToken]);
 
-  const selectInputDevice = async (value: string) => {
+  const selectDevice = async (
+    value: string,
+    setSelectedDeviceId: (deviceId: string | null) => void,
+    setIsSwitching: (isSwitching: boolean) => void,
+    switchDevice: (deviceId: string | null) => Promise<void>,
+    fallbackErrorMessage: string,
+  ) => {
     const deviceId = fromDeviceValue(value);
     if (status.value !== 'connected') {
-      setSelectedMicrophoneId(deviceId);
+      setSelectedDeviceId(deviceId);
       return;
     }
 
-    setIsSwitchingInput(true);
+    setIsSwitching(true);
     setDeviceSwitchError(null);
     try {
-      await setInputDevice(deviceId);
-      setSelectedMicrophoneId(deviceId);
+      await switchDevice(deviceId);
+      setSelectedDeviceId(deviceId);
     } catch (error) {
       setDeviceSwitchError(
         isAudioDeviceSwitchError(error)
           ? error
-          : new Error('The microphone could not be switched.'),
+          : new Error(fallbackErrorMessage),
       );
     } finally {
-      setIsSwitchingInput(false);
+      setIsSwitching(false);
     }
   };
 
-  const selectOutputDevice = async (value: string) => {
-    const deviceId = fromDeviceValue(value);
-    if (status.value !== 'connected') {
-      setSelectedSpeakerId(deviceId);
-      return;
-    }
+  const selectInputDevice = (value: string) =>
+    selectDevice(
+      value,
+      setSelectedMicrophoneId,
+      setIsSwitchingInput,
+      setInputDevice,
+      'The microphone could not be switched.',
+    );
 
-    setIsSwitchingOutput(true);
-    setDeviceSwitchError(null);
-    try {
-      await setOutputDevice(deviceId);
-      setSelectedSpeakerId(deviceId);
-    } catch (error) {
-      setDeviceSwitchError(
-        isAudioDeviceSwitchError(error)
-          ? error
-          : new Error('The speaker could not be switched.'),
-      );
-    } finally {
-      setIsSwitchingOutput(false);
-    }
-  };
+  const selectOutputDevice = (value: string) =>
+    selectDevice(
+      value,
+      setSelectedSpeakerId,
+      setIsSwitchingOutput,
+      setOutputDevice,
+      'The speaker could not be switched.',
+    );
 
   const connectOptions =
     HUME_VOICE_HOSTNAME === null

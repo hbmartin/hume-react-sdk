@@ -135,7 +135,13 @@ export const parseClientToFrameAction = (
       const value = ClientToFrameActionSchema.parse(data);
       resolve(value);
     } catch (error) {
-      reject(error);
+      reject(
+        error instanceof Error
+          ? error
+          : new Error('Client-to-frame action parsing failed.', {
+              cause: error,
+            }),
+      );
     }
   });
 };

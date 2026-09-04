@@ -31,18 +31,24 @@ pnpm dev
 
 ## Day-to-day commands
 
-| Command                  | What it does                                            |
-| ------------------------ | ------------------------------------------------------- |
-| `pnpm dev`               | Watch-build every package and example                   |
-| `pnpm dev:iframe`        | Watch-build the packages and the embed example only     |
-| `pnpm test`              | Run the unit tests                                      |
-| `pnpm test:tools`        | Run the `tools/` test suites only                       |
-| `pnpm lint`              | Type-aware Oxlint plus the lint-config contract tests   |
-| `pnpm format`            | Apply Oxfmt formatting                                  |
-| `pnpm docs:dev`          | Regenerate the API reference and serve the site locally |
-| `pnpm docs:build`        | Build the site exactly as CI does                       |
-| `pnpm api-report:update` | Regenerate the committed public API reports             |
-| `pnpm check`             | The full gate — everything CI runs                      |
+| Command                       | What it does                                                           |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `pnpm dev`                    | Watch-build every package and example                                  |
+| `pnpm dev:iframe`             | Watch-build the packages and the embed example only                    |
+| `pnpm test`                   | Run the unit tests                                                     |
+| `pnpm test:coverage`          | Run all tests and write the shared Istanbul coverage map               |
+| `pnpm test:tools`             | Run the `tools/` test suites only                                      |
+| `pnpm lint`                   | Type-aware Oxlint plus the lint-config contract tests                  |
+| `pnpm check:fallow:dead-code` | Check dead code, dependency placement, private types, and boundaries   |
+| `pnpm check:fallow:health`    | Check coverage-backed complexity against the identity baseline         |
+| `pnpm check:fallow:dupes`     | Check semantic and near-miss clones against reviewed fingerprints      |
+| `pnpm check:fallow:baselines` | Reject baseline growth, weaker coverage floors, and broader exclusions |
+| `pnpm check:fallow:audit`     | Run the base-aware, new-only PR audit                                  |
+| `pnpm format`                 | Apply Oxfmt formatting                                                 |
+| `pnpm docs:dev`               | Regenerate the API reference and serve the site locally                |
+| `pnpm docs:build`             | Build the site exactly as CI does                                      |
+| `pnpm api-report:update`      | Regenerate the committed public API reports                            |
+| `pnpm check`                  | The complete local and release gate                                    |
 
 ## Running the examples
 
@@ -129,7 +135,9 @@ running `pnpm docs:api` in a second terminal.
 | `format:check`                | Run `pnpm format`                                                                                                                     |
 | `check:deps`                  | Syncpack found a dependency at different versions across manifests                                                                    |
 | `check:docs`                  | A spelling miss (add the word to `.cspell.json`, or use a file-local `cspell:words` directive for a one-off) or a Markdown lint error |
-| `check:fallow`                | Dead code — an unused file, export, or type. Either use it, delete it, or add it to `entry` in `.fallowrc.jsonc`                      |
+| `test:coverage`               | A test failed, a workspace coverage floor regressed, or Istanbul could not include all owned runtime source                           |
+| `check:fallow`                | Dead code, dependency placement, private-type, boundary, coverage-backed health, or semantic-duplication policy failed                |
+| `check:fallow:baselines`      | A baseline grew, a coverage floor fell, or an ignore/exclusion pattern became broader                                                 |
 | `check:packages`              | `publint` or `are-the-types-wrong` rejected the packed tarball                                                                        |
 | `api-report:check`            | The public API changed; run `pnpm api-report:update`                                                                                  |
 | `test`                        | A unit test failed                                                                                                                    |
@@ -137,6 +145,14 @@ running `pnpm docs:api` in a second terminal.
 Run `pnpm check` before opening a pull request. To reproduce a CI job more
 exactly, the `justfile` has `just local-ci` and `just local-docs`, which run the
 workflows under [act](https://github.com/nektos/act).
+
+The committed Fallow baselines are monotonic debt ceilings. To inspect a
+candidate change, run `pnpm check:fallow:baselines:preview`; it writes only to
+the ignored `.fallow-preview/` directory. Do not copy a larger candidate over a
+tracked baseline. The policy permits removed health identities, lower counts,
+removed duplicate fingerprints, and raised coverage floors, while rejecting
+the inverse changes. The PR audit deliberately does not consume the health
+baseline, so changed functions must avoid introducing new complexity debt.
 
 ## Commits and pull requests
 

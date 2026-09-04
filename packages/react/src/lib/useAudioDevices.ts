@@ -194,6 +194,7 @@ export const useAudioDevices = ({
 
     permissionRequest.current = operation;
     return operation;
+    // oxlint-disable-next-line react/memo-dependencies -- the explicit stable refetch dependency documents permission refresh sequencing
   }, [refetch]);
 
   useEffect(() => {
@@ -203,7 +204,7 @@ export const useAudioDevices = ({
     setIsSupported(supported);
     if (!supported) {
       isMounted.current = false;
-      return;
+      return undefined;
     }
 
     const { mediaDevices } = navigator;

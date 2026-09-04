@@ -1358,6 +1358,52 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['sensitive-0']).toBe(0);
   });
 
+  it('does not let nested sensitive content consume the ordinary entry reserve', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const sensitivePayload = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`nested-${index}`, index]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { phase: 'preserved' },
+      sensitiveDetails: { payload: sensitivePayload },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['phase']).toBe('preserved');
+    expect(events[0]?.details['payload']).toMatchObject({
+      'nested-0': 0,
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
+  it('preserves a small sensitive payload beside a full ordinary payload', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`detail-${index}`, index]),
+    );
+    const sensitiveDetails = Object.fromEntries(
+      Array.from({ length: 5 }, (_, index) => [`sensitive-${index}`, index]),
+    );
+
+    reporter.emit({ ...input, details, sensitiveDetails });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['detail-0']).toBe(0);
+    expect(events[0]?.details).toMatchObject(sensitiveDetails);
+  });
+
   it('reuses sampled descriptors while merging ordinary keys', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1415,18 +1461,18 @@ describe('voice diagnostics reporter', () => {
     let priorityProbeReads = 0;
     // With the root, scan consumer, and noise array, this frontier fills the
     // 2,000-node discovery allowance.
-    const targets = Array.from(
+    const targets: Record<string, unknown>[] = Array.from(
       { length: 1_997 },
-      () => ({}) as Record<string, unknown>,
+      () => ({}),
     );
     const frontier = targets.map(
       (target) =>
         new Proxy(target, {
-          getOwnPropertyDescriptor(target, key) {
+          getOwnPropertyDescriptor(proxyTarget, key) {
             if (typeof key === 'string' && priorityKeys.has(key)) {
               priorityProbeReads += 1;
             }
-            return Reflect.getOwnPropertyDescriptor(target, key);
+            return Reflect.getOwnPropertyDescriptor(proxyTarget, key);
           },
         }),
     );
@@ -2113,15 +2159,15 @@ describe('voice diagnostics reporter', () => {
     );
     let unstableDescriptorReads = 0;
     const nested = new Proxy(target, {
-      getOwnPropertyDescriptor(target, key) {
+      getOwnPropertyDescriptor(proxyTarget, key) {
         if (key === 'unstable') {
           unstableDescriptorReads += 1;
           if (unstableDescriptorReads === 2) {
-            Reflect.deleteProperty(target, key);
+            Reflect.deleteProperty(proxyTarget, key);
             return undefined;
           }
         }
-        return Reflect.getOwnPropertyDescriptor(target, key);
+        return Reflect.getOwnPropertyDescriptor(proxyTarget, key);
       },
     });
 

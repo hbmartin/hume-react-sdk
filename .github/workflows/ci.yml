@@ -89,26 +89,6 @@ jobs:
       - name: Check spelling and Markdown
         run: pnpm check:docs
 
-  tests:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: '.nvmrc'
-          package-manager-cache: false
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Run unit tests
-        run: pnpm test
-
   windows-tools:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
@@ -147,12 +127,22 @@ jobs:
           package-manager-cache: false
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Run tests and generate the shared Istanbul map
+        run: pnpm test:coverage
       - name: Check dead code and architecture boundaries
-        run: pnpm check:fallow
-      - name: Report private type leaks
-        run: pnpm check:fallow:private-types
+        run: pnpm check:fallow:dead-code
+      - name: Check coverage-backed health
+        run: pnpm check:fallow:health
+      - name: Check semantic and near-miss duplication
+        run: pnpm check:fallow:dupes
+      - name: Protect baselines and coverage floors
+        env:
+          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: pnpm check:fallow:baselines
       - name: Reject new duplication and complexity regressions
         if: github.event_name == 'pull_request'
+        env:
+          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
         run: pnpm check:fallow:audit
 
   packages-api:
@@ -228,7 +218,6 @@ jobs:
       - formatting-docs-dependencies
       - oxlint
       - packages-api
-      - tests
       - windows-tools
       - workflow-security
     runs-on: ubuntu-latest

@@ -73,16 +73,17 @@ describe('cleanup error helpers', () => {
   });
 
   it('does not drop a thrown undefined failure', () => {
-    let caught = false;
+    const notCaught = Symbol('not caught');
+    let caught: unknown = notCaught;
 
     try {
       throwCleanupFailures([undefined], 'Cleanup failed.');
     } catch (error) {
-      caught = true;
-      expect(error).toBeUndefined();
+      caught = error;
     }
 
-    expect(caught).toBe(true);
+    expect(caught).not.toBe(notCaught);
+    expect(caught).toBeUndefined();
   });
 
   it('flattens aggregate failures for later cleanup reporting', () => {

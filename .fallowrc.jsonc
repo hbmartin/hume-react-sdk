@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/fallow/schema.json",
+  "minimumVersion": "3.22.0",
+  "sealed": true,
   "entry": [
     ".pnpmfile.cjs",
     "packages/react/src/worklets/audio-worklet-20250702.js",
@@ -9,9 +11,9 @@
     "**/.next/**",
     "**/coverage/**",
     "**/etc/*.api.md",
+    "examples/next-app/next-env.d.ts",
     ".fallow-baselines/**",
     "packages/core/**",
-    "tools/lint-contract/fixtures/**",
   ],
   "ignoreDependencies": [
     // Invoked through its api-documenter CLI binary by the docs generator.
@@ -19,7 +21,20 @@
   ],
   "typeAware": {
     "enabled": true,
-    "require": "best-effort",
+    "projects": [
+      "tsconfig.json",
+      "packages/embed/tsconfig.json",
+      "packages/embed-react/tsconfig.json",
+      "packages/react/tsconfig.json",
+      "examples/next-app/tsconfig.json",
+      "examples/vite-app/tsconfig.json",
+      "examples/vite-app-embed/tsconfig.json",
+      "examples/vite-app-embed/tsconfig.node.json",
+      "tools/quality-gate/tsconfig.json",
+      "tools/lint-contract/tsconfig.json",
+      "tools/vitest-config/tsconfig.json",
+    ],
+    "require": "complete",
   },
   "usedClassMembers": [
     "clear",
@@ -35,17 +50,35 @@
     "unused-files": "error",
     "unused-exports": "error",
     "unused-types": "error",
-    "private-type-leaks": "off",
+    "private-type-leaks": "error",
     "unused-dependencies": "error",
     "unused-dev-dependencies": "error",
     "unused-optional-dependencies": "error",
     "unresolved-imports": "error",
     "unlisted-dependencies": "error",
+    "type-only-dependencies": "error",
+    "test-only-dependencies": "error",
+    "dev-dependencies-in-production": "error",
     "duplicate-exports": "error",
     "circular-dependencies": "error",
     "re-export-cycle": "error",
     "boundary-violation": "error",
     "stale-suppressions": "error",
+    "require-suppression-reason": "error",
+  },
+  "duplicates": {
+    "mode": "semantic",
+    "near": true,
+    "ignore": ["packages/react/src/worklets/audio-worklet-20250702.js"],
+  },
+  "health": {
+    "coverage": "coverage/coverage-final.json",
+    "ignore": [
+      "**/*.test.{js,mjs,cjs,ts,tsx}",
+      "**/*.spec.{js,mjs,cjs,ts,tsx}",
+      "packages/react/src/worklets/audio-worklet-20250702.js",
+      "tools/**",
+    ],
   },
   "overrides": [
     {
@@ -69,8 +102,28 @@
         "patterns": ["packages/react/src/**"],
       },
       {
-        "name": "examples",
-        "patterns": ["examples/**"],
+        "name": "examples-source",
+        "patterns": [
+          "examples/*/src/**",
+          "examples/*/index.html",
+          "examples/next-app/app/**",
+          "examples/next-app/components/**",
+          "examples/next-app/types/**",
+          "examples/next-app/utils/**",
+        ],
+      },
+      {
+        "name": "workspace-configuration",
+        "patterns": [
+          ".pnpmfile.cjs",
+          "*.config.{js,cjs,mjs,ts,mts,cts}",
+          "packages/*/*.config.{js,cjs,mjs,ts,mts,cts}",
+          "examples/*/*.config.{js,cjs,mjs,ts,mts,cts}",
+        ],
+      },
+      {
+        "name": "documentation",
+        "patterns": ["docs/**"],
       },
       {
         "name": "tools",
@@ -91,13 +144,21 @@
         "allow": ["voice-react"],
       },
       {
-        "from": "examples",
+        "from": "examples-source",
         "allow": [
-          "examples",
+          "examples-source",
           "voice-embed",
           "voice-embed-react",
           "voice-react",
         ],
+      },
+      {
+        "from": "workspace-configuration",
+        "allow": ["workspace-configuration", "tools"],
+      },
+      {
+        "from": "documentation",
+        "allow": ["documentation", "tools"],
       },
       {
         "from": "tools",
@@ -105,11 +166,13 @@
       },
     ],
     "coverage": {
-      "requireAllFiles": false,
+      "requireAllFiles": true,
     },
   },
   "audit": {
     "gate": "new-only",
-    "typeAware": true,
+    // The audit wrapper runs a mandatory complete semantic dead-code pass first;
+    // disabling it here avoids an unrelated bounded type-coupling payload in the combined report.
+    "typeAware": false,
   },
 }

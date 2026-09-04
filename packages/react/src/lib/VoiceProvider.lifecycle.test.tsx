@@ -938,6 +938,7 @@ describe('VoiceProvider close lifecycle', () => {
       name: 'AbortError',
     };
     mocks.stopStream.mockImplementationOnce(() => {
+      // oxlint-disable-next-line typescript/only-throw-error -- exercises normalization of cross-realm error-shaped browser failures
       throw streamStopError;
     });
 
@@ -1205,6 +1206,7 @@ describe('VoiceProvider close lifecycle', () => {
     async (_label, makeMicrophoneStartError) => {
       const microphoneStartError = makeMicrophoneStartError();
       mocks.micStart.mockImplementationOnce(() => {
+        // oxlint-disable-next-line typescript/only-throw-error -- parameterized case must exercise cross-realm error-shaped failures
         throw microphoneStartError;
       });
       const onError = vi.fn(() => {
@@ -1546,8 +1548,9 @@ describe('VoiceProvider close lifecycle', () => {
       const onError = vi.fn();
       const contextError = makeContextError();
       globalThis.AudioContext = vi.fn(function AudioContextMock() {
+        // oxlint-disable-next-line typescript/only-throw-error -- parameterized case must exercise cross-realm error-shaped failures
         throw contextError;
-      }) as unknown as typeof AudioContext;
+      });
       const stream = { id: 'captured-stream' } as unknown as MediaStream;
       mocks.getStream.mockResolvedValueOnce(stream);
       const { result } = renderHook(() => useVoice(), {
@@ -1582,7 +1585,7 @@ describe('VoiceProvider close lifecycle', () => {
     globalThis.AudioContext = vi.fn(function AudioContextMock() {
       cancelConnection();
       throw new DOMException('context unavailable', 'NotSupportedError');
-    }) as unknown as typeof AudioContext;
+    });
     const stream = { id: 'stale-stream' } as unknown as MediaStream;
     mocks.getStream.mockResolvedValueOnce(stream);
     const { result } = renderHook(() => useVoice(), {
@@ -2101,6 +2104,7 @@ describe('VoiceProvider close lifecycle', () => {
     mocks.getStream.mockResolvedValueOnce(candidateStream);
     mocks.micReplace.mockRejectedValueOnce(replacementFailure);
     mocks.stopStream.mockImplementationOnce(() => {
+      // oxlint-disable-next-line typescript/only-throw-error -- exercises cleanup of a cross-realm error-shaped browser failure
       throw cleanupFailure;
     });
 
@@ -2132,6 +2136,7 @@ describe('VoiceProvider close lifecycle', () => {
       }),
     );
     mocks.clientSendUserInput.mockImplementationOnce(() => {
+      // oxlint-disable-next-line typescript/only-throw-error -- exercises normalization of cross-realm error-shaped socket failures
       throw sendFailure;
     });
 

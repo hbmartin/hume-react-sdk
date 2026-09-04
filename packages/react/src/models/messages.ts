@@ -1,19 +1,5 @@
 import { type Hume } from 'hume';
 
-type AssistantEnd = Hume.empathicVoice.AssistantEnd;
-type AssistantMessage = Hume.empathicVoice.AssistantMessage;
-type AssistantProsody = Hume.empathicVoice.AssistantProsody;
-type AudioInput = Hume.empathicVoice.AudioInput;
-type AudioOutput = Hume.empathicVoice.AudioOutput;
-type ChatMetadata = Hume.empathicVoice.ChatMetadata;
-type JsonMessage = Hume.empathicVoice.JsonMessage;
-type ToolCallMessage = Hume.empathicVoice.ToolCallMessage;
-type ToolErrorMessage = Hume.empathicVoice.ToolErrorMessage;
-type ToolResponseMessage = Hume.empathicVoice.ToolResponseMessage;
-type UserInterruption = Hume.empathicVoice.UserInterruption;
-type UserMessage = Hume.empathicVoice.UserMessage;
-type WebSocketError = Hume.empathicVoice.WebSocketError;
-
 /**
  * An EVI wire message stamped with the time the SDK received it.
  *
@@ -23,28 +9,36 @@ type WebSocketError = Hume.empathicVoice.WebSocketError;
 export type WithReceivedAt<T> = T & { receivedAt: Date };
 
 /** An `assistant_end` message marking the end of an assistant turn. */
-export type AssistantEndMessage = WithReceivedAt<AssistantEnd>;
+export type AssistantEndMessage =
+  WithReceivedAt<Hume.empathicVoice.AssistantEnd>;
 /** A transcript of what the assistant said. */
-export type AssistantTranscriptMessage = WithReceivedAt<AssistantMessage>;
+export type AssistantTranscriptMessage =
+  WithReceivedAt<Hume.empathicVoice.AssistantMessage>;
 /** Prosody scores for a segment of assistant speech. */
-export type AssistantProsodyMessage = WithReceivedAt<AssistantProsody>;
+export type AssistantProsodyMessage =
+  WithReceivedAt<Hume.empathicVoice.AssistantProsody>;
 /** A chunk of captured microphone audio sent to EVI. */
-export type AudioMessage = WithReceivedAt<AudioInput>;
+export type AudioMessage = WithReceivedAt<Hume.empathicVoice.AudioInput>;
 /** A chunk of assistant audio received from EVI for playback. */
-export type AudioOutputMessage = WithReceivedAt<AudioOutput>;
+export type AudioOutputMessage = WithReceivedAt<Hume.empathicVoice.AudioOutput>;
 /** Metadata for the chat, including chat, chat group, and request IDs. */
-export type ChatMetadataMessage = WithReceivedAt<ChatMetadata>;
+export type ChatMetadataMessage =
+  WithReceivedAt<Hume.empathicVoice.ChatMetadata>;
 /** An error reported by EVI over the socket. */
-export type JSONErrorMessage = WithReceivedAt<WebSocketError>;
+export type JSONErrorMessage =
+  WithReceivedAt<Hume.empathicVoice.WebSocketError>;
 /** Any non-audio message received over the EVI socket. */
-export type JSONMessage = WithReceivedAt<JsonMessage>;
+export type JSONMessage = WithReceivedAt<Hume.empathicVoice.JsonMessage>;
 /** A request from the assistant to invoke one of your tools. */
-export type ToolCall = WithReceivedAt<ToolCallMessage>;
+export type ToolCall = WithReceivedAt<Hume.empathicVoice.ToolCallMessage>;
 /** A failure returned to the assistant in place of a tool result. */
-export type ToolError = WithReceivedAt<ToolErrorMessage>;
+export type ToolError = WithReceivedAt<Hume.empathicVoice.ToolErrorMessage>;
 /** A successful tool result returned to the assistant. */
-export type ToolResponse = WithReceivedAt<ToolResponseMessage>;
+export type ToolResponse =
+  WithReceivedAt<Hume.empathicVoice.ToolResponseMessage>;
 /** A notice that the user interrupted the assistant. */
-export type UserInterruptionMessage = WithReceivedAt<UserInterruption>;
+export type UserInterruptionMessage =
+  WithReceivedAt<Hume.empathicVoice.UserInterruption>;
 /** A transcript of what the user said. */
-export type UserTranscriptMessage = WithReceivedAt<UserMessage>;
+export type UserTranscriptMessage =
+  WithReceivedAt<Hume.empathicVoice.UserMessage>;

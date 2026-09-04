@@ -235,7 +235,10 @@ type ForcedPlayerCleanupResult =
   | Readonly<{ status: 'pending' }>
   | Readonly<{ failure: unknown; status: 'rejected' }>;
 
-const getMonotonicTime = () => globalThis.performance?.now() ?? Date.now();
+const getMonotonicTime = () => {
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
+  return globalThis.performance?.now() ?? Date.now();
+};
 
 const RESOURCE_CLEANUP_TIMEOUT_MS = 15_000;
 
@@ -664,6 +667,7 @@ export const useCallDurationTimestamp = (): string | null => {
  * </VoiceProvider>
  * ```
  */
+// fallow-ignore-next-line complexity -- provider state intentionally coordinates behavior-sensitive socket, microphone, and audio lifecycles
 export const VoiceProvider: FC<VoiceProviderProps> = ({
   children,
   clearMessagesOnDisconnect = true,
@@ -879,6 +883,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             });
             void Promise.resolve(timeoutResult()).then(resolve, reject);
           } catch (cleanupError) {
+            // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- preserve an arbitrary cleanup rejection for the aggregate error contract
             reject(cleanupError);
           }
         }
@@ -895,6 +900,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             settled = true;
             if (timeoutId !== undefined) clearTimeout(timeoutId);
             pendingResourceCleanupTimeoutsRef.current.delete(timeoutControl);
+            // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- preserve an arbitrary cleanup rejection for the aggregate error contract
             reject(cleanupError);
           },
         );
@@ -991,7 +997,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const onMessageWithDiagnostics = useCallback(
     (message: JSONMessage) =>
       invokeConsumerCallback(diagnostics, 'onMessage', () =>
-        onMessage.current?.(message),
+        onMessage.current(message),
       ),
     [diagnostics, onMessage],
   );
@@ -1047,7 +1053,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         },
       });
       invokeConsumerCallback(diagnostics, 'onError', () =>
-        onError.current?.(err),
+        onError.current(err),
       );
     },
     [diagnostics, onError],
@@ -1096,7 +1102,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   > = useCallback(
     (msg, err) => {
       stopTimer();
-      const message = `A websocket connection could not be established. Error message: ${msg ?? 'unknown'}`;
+      const message = `A websocket connection could not be established. Error message: ${msg}`;
       updateError({
         type: 'socket_error',
         reason: 'socket_connection_failure',
@@ -1322,7 +1328,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             },
           });
           invokeConsumerCallback(diagnostics, 'onError', () =>
-            onError.current?.(voiceError),
+            onError.current(voiceError),
           );
         }
       },
@@ -1376,7 +1382,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // their failures without moving the live connection into the provider's
         // fatal error state.
         invokeConsumerCallback(diagnostics, 'onError', () =>
-          onError.current?.(voiceError),
+          onError.current(voiceError),
         );
       },
       [
@@ -1395,7 +1401,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       });
       startTimer();
       createConnectMessage();
-      invokeConsumerCallback(diagnostics, 'onOpen', () => onOpen.current?.());
+      invokeConsumerCallback(diagnostics, 'onOpen', () => onOpen.current());
     }, [createConnectMessage, diagnostics, onOpen, startTimer]),
     onClose: useCallback(
       (
@@ -1412,7 +1418,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         };
         const publishCloseCallback = () => {
           invokeIsolatedConsumerCallback(diagnostics, 'onClose', () =>
-            onClose.current?.(event),
+            onClose.current(event),
           );
         };
         if (
@@ -1918,8 +1924,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // connection is in progress, we need to stop the connection
       // attempt and prevent audio resources from being initialized.
       return (
-        isConnectingRef.current !== false &&
-        isCurrentLifecycleGeneration(generation)
+        isConnectingRef.current && isCurrentLifecycleGeneration(generation)
       );
     },
     [isCurrentLifecycleGeneration],
@@ -2520,6 +2525,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           failures,
         );
       };
+      // fallow-ignore-next-line complexity -- teardown ordering preserves ownership across asynchronous audio and socket cleanup
       const rawCleanup = (async () => {
         if (cleanupsToAwait.length > 0) {
           await Promise.allSettled(cleanupsToAwait);

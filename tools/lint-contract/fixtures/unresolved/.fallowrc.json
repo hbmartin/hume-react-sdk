@@ -1,6 +1,0 @@
-{
-  "entry": ["src/index.ts"],
-  "rules": {
-    "unresolved-imports": "error"
-  }
-}

@@ -13,7 +13,8 @@
     "node"
   ],
   "categories": {
-    "correctness": "error"
+    "correctness": "error",
+    "suspicious": "error"
   },
   "options": {
     "typeAware": true
@@ -24,33 +25,57 @@
     "no-debugger": "error",
     "no-duplicate-imports": "error",
     "no-nested-ternary": "error",
+    "no-undef": "error",
     "no-unused-vars": "off",
     "typescript/await-thenable": "error",
     "typescript/consistent-type-exports": "error",
     "typescript/consistent-type-imports": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-explicit-any": "error",
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-non-null-assertion": "error",
     "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
     "typescript/no-unsafe-argument": "error",
     "typescript/no-unsafe-assignment": "error",
     "typescript/no-unsafe-call": "error",
     "typescript/no-unsafe-member-access": "error",
     "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-type-assertion": "error",
     "typescript/no-unused-vars": [
       "error",
       {
+        "args": "all",
         "argsIgnorePattern": "^_",
-        "varsIgnorePattern": "^_",
+        "caughtErrors": "all",
         "caughtErrorsIgnorePattern": "^_",
         "ignoreRestSiblings": true
       }
     ],
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/restrict-plus-operands": [
+      "error",
+      {
+        "allowAny": false,
+        "allowBoolean": false,
+        "allowNullish": false,
+        "allowNumberAndString": false,
+        "allowRegExp": false
+      }
+    ],
+    "typescript/restrict-template-expressions": "error",
     "typescript/strict-boolean-expressions": "error",
     "typescript/switch-exhaustiveness-check": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
     "import/no-cycle": "error",
+    "import/no-named-as-default": "off",
+    "import/no-unassigned-import": "off",
+    "no-underscore-dangle": "off",
+    "promise/always-return": "off",
     "react/exhaustive-deps": "error",
-    "react/preserve-manual-memoization": "off",
+    "react/preserve-manual-memoization": "error",
     "react/react-in-jsx-scope": "off",
     "react/rules-of-hooks": "error",
     "react/immutability": "error",
@@ -60,32 +85,81 @@
     "react/set-state-in-render": "error",
     "react/static-components": "error",
     "react/unsupported-syntax": "error",
+    "unicorn/no-array-sort": "off",
+    "unicorn/prefer-add-event-listener": "off",
+    "unicorn/require-post-message-target-origin": "off",
+    "vitest/no-conditional-tests": "error",
     "vitest/expect-expect": "error",
-    "vitest/no-conditional-expect": "off",
+    "vitest/no-conditional-expect": "error",
+    "vitest/no-disabled-tests": "error",
     "vitest/no-focused-tests": "error",
+    "vitest/no-test-return-statement": "error",
     "vitest/require-mock-type-parameters": "off",
-    "vitest/require-to-throw-message": "off",
+    "vitest/require-to-throw-message": "error",
     "vitest/valid-expect": "error"
   },
   "env": {
-    "browser": true,
-    "builtin": true,
-    "node": true
-  },
-  "globals": {
-    "AudioWorkletProcessor": "readonly",
-    "registerProcessor": "readonly",
-    "sampleRate": "readonly"
+    "builtin": true
   },
   "ignorePatterns": [
     "**/dist/**",
     "**/.next/**",
     "**/coverage/**",
-    "**/*.d.ts",
-    "packages/react/src/worklets/audio-worklet-20250702.js",
-    "tools/lint-contract/fixtures/**"
+    "examples/next-app/next-env.d.ts",
+    "packages/react/src/worklets/audio-worklet-20250702.js"
   ],
   "overrides": [
+    {
+      "files": [
+        "packages/*/src/**/*.{ts,tsx}",
+        "examples/vite-app*/src/**/*.{ts,tsx}",
+        "examples/next-app/components/**/*.{ts,tsx}",
+        "examples/next-app/utils/access-token-lifecycle.ts",
+        "examples/next-app/utils/hume-hostname.ts",
+        "examples/next-app/utils/hume.ts",
+        "examples/next-app/utils/index.ts"
+      ],
+      "env": {
+        "browser": true
+      }
+    },
+    {
+      "files": [
+        "**/*.config.{js,cjs,mjs,ts,mts,cts}",
+        "tools/**/*.{js,cjs,mjs,ts,mts,cts}",
+        "docs/.vitepress/**/*.{js,cjs,mjs,ts,mts,cts}",
+        ".pnpmfile.cjs",
+        "examples/next-app/app/**/*.{ts,tsx}",
+        "examples/next-app/utils/access-token-authorization.ts",
+        "examples/next-app/utils/get-hume-access-token.ts",
+        "examples/next-app/utils/server-monotonic-time.ts"
+      ],
+      "env": {
+        "node": true
+      }
+    },
+    {
+      "files": ["packages/**/*.test.{ts,tsx}", "packages/**/*.spec.{ts,tsx}"],
+      "env": {
+        "browser": true,
+        "node": true
+      }
+    },
+    {
+      "files": ["examples/next-app/**/*.test.{ts,tsx}"],
+      "env": {
+        "node": true
+      }
+    },
+    {
+      "files": [
+        "examples/next-app/components/Voice.tsx",
+        "examples/next-app/utils/hume.ts"
+      ],
+      "globals": {
+        "process": "readonly"
+      }
+    },
     {
       "files": ["**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
       "rules": {
@@ -112,28 +186,6 @@
       "files": ["examples/**/*"],
       "rules": {
         "no-console": "off"
-      }
-    },
-    {
-      "files": [
-        "packages/react/src/lib/VoiceProvider.tsx",
-        "packages/react/src/lib/useMicrophone.ts",
-        "packages/react/src/lib/useSoundPlayer.ts",
-        "packages/react/src/lib/useVoiceClient.ts"
-      ],
-      "rules": {
-        "typescript/no-unnecessary-condition": "off"
-      }
-    },
-    {
-      "files": [
-        "packages/react/src/lib/useCallDuration.ts",
-        "packages/react/src/lib/useLatestRef.ts",
-        "packages/react/src/lib/useMicrophone.ts",
-        "packages/react/src/lib/useSoundPlayer.ts"
-      ],
-      "rules": {
-        "react/refs": "off"
       }
     }
   ]

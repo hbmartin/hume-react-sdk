@@ -5,5 +5,5 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["config.test.mjs"]
+  "include": ["**/*.mjs"]
 }

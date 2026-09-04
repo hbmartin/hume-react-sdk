@@ -19,37 +19,26 @@ const blobSizeGetter = (() => {
   return Object.getOwnPropertyDescriptor(Blob.prototype, 'size')?.get;
 })();
 
-const hasArrayBufferBrand = (data: unknown): data is ArrayBuffer => {
-  if (
-    typeof data !== 'object' ||
-    data === null ||
-    arrayBufferByteLengthGetter === undefined
-  ) {
+const hasNativeBrand = (
+  data: unknown,
+  getter: ((this: unknown) => unknown) | undefined,
+): boolean => {
+  if (typeof data !== 'object' || data === null || getter === undefined) {
     return false;
   }
   try {
-    Reflect.apply(arrayBufferByteLengthGetter, data, []);
+    Reflect.apply(getter, data, []);
     return true;
   } catch {
     return false;
   }
 };
 
-const hasBlobBrand = (data: unknown): data is Blob => {
-  if (
-    typeof data !== 'object' ||
-    data === null ||
-    blobSizeGetter === undefined
-  ) {
-    return false;
-  }
-  try {
-    Reflect.apply(blobSizeGetter, data, []);
-    return true;
-  } catch {
-    return false;
-  }
-};
+const hasArrayBufferBrand = (data: unknown): data is ArrayBuffer =>
+  hasNativeBrand(data, arrayBufferByteLengthGetter);
+
+const hasBlobBrand = (data: unknown): data is Blob =>
+  hasNativeBrand(data, blobSizeGetter);
 
 const isArrayBufferView = (data: unknown): data is ArrayBufferView => {
   try {

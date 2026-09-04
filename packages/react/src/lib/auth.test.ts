@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { AuthStrategySchema, getAuthStrategyError } from './auth';
 
+const getParseError = (
+  result: ReturnType<typeof AuthStrategySchema.safeParse>,
+) => {
+  if (result.success) {
+    throw new Error('Expected authentication strategy parsing to fail.');
+  }
+  return result.error;
+};
+
 describe('AuthStrategySchema', () => {
   it('accepts an API key strategy', () => {
     expect(
@@ -17,12 +26,9 @@ describe('AuthStrategySchema', () => {
 
   it('rejects an empty API key with a descriptive message', () => {
     const result = AuthStrategySchema.safeParse({ type: 'apiKey', value: '' });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.message).toBe(
-        'API key for the Hume API must not be empty',
-      );
-    }
+    expect(getParseError(result).issues[0]?.message).toBe(
+      'API key for the Hume API must not be empty',
+    );
   });
 
   it('rejects a whitespace-only API key as empty', () => {
@@ -30,22 +36,16 @@ describe('AuthStrategySchema', () => {
       type: 'apiKey',
       value: ' \t\n',
     });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.message).toBe(
-        'API key for the Hume API must not be empty',
-      );
-    }
+    expect(getParseError(result).issues[0]?.message).toBe(
+      'API key for the Hume API must not be empty',
+    );
   });
 
   it('rejects a missing access token with a descriptive message', () => {
     const result = AuthStrategySchema.safeParse({ type: 'accessToken' });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.message).toBe(
-        'Access token for the Hume API is required',
-      );
-    }
+    expect(getParseError(result).issues[0]?.message).toBe(
+      'Access token for the Hume API is required',
+    );
   });
 
   it('rejects an unknown strategy type', () => {

@@ -22,7 +22,7 @@ export const getPropertyDescriptorSafely = (
   value: object,
   key: PropertyKey,
 ): PropertyDescriptor | null | undefined => {
-  const visited = new WeakSet<object>();
+  const visited = new WeakSet();
   let current: object | null = value;
 
   try {
@@ -35,7 +35,7 @@ export const getPropertyDescriptorSafely = (
       visited.add(current);
       const descriptor = Object.getOwnPropertyDescriptor(current, key);
       if (descriptor !== undefined) return descriptor;
-      current = Object.getPrototypeOf(current) as object | null;
+      current = Reflect.getPrototypeOf(current);
     }
   } catch {
     return null;

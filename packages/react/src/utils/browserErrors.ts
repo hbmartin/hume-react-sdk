@@ -20,10 +20,7 @@ const getNativeDomExceptionStringGetter = (
 ): DomExceptionStringGetter | undefined => {
   try {
     if (typeof DOMException === 'undefined') return undefined;
-    const descriptor = getPropertyDescriptorSafely(
-      DOMException.prototype as object,
-      key,
-    );
+    const descriptor = getPropertyDescriptorSafely(DOMException.prototype, key);
     // oxlint-disable-next-line typescript/unbound-method -- captured for guarded invocation with a candidate DOMException receiver
     return descriptor?.get;
   } catch {

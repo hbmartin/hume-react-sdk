@@ -39,7 +39,7 @@ const stubMediaRecorder = (
     >();
 
     start = vi.fn(() => {
-      onStart?.(instances.indexOf(this as unknown as RecorderInstance));
+      onStart?.(instances.indexOf(this));
     });
 
     stop = vi.fn(() => {
@@ -376,6 +376,27 @@ describe('useMicrophone', () => {
 
     act(() => result.current.unmute());
     expect(mutedTrack.enabled).toBe(true);
+  });
+
+  it('restores a track whose mute setter throws after applying the value', () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    let enabled = true;
+    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    Object.defineProperty(track, 'enabled', {
+      configurable: true,
+      get: () => enabled,
+      set(value: boolean) {
+        enabled = value;
+        if (!value) throw new Error('mute failed after applying');
+      },
+    });
+    const { result } = renderMicrophone();
+    result.current.start(createStream([track]), createAudioContext());
+
+    act(() => result.current.mute());
+
+    expect(track.enabled).toBe(true);
+    expect(result.current.isMuted).toBe(false);
   });
 
   it('clears a stale FFT snapshot when muted without an analyzer', () => {
@@ -1029,9 +1050,10 @@ describe('useMicrophone', () => {
       enabled: true,
       stop: vi.fn(),
     } as unknown as MediaStreamTrack;
+    const candidateTrackStop = vi.fn();
     const candidateTrack = {
       enabled: true,
-      stop: vi.fn(),
+      stop: candidateTrackStop,
     } as unknown as MediaStreamTrack;
     const candidateStream = {
       getTracks: () => [candidateTrack],
@@ -1066,10 +1088,13 @@ describe('useMicrophone', () => {
 
     await act(async () => {
       oldRecorder.emit('stop', new Event('stop'));
-      await expect(replacement).rejects.toThrow(
-        'pending track enumeration failed',
-      );
+      await replacement;
     });
+
+    expect(candidateTrack.enabled).toBe(true);
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+    await act(() => result.current.stop());
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
   });
 
   it('applies an unmute requested while a replacement is in progress', async () => {
@@ -1114,27 +1139,87 @@ describe('useMicrophone', () => {
     expect(candidateTrack.enabled).toBe(true);
   });
 
-  it('releases an owned audio context when required mute reconciliation fails', async () => {
+  it('does not re-reconcile a pending stream after only the outgoing unmute fails', async () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM));
-    const contextClose = vi.fn().mockResolvedValue(undefined);
-    stubOwnedAudioContext(contextClose);
     const oldTrack = {
       enabled: true,
       stop: vi.fn(),
     } as unknown as MediaStreamTrack;
+    const getOldAudioTracks = vi
+      .fn<() => MediaStreamTrack[]>()
+      .mockReturnValueOnce([oldTrack])
+      .mockImplementationOnce(() => {
+        throw new Error('outgoing track enumeration failed');
+      });
+    const oldStream = {
+      getTracks: () => [oldTrack],
+      getAudioTracks: getOldAudioTracks,
+    } as unknown as MediaStream;
     const candidateTrackStop = vi.fn();
-    let candidateTrackEnabled = true;
     const candidateTrack = {
+      enabled: true,
       stop: candidateTrackStop,
     } as unknown as MediaStreamTrack;
-    Object.defineProperty(candidateTrack, 'enabled', {
+    const getCandidateAudioTracks = vi
+      .fn<() => MediaStreamTrack[]>()
+      .mockReturnValueOnce([candidateTrack])
+      .mockImplementationOnce(() => {
+        throw new Error('redundant candidate reconciliation');
+      });
+    const candidateStream = {
+      getTracks: () => [candidateTrack],
+      getAudioTracks: getCandidateAudioTracks,
+    } as unknown as MediaStream;
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(oldStream, context);
+    act(() => result.current.mute());
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(candidateStream, context);
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+
+    act(() => result.current.unmute());
+    expect(result.current.isMuted).toBe(true);
+
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await replacement;
+    });
+
+    expect(getOldAudioTracks).toHaveBeenCalledTimes(2);
+    expect(getCandidateAudioTracks).toHaveBeenCalledOnce();
+    expect(candidateTrack.enabled).toBe(false);
+    expect(candidateTrackStop).not.toHaveBeenCalled();
+
+    await act(() => result.current.stop());
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('releases an owned audio context when required mute reconciliation fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    stubOwnedAudioContext(contextClose);
+    let oldTrackEnabled = true;
+    const oldTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    Object.defineProperty(oldTrack, 'enabled', {
       configurable: true,
-      get: () => candidateTrackEnabled,
+      get: () => oldTrackEnabled,
       set(value: boolean) {
-        candidateTrackEnabled = value;
-        if (!value) throw new Error('candidate track refused mute');
+        if (!value) throw new Error('outgoing track refused mute');
+        oldTrackEnabled = value;
       },
     });
+    const candidateTrackStop = vi.fn();
+    const candidateTrack = {
+      enabled: true,
+      stop: candidateTrackStop,
+    } as unknown as MediaStreamTrack;
     const candidateStream = {
       getTracks: () => [candidateTrack],
       getAudioTracks: vi
@@ -1256,6 +1341,73 @@ describe('useMicrophone', () => {
 
     await act(() => result.current.stop());
     expect(candidateTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a shared context and can restart after mute reconciliation fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    const context = {
+      ...createAudioContext(),
+      close: contextClose,
+    } as AudioContext;
+    let oldTrackEnabled = true;
+    const oldTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    Object.defineProperty(oldTrack, 'enabled', {
+      configurable: true,
+      get: () => oldTrackEnabled,
+      set(value: boolean) {
+        if (!value) throw new Error('outgoing track refused mute');
+        oldTrackEnabled = value;
+      },
+    });
+    const candidateTrackStop = vi.fn();
+    const candidateTrack = {
+      enabled: true,
+      stop: candidateTrackStop,
+    } as unknown as MediaStreamTrack;
+    const candidateStream = {
+      getTracks: () => [candidateTrack],
+      getAudioTracks: vi
+        .fn<() => MediaStreamTrack[]>()
+        .mockReturnValueOnce([candidateTrack])
+        .mockImplementationOnce(() => {
+          throw new Error('final mute reconciliation failed');
+        }),
+    } as unknown as MediaStream;
+    const { result } = renderMicrophone();
+    result.current.start(createStream([oldTrack]), context);
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(candidateStream, context);
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+    act(() => result.current.mute());
+
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await expect(replacement).rejects.toThrow(
+        'final mute reconciliation failed',
+      );
+    });
+
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(contextClose).not.toHaveBeenCalled();
+    expect(result.current.isMuted).toBe(false);
+
+    const nextContextClose = vi.fn().mockResolvedValue(undefined);
+    const nextContext = {
+      ...createAudioContext(),
+      close: nextContextClose,
+    } as AudioContext;
+    expect(() =>
+      result.current.start(createStream(), nextContext),
+    ).not.toThrow();
+    await act(() => result.current.stop());
+    expect(nextContextClose).not.toHaveBeenCalled();
   });
 
   it('queues stop behind an in-progress replacement', async () => {
@@ -1630,6 +1782,28 @@ describe('useMicrophone', () => {
   });
 
   it('treats an active stream replacement as a no-op', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const activeTrackStop = vi.fn();
+    const activeStream = createStream([
+      {
+        enabled: true,
+        stop: activeTrackStop,
+      } as unknown as MediaStreamTrack,
+    ]);
+    const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(activeStream, context);
+
+    await expect(
+      result.current.replace(activeStream, context),
+    ).resolves.toBeUndefined();
+
+    expect(activeTrackStop).not.toHaveBeenCalled();
+    await act(() => result.current.stop());
+    expect(activeTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an active stream replacement a no-op when the context argument changes', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const activeTrackStop = vi.fn();
     const activeStream = createStream([

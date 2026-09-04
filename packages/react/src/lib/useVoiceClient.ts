@@ -6,6 +6,7 @@ import type {
   JSONMessage,
   ToolCall,
 } from '../models/messages';
+import { getDataProperty } from '../utils/aggregateErrors';
 import { type AuthStrategy, getAuthStrategyError } from './auth';
 import {
   invokeIsolatedConsumerCallback,
@@ -19,39 +20,66 @@ const isNever = (_n: never) => {
   return;
 };
 
-const getMonotonicTime = () => globalThis.performance?.now() ?? Date.now();
+const getMonotonicTime = () => {
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
+  return globalThis.performance?.now() ?? Date.now();
+};
+
+const assignDefinedProperty = (
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+) => {
+  if (value !== undefined) target[key] = value;
+};
+
+const getStringDataProperty = (value: object, key: string) => {
+  const property = getDataProperty(value, key)?.value;
+  return typeof property === 'string' ? property : undefined;
+};
 
 const getMessageDiagnostics = (message: { type: string }) => {
-  const record = message as unknown as Record<string, unknown>;
+  const nestedValue = getDataProperty(message, 'message')?.value;
   const nestedMessage =
-    typeof record['message'] === 'object' && record['message'] !== null
-      ? (record['message'] as Record<string, unknown>)
+    typeof nestedValue === 'object' && nestedValue !== null
+      ? nestedValue
       : undefined;
-  const content = nestedMessage?.['content'] ?? record['content'];
-  const parameters = record['parameters'];
-  const toolError = record['error'];
+  const content =
+    (nestedMessage === undefined
+      ? undefined
+      : getDataProperty(nestedMessage, 'content')?.value) ??
+    getDataProperty(message, 'content')?.value;
+  const parameters = getDataProperty(message, 'parameters')?.value;
+  const toolError = getDataProperty(message, 'error')?.value;
+  const toolName = getStringDataProperty(message, 'name');
   const contentLength =
     typeof content === 'string' ? content.length : undefined;
+
+  const details: Record<string, unknown> = {
+    direction: 'inbound',
+    type: message.type,
+  };
+  assignDefinedProperty(
+    details,
+    'messageId',
+    getStringDataProperty(message, 'id'),
+  );
+  assignDefinedProperty(
+    details,
+    'toolCallId',
+    getStringDataProperty(message, 'toolCallId'),
+  );
+  assignDefinedProperty(details, 'toolName', toolName);
+  assignDefinedProperty(details, 'contentLength', contentLength);
+
+  const sensitiveDetails: Record<string, unknown> = {};
+  assignDefinedProperty(sensitiveDetails, 'content', content);
+  assignDefinedProperty(sensitiveDetails, 'parameters', parameters);
+  assignDefinedProperty(sensitiveDetails, 'error', toolError);
+
   return {
-    details: {
-      direction: 'inbound',
-      type: message.type,
-      ...(typeof record['id'] === 'string'
-        ? { messageId: record['id'] }
-        : undefined),
-      ...(typeof record['toolCallId'] === 'string'
-        ? { toolCallId: record['toolCallId'] }
-        : undefined),
-      ...(typeof record['name'] === 'string'
-        ? { toolName: record['name'] }
-        : undefined),
-      ...(contentLength === undefined ? undefined : { contentLength }),
-    },
-    sensitiveDetails: {
-      ...(content === undefined ? undefined : { content }),
-      ...(parameters === undefined ? undefined : { parameters }),
-      ...(toolError === undefined ? undefined : { error: toolError }),
-    },
+    details,
+    sensitiveDetails,
   };
 };
 
@@ -379,7 +407,9 @@ export const useVoiceClient = (props: {
 
           if (message.type === 'chat_metadata') {
             connectionOpened = true;
-            const chatId = (message as unknown as { chatId?: string }).chatId;
+            const chatIdValue = getDataProperty(message, 'chatId')?.value;
+            const chatId =
+              typeof chatIdValue === 'string' ? chatIdValue : undefined;
             diagnostics.current?.setChatId(chatId);
             report({
               level: 'info',
@@ -476,7 +506,6 @@ export const useVoiceClient = (props: {
                         error: ({
                           error,
                           code,
-                          level,
                           content,
                         }: {
                           error: string;
@@ -488,7 +517,7 @@ export const useVoiceClient = (props: {
                           toolCallId: messageWithReceivedAt.toolCallId,
                           error,
                           code,
-                          ...(level === null ? {} : { level: 'warn' as const }),
+                          level: 'warn' as const,
                           content,
                         }),
                       },
@@ -511,6 +540,7 @@ export const useVoiceClient = (props: {
                       });
                       return;
                     }
+                    // oxlint-disable-next-line typescript/no-unnecessary-condition -- JavaScript tool handlers can violate the declared return contract at runtime
                     if (response === undefined || response === null) {
                       report({
                         level: 'error',
@@ -532,6 +562,7 @@ export const useVoiceClient = (props: {
                     try {
                       if (response.type === 'tool_response') {
                         socket.sendToolResponseMessage(response);
+                        // oxlint-disable-next-line typescript/no-unnecessary-condition -- preserve runtime validation for untyped JavaScript tool handlers
                       } else if (response.type === 'tool_error') {
                         socket.sendToolErrorMessage(response);
                       } else {
@@ -641,6 +672,7 @@ export const useVoiceClient = (props: {
             }
             return;
           }
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the service can emit this protocol event before the generated SDK union is updated
           if (message.type === 'session_settings') {
             onSessionSettings.current?.(message);
             return;
@@ -800,6 +832,7 @@ export const useVoiceClient = (props: {
         }
         return;
       }
+      // oxlint-disable-next-line typescript/no-unnecessary-condition, typescript/no-unsafe-type-assertion -- lifecycle checks above guarantee a socket while the SDK declaration is narrower than the runtime transport
       client.current?.socket?.send(arrayBuffer as ArrayBuffer);
       if (diagnostics.current?.isEnabled('debug') === true) {
         report({

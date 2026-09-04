@@ -120,7 +120,9 @@ describe('browser error normalization', () => {
 
   it('retries accessor capture after a getter-less DOMException global', async () => {
     const NativeDOMException = DOMException;
-    class PartialDOMException {}
+    class PartialDOMException {
+      readonly partial = true;
+    }
 
     vi.resetModules();
     vi.stubGlobal('DOMException', PartialDOMException);

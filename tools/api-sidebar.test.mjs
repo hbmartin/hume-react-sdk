@@ -307,6 +307,7 @@ function readModels() {
   ].map(
     (file) =>
       /** @type {import('./api-sidebar.mjs').ApiModel} */ (
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- API Extractor owns and validates these generated test inputs
         JSON.parse(readFileSync(join(defaultApiModelDirectory, file), 'utf8'))
       ),
   );

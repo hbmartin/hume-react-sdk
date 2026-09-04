@@ -155,8 +155,6 @@ export interface VoiceDiagnosticsOptions {
   includeContent?: boolean;
 }
 
-type DiagnosticConfiguration = false | VoiceDiagnosticsOptions | undefined;
-
 /**
  * Low-level diagnostic event input accepted by a diagnostics reporter.
  *
@@ -322,7 +320,10 @@ const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
 // Narrow graphs can reach the node cap; wider graphs remain bounded by the
 // shared descriptor allowance.
 const MAX_PRIORITY_KEYS_PER_OBJECT = PRIORITY_DIAGNOSTIC_KEYS.length;
-const MAX_PRIORITIZED_SENSITIVE_KEYS = PRIORITY_DIAGNOSTIC_KEYS.length;
+// Spend at most half of the output-entry budget while sanitizing prioritized
+// sensitive details. The same limit also bounds how many sensitive root keys
+// are queued, since every retained root key consumes at least one entry.
+const MAX_PRIORITIZED_SENSITIVE_ENTRIES = Math.floor(MAX_SANITIZED_ENTRIES / 2);
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -515,10 +516,12 @@ type SanitizationBudget = {
   enumeratedKeysByObject: WeakMap<object, EnumeratedKeys>;
   ownKeyScanBudget: OwnKeyScanBudget;
   prioritizedKeys: WeakMap<object, Set<string>>;
+  prioritizedSensitiveKeys: ReadonlySet<string>;
   remainingEntries: number;
   remainingObjects: number;
   remainingRedactionWork: number;
   remainingStringLength: number;
+  sensitiveDetailsRoot: object;
   truncated: boolean;
 };
 
@@ -801,24 +804,48 @@ const getBalancedScanAllowances = (
   return allowances;
 };
 
-const getSampledEnumerableOwnKeys = (
+type SampledEnumerableOwnKeyOptions = Readonly<{
+  captureDescriptors?: boolean;
+  ownKeysSnapshot?: readonly PropertyKey[];
+}>;
+
+function getSampledEnumerableOwnKeys(
   value: object,
   budget: OwnKeyScanBudget,
   maximumScannedKeys: number,
-  ownKeysSnapshot?: readonly PropertyKey[],
-): SampledEnumerableOwnKeys => {
+  options: SampledEnumerableOwnKeyOptions &
+    Readonly<{ captureDescriptors: true }>,
+): SampledEnumerableOwnKeys;
+function getSampledEnumerableOwnKeys(
+  value: object,
+  budget: OwnKeyScanBudget,
+  maximumScannedKeys: number,
+  options?: SampledEnumerableOwnKeyOptions &
+    Readonly<{ captureDescriptors?: false }>,
+): EnumeratedKeys;
+function getSampledEnumerableOwnKeys(
+  value: object,
+  budget: OwnKeyScanBudget,
+  maximumScannedKeys: number,
+  options?: SampledEnumerableOwnKeyOptions,
+): EnumeratedKeys | SampledEnumerableOwnKeys {
+  const captureDescriptors = options?.captureDescriptors ?? false;
   if (budget.remainingKeys === 0) {
-    return { descriptors: new Map(), incomplete: true, keys: [] };
+    return captureDescriptors
+      ? { descriptors: new Map(), incomplete: true, keys: [] }
+      : { incomplete: true, keys: [] };
   }
-  let ownKeys: PropertyKey[];
-  if (ownKeysSnapshot === undefined) {
+  let ownKeys: readonly PropertyKey[];
+  if (options?.ownKeysSnapshot === undefined) {
     try {
       ownKeys = Reflect.ownKeys(value);
     } catch {
-      return { descriptors: new Map(), incomplete: true, keys: [] };
+      return captureDescriptors
+        ? { descriptors: new Map(), incomplete: true, keys: [] }
+        : { incomplete: true, keys: [] };
     }
   } else {
-    ownKeys = [...ownKeysSnapshot];
+    ownKeys = options.ownKeysSnapshot;
   }
 
   const count = Math.min(
@@ -826,11 +853,10 @@ const getSampledEnumerableOwnKeys = (
     maximumScannedKeys,
     budget.remainingKeys,
   );
-  const entries: Array<{
-    descriptor: PropertyDescriptor;
-    index: number;
-    key: string;
-  }> = [];
+  const entries: Array<{ index: number; key: string }> = [];
+  const descriptors = captureDescriptors
+    ? new Map<string, PropertyDescriptor>()
+    : undefined;
   let inspectedKeys = 0;
   let incomplete = ownKeys.length > count;
   for (const index of getLeadingAndTrailingIndexes(ownKeys.length, count)) {
@@ -848,18 +874,16 @@ const getSampledEnumerableOwnKeys = (
       continue;
     }
     if (descriptor.enumerable !== true) continue;
-    entries.push({ descriptor, index, key });
+    entries.push({ index, key });
+    descriptors?.set(key, descriptor);
   }
   incomplete ||= inspectedKeys < count;
   entries.sort((left, right) => left.index - right.index);
-  return {
-    descriptors: new Map(
-      entries.map(({ descriptor, key }) => [key, descriptor]),
-    ),
-    incomplete,
-    keys: entries.map(({ key }) => key),
-  };
-};
+  const keys = entries.map(({ key }) => key);
+  return descriptors === undefined
+    ? { incomplete, keys }
+    : { descriptors, incomplete, keys };
+}
 
 const getEnumerableArrayIndexKeys = (
   value: unknown[],
@@ -930,7 +954,7 @@ const getPrioritizedKeysByObject = (
   > = [{ depth: 0, path: null, value: root }];
   // Explore a shared object through its first breadth-first path only. Walking
   // every alias would make the bounded search exponential on ordinary DAGs.
-  const scheduled = new WeakSet<object>();
+  const scheduled = new WeakSet();
   scheduled.add(root);
   let cursor = 0;
   let scheduledNodes = 1;
@@ -1049,20 +1073,26 @@ const markSanitizedObjectTruncated = (
   setSanitizedProperty(result, TRUNCATED_PROPERTY, true);
 };
 
+// fallow-ignore-next-line complexity -- bounded descriptor sampling preserves priority, collision, and truncation semantics across adversarial objects
 const mergeOwnDataProperties = (
   target: Record<string, unknown>,
   sources: readonly (Record<string, unknown> | undefined)[],
   ownKeyScanBudget: OwnKeyScanBudget,
 ) => {
   let incomplete = false;
-  const sourceMerges = sources.flatMap((source, sourceIndex) =>
+  const sourceMerges: Array<{
+    missingPriorityKeys: Set<string>;
+    prioritize: boolean;
+    properties: Record<string, unknown>;
+    source: Record<string, unknown>;
+  }> = sources.flatMap((source, sourceIndex) =>
     source === undefined
       ? []
       : [
           {
             missingPriorityKeys: new Set<string>(),
             prioritize: sourceIndex > 0,
-            properties: {} as Record<string, unknown>,
+            properties: {},
             source,
           },
         ],
@@ -1132,7 +1162,7 @@ const mergeOwnDataProperties = (
       sourceMerge.source,
       ownKeyScanBudget,
       sourceAllowances[index] ?? 0,
-      ownKeys,
+      { captureDescriptors: true, ownKeysSnapshot: ownKeys },
     );
     incomplete ||= enumerated.incomplete;
     for (const key of enumerated.keys) {
@@ -1157,7 +1187,7 @@ const mergeOwnDataProperties = (
       if (
         sourceMerge.prioritize &&
         !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) &&
-        prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_KEYS
+        prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_ENTRIES
       ) {
         prioritizedMergedKeys.add(key);
       }
@@ -1173,14 +1203,11 @@ const sanitizeValue = (
   seen: WeakSet<object>,
   budget: SanitizationBudget,
 ): VoiceDiagnosticValue | undefined => {
-  if (
-    value === null ||
-    typeof value === 'boolean' ||
-    typeof value === 'number'
-  ) {
-    return Number.isFinite(value as number) || typeof value !== 'number'
-      ? value
-      : String(value);
+  if (value === null || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : String(value);
   }
   if (typeof value === 'string') {
     return sanitizeString(value, matcher, budget);
@@ -1420,6 +1447,7 @@ const sanitizeValue = (
       getEnumerableOwnKeys(value, budget.ownKeyScanBudget);
     const result: Record<string, VoiceDiagnosticValue> = {};
     let nextCollisionByKey: Map<string, number> | undefined;
+    // fallow-ignore-next-line complexity -- one entry must atomically enforce descriptor safety, key collisions, redaction, and the shared output budget
     const sanitizeEntry = (
       key: string,
       expected: boolean,
@@ -1487,14 +1515,43 @@ const sanitizeValue = (
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
     if (priorityKeys !== undefined) {
+      const sensitivePriorityKeys =
+        value === budget.sensitiveDetailsRoot
+          ? budget.prioritizedSensitiveKeys
+          : undefined;
       for (const key of priorityKeys) {
         if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+        if (sensitivePriorityKeys?.has(key) === true) continue;
         if (sanitizeEntry(key, true) === 'stop') return result;
+      }
+    }
+    const sensitivePriorityKeys =
+      value === budget.sensitiveDetailsRoot
+        ? budget.prioritizedSensitiveKeys
+        : undefined;
+    if (sensitivePriorityKeys !== undefined) {
+      const remainingEntriesBeforeSensitiveDetails = budget.remainingEntries;
+      const sensitiveEntryAllowance = Math.min(
+        remainingEntriesBeforeSensitiveDetails,
+        MAX_PRIORITIZED_SENSITIVE_ENTRIES,
+      );
+      budget.remainingEntries = sensitiveEntryAllowance;
+      try {
+        for (const key of sensitivePriorityKeys) {
+          if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+          if (sanitizeEntry(key, true) === 'stop') break;
+        }
+      } finally {
+        const consumedSensitiveEntries =
+          sensitiveEntryAllowance - budget.remainingEntries;
+        budget.remainingEntries =
+          remainingEntriesBeforeSensitiveDetails - consumedSensitiveEntries;
       }
     }
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       if (priorityKeys?.has(key) === true) continue;
+      if (sensitivePriorityKeys?.has(key) === true) continue;
       if (sanitizeEntry(key, true) === 'stop') break;
     }
     return result;
@@ -1515,6 +1572,11 @@ const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
   return value;
 };
 
+const isSanitizedRecord = (
+  value: VoiceDiagnosticValue | undefined,
+): value is Record<string, VoiceDiagnosticValue> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 const sanitizeDetails = (
   details: Record<string, unknown>,
   matcher: RedactionMatcher,
@@ -1529,12 +1591,6 @@ const sanitizeDetails = (
     priorityScanBudget,
     rootEnumeratedKeys,
   );
-  if (initiallyPrioritizedKeys.size > 0) {
-    const rootPriorityKeys =
-      priorityDiscovery.prioritizedKeys.get(details) ?? new Set<string>();
-    for (const key of initiallyPrioritizedKeys) rootPriorityKeys.add(key);
-    priorityDiscovery.prioritizedKeys.set(details, rootPriorityKeys);
-  }
   // Discovery and sanitization remain independently useful without exceeding
   // the shared per-event own-key scan allowance.
   ownKeyScanBudget.remainingKeys += priorityScanBudget.remainingKeys;
@@ -1542,29 +1598,21 @@ const sanitizeDetails = (
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
     ownKeyScanBudget,
     prioritizedKeys: priorityDiscovery.prioritizedKeys,
+    prioritizedSensitiveKeys: initiallyPrioritizedKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
     remainingRedactionWork: MAX_SANITIZED_TOTAL_REDACTION_WORK,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,
+    sensitiveDetailsRoot: details,
     truncated: initiallyTruncated,
   };
   const sanitized = sanitizeValue(details, matcher, new WeakSet(), budget);
-  if (
-    sanitized !== null &&
-    !Array.isArray(sanitized) &&
-    typeof sanitized === 'object'
-  ) {
+  if (isSanitizedRecord(sanitized)) {
     if (initiallyTruncated) {
-      setSanitizedProperty(
-        sanitized as Record<string, VoiceDiagnosticValue>,
-        TRUNCATED_PROPERTY,
-        true,
-      );
+      setSanitizedProperty(sanitized, TRUNCATED_PROPERTY, true);
     }
     return {
-      details: freezeDiagnosticValue(
-        sanitized as Record<string, VoiceDiagnosticValue>,
-      ),
+      details: freezeDiagnosticValue(sanitized),
       truncated: budget.truncated,
     };
   }
@@ -1574,7 +1622,9 @@ const sanitizeDetails = (
   };
 };
 
-const getConfiguration = (configuration: DiagnosticConfiguration) => {
+const getConfiguration = (
+  configuration: false | VoiceDiagnosticsOptions | undefined,
+) => {
   if (configuration === false) {
     return null;
   }
@@ -1591,7 +1641,7 @@ const getConfiguration = (configuration: DiagnosticConfiguration) => {
 };
 
 export const createVoiceDiagnosticsReporter = (
-  getOptions: () => DiagnosticConfiguration,
+  getOptions: () => false | VoiceDiagnosticsOptions | undefined,
 ): VoiceDiagnosticsReporter => {
   const instanceId = createId('instance');
   const secrets = new Set<string>();
@@ -1634,6 +1684,7 @@ export const createVoiceDiagnosticsReporter = (
       chatId = undefined;
       connectionId = undefined;
     },
+    // fallow-ignore-next-line complexity -- diagnostic delivery isolates redaction, sampling, logging, and consumer callback failures
     emit(input) {
       const configuration = getConfiguration(getOptions());
       if (

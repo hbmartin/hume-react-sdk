@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { getOwnValue, getOwnValues, isObjectRecord } from './safe-object.mjs';
+
 /**
  * Builds the VitePress sidebar for the generated API reference.
  *
@@ -58,6 +60,64 @@ const KIND_GROUPS = new Map([
 const KIND_GROUP_THRESHOLD = 10;
 
 const DEPRECATED_GROUP = 'Deprecated';
+
+/** @param {unknown} value @returns {value is unknown[]} */
+function isUnknownArray(value) {
+  return Array.isArray(value);
+}
+
+/** @param {unknown} value @returns {ApiMember} */
+function parseApiMember(value) {
+  if (!isObjectRecord(value)) {
+    throw new Error('API model member must be an object.');
+  }
+  const [kind, name, docComment, overloadIndex, members] = getOwnValues(value, [
+    'kind',
+    'name',
+    'docComment',
+    'overloadIndex',
+    'members',
+  ]);
+  if (typeof kind !== 'string') {
+    throw new Error('API model member kind must be a string.');
+  }
+  if (name !== undefined && typeof name !== 'string') {
+    throw new Error('API model member name must be a string when present.');
+  }
+  if (docComment !== undefined && typeof docComment !== 'string') {
+    throw new Error(
+      'API model member docComment must be a string when present.',
+    );
+  }
+  if (overloadIndex !== undefined && typeof overloadIndex !== 'number') {
+    throw new Error(
+      'API model member overloadIndex must be a number when present.',
+    );
+  }
+  if (members !== undefined && !isUnknownArray(members)) {
+    throw new Error('API model nested members must be an array when present.');
+  }
+  return {
+    kind,
+    ...(name === undefined ? {} : { name }),
+    ...(docComment === undefined ? {} : { docComment }),
+    ...(overloadIndex === undefined ? {} : { overloadIndex }),
+    ...(members === undefined ? {} : { members: members.map(parseApiMember) }),
+  };
+}
+
+/** @param {unknown} value @returns {ApiModel} */
+function parseApiModel(value) {
+  if (!isObjectRecord(value)) {
+    throw new Error('API model must be an object.');
+  }
+  const name = getOwnValue(value, 'name');
+  const members = getOwnValue(value, 'members');
+  if (typeof name !== 'string' || !isUnknownArray(members)) {
+    throw new Error('API model requires a string name and member array.');
+  }
+  return { name, members: members.map(parseApiMember) };
+}
 
 /**
  * Mirrors `Utilities.getSafeFilenameForName` in `@microsoft/api-documenter`.
@@ -254,7 +314,7 @@ export function buildApiReferenceSidebar(models) {
     {
       items: [
         { link: '/reference/', text: 'Overview' },
-        { link: `${apiReferenceBase}`, text: 'All packages' },
+        { link: apiReferenceBase, text: 'All packages' },
       ],
       text: 'API reference',
     },
@@ -291,7 +351,7 @@ export function readApiReferenceSidebar(
       throw error;
     }
 
-    return /** @type {ApiModel} */ (JSON.parse(contents));
+    return parseApiModel(JSON.parse(contents));
   });
 
   return buildApiReferenceSidebar(models);

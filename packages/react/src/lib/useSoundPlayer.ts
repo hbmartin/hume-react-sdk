@@ -2,6 +2,7 @@ import { convertBase64ToBlob } from 'hume';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { AudioOutputMessage } from '../models/messages';
+import { getDataProperty } from '../utils/aggregateErrors';
 import { getBrowserErrorMessage } from '../utils/browserErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
@@ -32,6 +33,44 @@ type WorkletMessage =
   | WorkletEndedMessage
   | WorkletQueueLengthMessage
   | WorkletClosedMessage;
+
+const isWorkletMessage = (value: unknown): value is WorkletMessage => {
+  if (typeof value !== 'object' || value === null) return false;
+  const type = getDataProperty(value, 'type')?.value;
+  if (type === 'ended' || type === 'worklet_closed') return true;
+  if (type === 'queueLength') {
+    return typeof getDataProperty(value, 'length')?.value === 'number';
+  }
+  return (
+    type === 'start_clip' &&
+    typeof getDataProperty(value, 'id')?.value === 'string' &&
+    typeof getDataProperty(value, 'index')?.value === 'number'
+  );
+};
+
+const supportsSetSinkId = (
+  context: AudioContext,
+): context is AudioContext & {
+  setSinkId: (deviceId: string) => Promise<void>;
+} => 'setSinkId' in context && typeof context.setSinkId === 'function';
+
+const getMonotonicTime = () => {
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
+  return globalThis.performance?.now() ?? Date.now();
+};
+
+const releaseSafely = (
+  failures: string[],
+  label: string,
+  action: () => void,
+) => {
+  try {
+    action();
+  } catch (error) {
+    const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
+    failures.push(`${label}: ${detail}`);
+  }
+};
 
 interface PlayerResources {
   context: AudioContext | null;
@@ -89,7 +128,7 @@ const useSoundPlayerImplementation = (
   const isAudioMutedRef = useRef(false);
   const volumeRef = useRef(1.0);
 
-  const fftStore = useRef(new FftStore()).current;
+  const [fftStore] = useState(() => new FftStore());
 
   const playerResources = useRef<PlayerResources | null>(null);
   const playerStopPromises = useRef(new WeakMap<AudioContext, Promise<void>>());
@@ -183,14 +222,8 @@ const useSoundPlayerImplementation = (
       }
 
       const failures: string[] = [];
-      const release = (label: string, action: () => void) => {
-        try {
-          action();
-        } catch (error) {
-          const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-          failures.push(`${label}: ${detail}`);
-        }
-      };
+      const release = (label: string, action: () => void) =>
+        releaseSafely(failures, label, action);
 
       release('FFT cleanup failed', () => cancelPlayerFft(resources));
 
@@ -360,6 +393,7 @@ const useSoundPlayerImplementation = (
   );
 
   const initPlayer = useCallback(
+    // fallow-ignore-next-line complexity -- initialization rollback spans behavior-sensitive Web Audio resources and generation ownership
     async (
       speakerDeviceId?: string,
       sharedAudioContext?: AudioContext,
@@ -448,6 +482,7 @@ const useSoundPlayerImplementation = (
           if (generation !== playerGeneration.current) {
             return await abandonInitialization();
           }
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- some browsers resolve resume() while leaving the context suspended
           if (!resumed || initAudioContext.state === 'suspended') {
             return await failInitialization(
               'The browser blocked audio playback (autoplay policy). Connect from a user gesture, such as a click handler.',
@@ -460,15 +495,10 @@ const useSoundPlayerImplementation = (
         if (
           speakerDeviceId !== undefined &&
           speakerDeviceId !== '' &&
-          'setSinkId' in initAudioContext
+          supportsSetSinkId(initAudioContext)
         ) {
           try {
-            // TypeScript doesn't recognize setSinkId on AudioContext yet, so we need to cast
-            await (
-              initAudioContext as AudioContext & {
-                setSinkId: (deviceId: string) => Promise<void>;
-              }
-            ).setSinkId(speakerDeviceId);
+            await initAudioContext.setSinkId(speakerDeviceId);
           } catch (e) {
             if (generation !== playerGeneration.current) {
               return await abandonInitialization();
@@ -518,6 +548,7 @@ const useSoundPlayerImplementation = (
           resources.worklet = worklet;
           worklet.connect(analyser);
 
+          // fallow-ignore-next-line complexity -- the worklet protocol handler must validate ownership and every audio control message before mutating playback state
           worklet.port.onmessage = (e: MessageEvent) => {
             if (
               generation !== playerGeneration.current ||
@@ -525,7 +556,14 @@ const useSoundPlayerImplementation = (
             ) {
               return;
             }
-            const data = e.data as WorkletMessage;
+            const data: unknown = e.data;
+            if (!isWorkletMessage(data)) {
+              onError.current(
+                'Audio worklet returned an invalid control message.',
+                'malformed_audio',
+              );
+              return;
+            }
 
             switch (data.type) {
               case 'start_clip':
@@ -679,6 +717,7 @@ const useSoundPlayerImplementation = (
   );
 
   const addToQueue = useCallback(
+    // fallow-ignore-next-line complexity -- queue validation and generation checks preserve ordered streaming audio playback
     async (message: AudioOutputMessage) => {
       const generation = playerGeneration.current;
       const resources = playerResources.current;
@@ -701,6 +740,7 @@ const useSoundPlayerImplementation = (
         const audioBuffer = await convertToAudioBuffer(message, context);
         if (
           generation !== playerGeneration.current ||
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- initialization can change while audio decoding awaits
           !isInitialized.current ||
           playerResources.current !== resources
         ) {
@@ -727,7 +767,7 @@ const useSoundPlayerImplementation = (
               id: nextAudioBufferToPlay.id,
               index: nextAudioBufferToPlay.index,
             });
-          } else if (!props.enableAudioWorklet) {
+          } else {
             // Non-AudioWorklet mode
             clipQueue.current.push({
               id: nextAudioBufferToPlay.id,
@@ -779,14 +819,15 @@ const useSoundPlayerImplementation = (
    * `stopAll` directly instead, cutting audio immediately.
    */
   const waitForQueueToDrain = useCallback(
+    // fallow-ignore-next-line complexity -- drain completion races queue progress against a bounded disconnect timeout
     async (timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<boolean> => {
-      const startedAt = globalThis.performance?.now() ?? Date.now();
+      const startedAt = getMonotonicTime();
       const finish = (drained: boolean) => {
         diagnostics.current?.emit({
           level: drained ? 'info' : 'warn',
           category: 'audio_player',
           name: 'audio.drain_completed',
-          durationMs: (globalThis.performance?.now() ?? Date.now()) - startedAt,
+          durationMs: getMonotonicTime() - startedAt,
           details: { drained, timeoutMs },
         });
         return drained;
@@ -795,7 +836,7 @@ const useSoundPlayerImplementation = (
       const isDrained = () =>
         (pendingAudioTasks.current.get(generation) ?? 0) === 0 &&
         queueLengthRef.current === 0 &&
-        isPlayingRef.current === false;
+        !isPlayingRef.current;
 
       // Preserve the zero-work fast path. Once audio work has started, require
       // a stable idle period so an in-flight decode or the worklet's final
@@ -864,6 +905,7 @@ const useSoundPlayerImplementation = (
   );
 
   const stopAll = useCallback(
+    // fallow-ignore-next-line complexity -- shutdown aggregates independent Web Audio cleanup failures without abandoning later resources
     async (expectedContext?: AudioContext) => {
       if (
         expectedContext &&
@@ -872,7 +914,7 @@ const useSoundPlayerImplementation = (
         return;
       }
       const generation = ++playerGeneration.current;
-      const stopStartedAt = globalThis.performance?.now() ?? Date.now();
+      const stopStartedAt = getMonotonicTime();
       diagnostics.current?.emit({
         level: 'info',
         category: 'audio_player',
@@ -894,14 +936,8 @@ const useSoundPlayerImplementation = (
       clipQueue.current = [];
 
       const failures: string[] = [];
-      const release = (label: string, action: () => void) => {
-        try {
-          action();
-        } catch (error) {
-          const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-          failures.push(`${label}: ${detail}`);
-        }
-      };
+      const release = (label: string, action: () => void) =>
+        releaseSafely(failures, label, action);
 
       if (resourcesToStop) {
         release('FFT cleanup failed', () => cancelPlayerFft(resourcesToStop));
@@ -912,7 +948,8 @@ const useSoundPlayerImplementation = (
         let isWorkletClosed = false;
         release('Audio worklet close listener setup failed', () => {
           workletToStop.port.onmessage = (e: MessageEvent) => {
-            if ((e.data as WorkletMessage).type === 'worklet_closed') {
+            const data: unknown = e.data;
+            if (isWorkletMessage(data) && data.type === 'worklet_closed') {
               isWorkletClosed = true;
             }
           };
@@ -928,6 +965,7 @@ const useSoundPlayerImplementation = (
         // its nodes, bounded to 500 ms.
         let closed = 0;
         while (closed < 5) {
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the worklet message callback mutates this flag asynchronously
           if (generation !== playerGeneration.current || isWorkletClosed) {
             break;
           }
@@ -953,8 +991,7 @@ const useSoundPlayerImplementation = (
         level: 'info',
         category: 'audio_player',
         name: 'resource.stopped',
-        durationMs:
-          (globalThis.performance?.now() ?? Date.now()) - stopStartedAt,
+        durationMs: getMonotonicTime() - stopStartedAt,
         details: { resource: 'audio_player' },
       });
     },
@@ -1017,7 +1054,7 @@ const useSoundPlayerImplementation = (
         await stopAllTracked(expectedContext);
       } catch (e) {
         const message = getBrowserErrorMessage(e) ?? 'Unknown error';
-        onError.current?.(
+        onError.current(
           `Failed to stop audio player: ${message}`,
           'audio_player_closure_failure',
         );
@@ -1042,12 +1079,12 @@ const useSoundPlayerImplementation = (
         resources?.worklet?.port.postMessage({ type: 'fadeAndClear' });
       } catch (e) {
         const message = getBrowserErrorMessage(e) ?? 'Unknown error';
-        onError.current?.(
+        onError.current(
           `Failed to clear audio worklet queue: ${message}`,
           'audio_player_closure_failure',
         );
       }
-    } else if (!props.enableAudioWorklet) {
+    } else {
       // Non-AudioWorklet mode
       clipQueue.current = [];
       if (resources?.source) {
@@ -1109,7 +1146,7 @@ const useSoundPlayerImplementation = (
       throw new Error('The audio player is not initialized.');
     }
 
-    if (!('setSinkId' in context)) {
+    if (!supportsSetSinkId(context)) {
       if (deviceId === null) {
         return;
       }
@@ -1119,14 +1156,11 @@ const useSoundPlayerImplementation = (
       );
     }
 
-    await (
-      context as AudioContext & {
-        setSinkId: (sinkId: string) => Promise<void>;
-      }
-    ).setSinkId(deviceId ?? '');
+    await context.setSinkId(deviceId ?? '');
     if (
       generation !== playerGeneration.current ||
       playerResources.current !== resources ||
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- output selection awaits a browser promise while teardown may clear initialization
       !isInitialized.current
     ) {
       throw new DOMException(

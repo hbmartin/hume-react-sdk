@@ -23,11 +23,12 @@ type SubscribeEventParser = {
 // TypeScript 7 currently resolves the `hume/serialization` namespace through
 // the SDK's API declaration namespace. Keep the compatibility cast isolated at
 // this boundary while retaining the SDK's runtime parser and a typed result.
-const subscribeEventParser = (
-  HumeSerialization.empathicVoice as unknown as {
-    SubscribeEvent: SubscribeEventParser;
-  }
-).SubscribeEvent;
+const serialization: unknown = HumeSerialization.empathicVoice;
+// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the SDK's runtime namespace lacks an accurate declaration under TypeScript 7
+const typedSerialization = serialization as {
+  SubscribeEvent: SubscribeEventParser;
+};
+const subscribeEventParser = typedSerialization.SubscribeEvent;
 
 /** A failure returned while decoding data from a socket message. */
 export type ParsedMessageError =

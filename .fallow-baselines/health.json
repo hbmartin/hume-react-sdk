@@ -1,10 +1,5 @@
 {
   "finding_counts": {
-    "examples/next-app/app/page.tsx": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
     "examples/next-app/components/ChatConnected.tsx": {
       "complexity_critical": {
         "count": 1
@@ -19,6 +14,9 @@
       },
       "crap_critical": {
         "count": 1
+      },
+      "crap_high": {
+        "count": 2
       }
     },
     "examples/next-app/components/Voice.tsx": {
@@ -31,58 +29,30 @@
         "count": 1
       }
     },
-    "packages/embed/src/lib/embed.ts": {
-      "crap_critical": {
-        "count": 1
-      },
-      "crap_moderate": {
-        "count": 1
-      }
-    },
     "packages/react/src/lib/VoiceProvider.tsx": {
       "complexity_critical": {
-        "count": 2
-      },
-      "complexity_high": {
         "count": 1
       },
       "crap_critical": {
         "count": 1
-      },
-      "crap_high": {
-        "count": 1
-      },
-      "crap_moderate": {
-        "count": 3
       }
     },
     "packages/react/src/lib/diagnostics.ts": {
       "complexity_critical": {
-        "count": 2
-      },
-      "crap_critical": {
-        "count": 2
-      },
-      "crap_moderate": {
         "count": 1
-      }
-    },
-    "packages/react/src/lib/useAudioDevices.ts": {
+      },
       "complexity_high": {
-        "count": 1
+        "count": 2
       },
       "complexity_moderate": {
         "count": 1
       },
-      "crap_high": {
-        "count": 1
-      },
-      "crap_moderate": {
+      "crap_critical": {
         "count": 1
       }
     },
-    "packages/react/src/lib/useMessages.ts": {
-      "crap_high": {
+    "packages/react/src/lib/useAudioDevices.ts": {
+      "complexity_moderate": {
         "count": 1
       }
     },
@@ -92,56 +62,134 @@
       },
       "crap_critical": {
         "count": 1
-      },
-      "crap_high": {
-        "count": 2
       }
     },
     "packages/react/src/lib/useSoundPlayer.ts": {
       "complexity_critical": {
-        "count": 2
+        "count": 1
       },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useVoiceClient.ts": {
       "complexity_high": {
-        "count": 2
+        "count": 1
       },
       "complexity_moderate": {
         "count": 1
       },
-      "crap_critical": {
-        "count": 1
-      },
-      "crap_high": {
-        "count": 2
-      },
       "crap_moderate": {
-        "count": 5
+        "count": 1
       }
-    },
-    "packages/react/src/lib/useVoiceClient.ts": {
+    }
+  },
+  "identity_finding_counts": {
+    "examples/next-app/components/ChatConnected.tsx\u0000ChatConnected": {
       "complexity_critical": {
         "count": 1
       },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/ExampleComponent.tsx\u0000ExampleComponent": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/ExampleComponent.tsx\u0000connectToVoice": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/ExampleComponent.tsx\u0000request": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "examples/next-app/components/Voice.tsx\u0000onToolCall": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "examples/vite-app-embed/src/App.tsx\u0000App": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/VoiceProvider.tsx\u0000connectAttempt": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/diagnostics.ts\u0000getPrioritizedKeysByObject": {
       "complexity_high": {
         "count": 1
+      }
+    },
+    "packages/react/src/lib/diagnostics.ts\u0000getSampledEnumerableOwnKeys": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/diagnostics.ts\u0000redactSecretsWithinLimits": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/diagnostics.ts\u0000sanitizeValue": {
+      "complexity_critical": {
+        "count": 1
       },
       "crap_critical": {
         "count": 1
+      }
+    },
+    "packages/react/src/lib/useAudioDevices.ts\u0000useAudioDevices": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useMicrophone.ts\u0000disposeMicrophoneResources": {
+      "complexity_critical": {
+        "count": 1
       },
-      "crap_high": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useMicrophone.ts\u0000useMicrophone": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useSoundPlayer.ts\u0000playNextClip": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useSoundPlayer.ts\u0000useSoundPlayerImplementation": {
+      "complexity_critical": {
+        "count": 1
+      }
+    },
+    "packages/react/src/lib/useVoiceClient.ts\u0000<arrow>": {
+      "complexity_moderate": {
         "count": 1
       },
       "crap_moderate": {
         "count": 1
       }
     },
-    "packages/react/src/worklets/audio-worklet-20250702.js": {
-      "complexity_critical": {
-        "count": 2
-      },
-      "crap_critical": {
-        "count": 2
-      },
-      "crap_high": {
+    "packages/react/src/lib/useVoiceClient.ts\u0000useVoiceClient": {
+      "complexity_high": {
         "count": 1
       }
     }
@@ -149,8 +197,9 @@
   "runtime_coverage_findings": [],
   "target_keys": [
     "packages/react/src/lib/VoiceProvider.tsx:complexity",
-    "packages/react/src/lib/useSoundPlayer.ts:complexity",
+    "packages/react/src/lib/diagnostics.ts:complexity",
     "packages/react/src/lib/useMicrophone.ts:complexity",
-    "packages/react/src/lib/diagnostics.ts:complexity"
+    "packages/react/src/lib/useSoundPlayer.ts:complexity",
+    "examples/next-app/components/ExampleComponent.tsx:complexity"
   ]
 }

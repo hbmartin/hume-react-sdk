@@ -1,11 +1,7 @@
 import { motion } from 'framer-motion';
 import type { FC } from 'react';
 
-type WaveformProps = {
-  fft: readonly number[];
-};
-
-export const Waveform: FC<WaveformProps> = (props) => {
+export const Waveform: FC<{ fft: readonly number[] }> = (props) => {
   const { fft } = props;
 
   return (

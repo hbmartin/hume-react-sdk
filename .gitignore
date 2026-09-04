@@ -17,6 +17,11 @@ node_modules
 
 # Testing
 coverage
+.fallow/
+.fallow-preview/
+.lint-contract-*/
+tools/quality-gate/lint-contract-node-*/
+packages/react/src/lint-contract-browser-*/
 
 # Turbo
 .turbo
