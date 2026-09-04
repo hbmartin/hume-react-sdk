@@ -340,7 +340,11 @@ importers:
 
   tools/lint-contract: {}
 
-  tools/quality-gate: {}
+  tools/quality-gate:
+    devDependencies:
+      '@babel/parser':
+        specifier: 7.29.8
+        version: 7.29.8
 
   tools/typescript-config: {}
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { validateCoverageMap } from './check-coverage-map.mjs';
@@ -20,6 +20,7 @@ const reportsDirectory = resolve(repositoryRoot, 'coverage');
 const reportPath = resolve(reportsDirectory, 'fallow-audit.json');
 mkdirSync(reportsDirectory, { recursive: true });
 validateCoverageMap();
+rmSync(reportPath, { force: true });
 
 const printAuditFailure = () => {
   const report = /** @type {AuditReport} */ (

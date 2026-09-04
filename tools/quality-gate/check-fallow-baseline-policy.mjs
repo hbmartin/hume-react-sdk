@@ -374,6 +374,25 @@ const getFindingCategoryTotals = (counts, extensions, identityMode = false) => {
 };
 
 /**
+ * @param {HealthBaseline | null} base
+ * @param {HealthBaseline | null} current
+ * @param {string[]} errors
+ * @returns {[Record<string, number>, Record<string, number>] | null}
+ */
+const getLegacyHealthTotals = (base, current, errors) => {
+  if (!isRecord(base?.finding_counts)) return null;
+  if (!isRecord(current?.identity_finding_counts)) {
+    errors.push('bootstrap health baseline is missing identity finding counts');
+    return null;
+  }
+  const extensions = new Set(Object.keys(base.finding_counts).map(extname));
+  return [
+    getFindingCategoryTotals(base.finding_counts, extensions),
+    getFindingCategoryTotals(current.identity_finding_counts, extensions, true),
+  ];
+};
+
+/**
  * Preserve aggregate ceilings for file kinds understood by the legacy health
  * baseline while allowing the bootstrap to add newly analyzed file kinds.
  *
@@ -382,18 +401,9 @@ const getFindingCategoryTotals = (counts, extensions, identityMode = false) => {
  * @param {string[]} errors
  */
 const compareLegacyHealth = (base, current, errors) => {
-  if (!isRecord(base?.finding_counts)) return;
-  if (!isRecord(current?.identity_finding_counts)) {
-    errors.push('bootstrap health baseline is missing identity finding counts');
-    return;
-  }
-  const extensions = new Set(Object.keys(base.finding_counts).map(extname));
-  const baseTotals = getFindingCategoryTotals(base.finding_counts, extensions);
-  const currentTotals = getFindingCategoryTotals(
-    current.identity_finding_counts,
-    extensions,
-    true,
-  );
+  const totals = getLegacyHealthTotals(base, current, errors);
+  if (totals === null) return;
+  const [baseTotals, currentTotals] = totals;
   for (const [category, currentCount] of Object.entries(currentTotals)) {
     const baseCount = baseTotals[category] ?? 0;
     if (currentCount > baseCount) {

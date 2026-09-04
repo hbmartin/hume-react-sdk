@@ -15,6 +15,7 @@ import { test } from 'node:test';
 import {
   getCoveragePolicyErrors,
   getTrackedCoverageInputs,
+  isCoverageCounterFreeSource,
 } from '../quality-gate/check-coverage-map.mjs';
 import { compareBaselineStates } from '../quality-gate/check-fallow-baseline-policy.mjs';
 import {
@@ -1026,6 +1027,52 @@ void test('coverage policy rejects missing maps, empty globs, and zero floors', 
   );
 });
 
+void test('coverage policy accepts only counter-free sources missing from Istanbul', () => {
+  const policy = {
+    include: ['src/**/*.ts'],
+    exclude: [],
+    thresholds: {
+      'src/**': { branches: 50, functions: 50, lines: 50, statements: 50 },
+    },
+  };
+  const trackedFiles = ['src/index.ts', 'src/worker.ts'];
+  const counterFreeFiles = new Set(['src/index.ts']);
+  const errors = getCoveragePolicyErrors(
+    policy,
+    trackedFiles,
+    [],
+    counterFreeFiles,
+  );
+
+  assert.doesNotMatch(errors.join('\n'), /src\/index\.ts/);
+  assert.match(errors.join('\n'), /src\/worker\.ts/);
+});
+
+void test('coverage counter-free detection is conservative', () => {
+  assert.equal(
+    isCoverageCounterFreeSource(
+      'src/index.ts',
+      `import type { Config } from './config';
+       export { createClient } from './client';
+       export interface Options extends Config {}
+       export type Result = string;`,
+    ),
+    true,
+  );
+  assert.equal(
+    isCoverageCounterFreeSource('src/value.ts', 'export const value = 1;'),
+    false,
+  );
+  assert.equal(
+    isCoverageCounterFreeSource('src/value.ts', 'export enum Value { One }'),
+    false,
+  );
+  assert.equal(
+    isCoverageCounterFreeSource('src/broken.ts', 'export const = ;'),
+    false,
+  );
+});
+
 void test('JSONC parsing preserves strings and supports both comment forms', () => {
   assert.deepEqual(
     parseJsonc(`{
@@ -1042,10 +1089,20 @@ void test('JSONC parsing preserves strings and supports both comment forms', () 
   );
 });
 
-void test('the implicit audit base resolves to the target branch', () => {
-  const { base, mergeBase } = resolveAuditBase(undefined);
-  assert.ok(base === 'origin/main' || base === 'main', base);
-  assert.notEqual(mergeBase, '');
+void test('the configured audit base resolves in a shallow checkout', () => {
+  const previousAuditBase = process.env['FALLOW_AUDIT_BASE'];
+  process.env['FALLOW_AUDIT_BASE'] = 'HEAD';
+  try {
+    const { base, mergeBase } = resolveAuditBase(undefined);
+    assert.equal(base, 'HEAD');
+    assert.notEqual(mergeBase, '');
+  } finally {
+    if (previousAuditBase === undefined) {
+      delete process.env['FALLOW_AUDIT_BASE'];
+    } else {
+      process.env['FALLOW_AUDIT_BASE'] = previousAuditBase;
+    }
+  }
 });
 
 void test('scripts encode the complete gate and cannot casually bless debt', () => {
