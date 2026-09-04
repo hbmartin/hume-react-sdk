@@ -7,7 +7,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('does not accept writes after destruction', () => {
+it('resets pending work and remains reusable after destruction', () => {
   const callbacks = new Map<number, FrameRequestCallback>();
   let nextAnimationId = 0;
   const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
@@ -27,19 +27,30 @@ it('does not accept writes after destruction', () => {
   store.write([2]);
 
   expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
-  expect(requestAnimationFrame).toHaveBeenCalledOnce();
+  expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
   expect(callbacks.has(1)).toBe(false);
-  expect(store.getSnapshot()[0]).toBe(0);
+  callbacks.get(2)?.(0);
+  expect(store.getSnapshot()[0]).toBe(2);
 });
 
-it('does not retain subscribers added after destruction', () => {
+it('accepts new subscribers after destruction', () => {
+  let flush: FrameRequestCallback | undefined;
+  vi.stubGlobal(
+    'requestAnimationFrame',
+    vi.fn((callback: FrameRequestCallback) => {
+      flush = callback;
+      return 1;
+    }),
+  );
   const store = new FftStore();
   const listener = vi.fn();
 
   store.destroy();
   const unsubscribe = store.subscribe(listener);
-  store.clear();
+  store.write([1]);
+  flush?.(0);
   unsubscribe();
 
-  expect(listener).not.toHaveBeenCalled();
+  expect(listener).toHaveBeenCalledOnce();
+  expect(store.getSnapshot()[0]).toBe(1);
 });
