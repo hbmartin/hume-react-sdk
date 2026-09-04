@@ -1082,9 +1082,11 @@ describe('useMicrophone', () => {
       enabled: true,
       stop: vi.fn(),
     } as unknown as MediaStreamTrack;
+    const oldAudioTracks = [oldTrack];
+    const candidateAudioTracks = [candidateTrack];
     const { result } = renderMicrophone();
     const context = createAudioContext();
-    result.current.start(createStream([oldTrack]), context);
+    result.current.start(createStream([oldTrack], oldAudioTracks), context);
     act(() => result.current.mute());
     const oldRecorder = recorders[0];
     if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
@@ -1093,7 +1095,7 @@ describe('useMicrophone', () => {
     let replacement = Promise.resolve();
     act(() => {
       replacement = result.current.replace(
-        createStream([candidateTrack]),
+        createStream([candidateTrack], candidateAudioTracks),
         context,
       );
     });
@@ -1101,6 +1103,8 @@ describe('useMicrophone', () => {
 
     act(() => result.current.unmute());
     expect(candidateTrack.enabled).toBe(true);
+    expect(oldAudioTracks).toEqual([oldTrack]);
+    expect(candidateAudioTracks).toEqual([candidateTrack]);
     await act(async () => {
       oldRecorder.emit('stop', new Event('stop'));
       await replacement;
@@ -1110,7 +1114,7 @@ describe('useMicrophone', () => {
     expect(candidateTrack.enabled).toBe(true);
   });
 
-  it('releases an owned audio context when final replacement mute reconciliation fails', async () => {
+  it('releases an owned audio context when required mute reconciliation fails', async () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM));
     const contextClose = vi.fn().mockResolvedValue(undefined);
     stubOwnedAudioContext(contextClose);
@@ -1119,10 +1123,18 @@ describe('useMicrophone', () => {
       stop: vi.fn(),
     } as unknown as MediaStreamTrack;
     const candidateTrackStop = vi.fn();
+    let candidateTrackEnabled = true;
     const candidateTrack = {
-      enabled: true,
       stop: candidateTrackStop,
     } as unknown as MediaStreamTrack;
+    Object.defineProperty(candidateTrack, 'enabled', {
+      configurable: true,
+      get: () => candidateTrackEnabled,
+      set(value: boolean) {
+        candidateTrackEnabled = value;
+        if (!value) throw new Error('candidate track refused mute');
+      },
+    });
     const candidateStream = {
       getTracks: () => [candidateTrack],
       getAudioTracks: vi
@@ -1167,7 +1179,7 @@ describe('useMicrophone', () => {
     });
     expect(candidateTrackStop).toHaveBeenCalledOnce();
     expect(contextClose).toHaveBeenCalledOnce();
-    expect(result.current.isMuted).toBe(true);
+    expect(result.current.isMuted).toBe(false);
     expect(onStopRecording).toHaveBeenCalledOnce();
     expect(
       events.filter((event) => event.name === 'microphone.recording_stopped'),
@@ -1186,11 +1198,11 @@ describe('useMicrophone', () => {
       stop: vi.fn(),
     } as unknown as MediaStreamTrack;
     expect(() => result.current.start(createStream([nextTrack]))).not.toThrow();
-    expect(nextTrack.enabled).toBe(false);
+    expect(nextTrack.enabled).toBe(true);
     await act(() => result.current.stop());
   });
 
-  it('does not close a shared audio context after replacement reconciliation fails', async () => {
+  it('does not repeat mute reconciliation after a successful transition', async () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM));
     const contextClose = vi.fn().mockResolvedValue(undefined);
     const context = {
@@ -1206,14 +1218,15 @@ describe('useMicrophone', () => {
       enabled: true,
       stop: candidateTrackStop,
     } as unknown as MediaStreamTrack;
+    const getCandidateAudioTracks = vi
+      .fn<() => MediaStreamTrack[]>()
+      .mockReturnValueOnce([candidateTrack])
+      .mockImplementationOnce(() => {
+        throw new Error('final mute reconciliation failed');
+      });
     const candidateStream = {
       getTracks: () => [candidateTrack],
-      getAudioTracks: vi
-        .fn<() => MediaStreamTrack[]>()
-        .mockReturnValueOnce([candidateTrack])
-        .mockImplementationOnce(() => {
-          throw new Error('final mute reconciliation failed');
-        }),
+      getAudioTracks: getCandidateAudioTracks,
     } as unknown as MediaStream;
     const diagnostics = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1233,20 +1246,16 @@ describe('useMicrophone', () => {
 
     await act(async () => {
       oldRecorder.emit('stop', new Event('stop'));
-      await expect(replacement).rejects.toThrow(
-        'final mute reconciliation failed',
-      );
+      await replacement;
     });
 
-    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(getCandidateAudioTracks).toHaveBeenCalledOnce();
+    expect(candidateTrackStop).not.toHaveBeenCalled();
     expect(contextClose).not.toHaveBeenCalled();
     expect(result.current.isMuted).toBe(true);
 
-    const nextContext = createAudioContext();
-    expect(() =>
-      result.current.start(createStream(), nextContext),
-    ).not.toThrow();
     await act(() => result.current.stop());
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
   });
 
   it('queues stop behind an in-progress replacement', async () => {
@@ -1620,7 +1629,7 @@ describe('useMicrophone', () => {
     await act(() => result.current.stop());
   });
 
-  it('rejects an active stream as its own replacement without stopping it', async () => {
+  it('treats an active stream replacement as a no-op', async () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const activeTrackStop = vi.fn();
     const activeStream = createStream([
@@ -1634,7 +1643,7 @@ describe('useMicrophone', () => {
 
     await expect(
       result.current.replace(activeStream, createAudioContext()),
-    ).rejects.toThrow('The replacement microphone stream is already active.');
+    ).resolves.toBeUndefined();
 
     expect(activeTrackStop).not.toHaveBeenCalled();
     await act(() => result.current.stop());

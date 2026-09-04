@@ -1294,6 +1294,93 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['content']).toBe('Preserved sensitive content');
   });
 
+  it('reallocates unused sensitive merge work to ordinary details', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const hiddenKeys = Array.from(
+      { length: 5_000 },
+      (_, index) => `hidden-${index}`,
+    );
+    let detailDescriptorReads = 0;
+    const details = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        ownKeys: () => hiddenKeys,
+        getOwnPropertyDescriptor() {
+          detailDescriptorReads += 1;
+          return {
+            configurable: true,
+            enumerable: false,
+            value: null,
+            writable: true,
+          };
+        },
+      },
+    );
+
+    reporter.emit({
+      ...input,
+      details,
+      sensitiveDetails: { content: 'Preserved sensitive content' },
+    });
+
+    expect(detailDescriptorReads).toBeGreaterThan(3_900);
+    expect(detailDescriptorReads).toBeLessThanOrEqual(4_000);
+    expect(events[0]?.details['content']).toBe('Preserved sensitive content');
+  });
+
+  it('does not let a wide sensitive payload starve ordinary details', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const sensitiveDetails = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [
+        `sensitive-${index}`,
+        index,
+      ]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { phase: 'preserved' },
+      sensitiveDetails,
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['phase']).toBe('preserved');
+    expect(events[0]?.details['sensitive-0']).toBe(0);
+  });
+
+  it('reuses sampled descriptors while merging ordinary keys', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    let descriptorReads = 0;
+    const details = new Proxy(
+      { ordinary: 'preserved' },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          descriptorReads += 1;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+
+    reporter.emit({ ...input, details });
+
+    expect(descriptorReads).toBe(5);
+    expect(events[0]?.details['ordinary']).toBe('preserved');
+  });
+
   it('bounds priority discovery work across repeated object references', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1666,6 +1753,25 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
   });
 
+  it('keeps the true trailing merge keys when the entry cap is reached', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details: Record<string, unknown> = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [`detail-${index}`, index]),
+    );
+    details['detail-1999'] = new Error('Trailing merged failure');
+
+    reporter.emit({ ...input, details });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['detail-1999']).toMatchObject({
+      message: 'Trailing merged failure',
+    });
+  });
+
   it('bounds symbol-key work across discovery and sanitization', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1799,7 +1905,7 @@ describe('voice diagnostics reporter', () => {
     });
   });
 
-  it('marks details incomplete when a top-level key disappears during merge', () => {
+  it('uses a snapshotted descriptor while merging a top-level key', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1821,10 +1927,11 @@ describe('voice diagnostics reporter', () => {
 
     reporter.emit({ ...input, details });
 
-    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(unstableDescriptorReads).toBe(1);
+    expect(events[0]?.detailsTruncated).toBeUndefined();
     expect(events[0]?.details).toEqual({
-      __humeDiagnosticTruncated: true,
       first: 1,
+      unstable: 2,
       later: 3,
     });
   });

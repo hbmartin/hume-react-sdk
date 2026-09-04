@@ -308,9 +308,9 @@ const PRIORITY_DIAGNOSTIC_KEYS = [
 ] as const;
 const PRIORITY_DIAGNOSTIC_KEY_SET = new Set<string>(PRIORITY_DIAGNOSTIC_KEYS);
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
-// Priority discovery can inspect every object that sanitization could retain
-// plus a similarly sized nested frontier. Without the second frontier, many
-// ordinary siblings can hide a late container whose child is the real failure.
+// Priority discovery can schedule every object that sanitization could retain
+// plus a similarly sized nested frontier. The shared descriptor budget can end
+// inspection earlier for objects with several sampled traversal keys.
 const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS * 2;
 // Reserve enough descriptor work to probe and sample that larger frontier
 // while retaining a quarter of the event allowance for merging and ordinary
@@ -319,9 +319,10 @@ const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
   (MAX_SCANNED_TOTAL_OBJECT_KEYS * 3) / 4,
 );
 // Sample as many ordinary traversal keys as there are direct priority probes.
-// The shared budget still caps adversarial wide graphs, while ordinary objects
-// retain the four-key discovery breadth used before the frontier was restored.
+// Narrow graphs can reach the node cap; wider graphs remain bounded by the
+// shared descriptor allowance.
 const MAX_PRIORITY_KEYS_PER_OBJECT = PRIORITY_DIAGNOSTIC_KEYS.length;
+const MAX_PRIORITIZED_SENSITIVE_KEYS = PRIORITY_DIAGNOSTIC_KEYS.length;
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -505,6 +506,9 @@ const redactCorrelationId = (value: string, matcher: RedactionMatcher) => {
 };
 
 type EnumeratedKeys = { incomplete: boolean; keys: string[] };
+type SampledEnumerableOwnKeys = EnumeratedKeys & {
+  descriptors: ReadonlyMap<string, PropertyDescriptor>;
+};
 type OwnKeyScanBudget = { remainingKeys: number };
 
 type SanitizationBudget = {
@@ -758,23 +762,63 @@ const getLeadingAndTrailingIndexes = (length: number, count: number) => {
   for (let offset = 0; offset < leadingCount; offset += 1) {
     indexes.push(offset);
     if (offset < trailingCount) {
-      indexes.push(length - trailingCount + offset);
+      indexes.push(length - 1 - offset);
     }
   }
   return indexes;
+};
+
+const getBalancedScanAllowances = (
+  requestedKeys: readonly number[],
+  availableKeys: number,
+) => {
+  const allowances = requestedKeys.map(() => 0);
+  let remainingKeys = availableKeys;
+  let pendingIndexes = requestedKeys.map((_, index) => index);
+
+  while (pendingIndexes.length > 0) {
+    const equalShare = Math.floor(remainingKeys / pendingIndexes.length);
+    const satisfiedIndexes = pendingIndexes.filter(
+      (index) => (requestedKeys[index] ?? 0) <= equalShare,
+    );
+    if (satisfiedIndexes.length === 0) {
+      const remainder = remainingKeys % pendingIndexes.length;
+      pendingIndexes.forEach((index, position) => {
+        allowances[index] = equalShare + (position < remainder ? 1 : 0);
+      });
+      break;
+    }
+
+    const satisfied = new Set(satisfiedIndexes);
+    for (const index of satisfiedIndexes) {
+      const requested = requestedKeys[index] ?? 0;
+      allowances[index] = requested;
+      remainingKeys -= requested;
+    }
+    pendingIndexes = pendingIndexes.filter((index) => !satisfied.has(index));
+  }
+
+  return allowances;
 };
 
 const getSampledEnumerableOwnKeys = (
   value: object,
   budget: OwnKeyScanBudget,
   maximumScannedKeys: number,
-): EnumeratedKeys => {
-  if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
+  ownKeysSnapshot?: readonly PropertyKey[],
+): SampledEnumerableOwnKeys => {
+  if (budget.remainingKeys === 0) {
+    return { descriptors: new Map(), incomplete: true, keys: [] };
+  }
   let ownKeys: PropertyKey[];
-  try {
-    ownKeys = Reflect.ownKeys(value);
-  } catch {
-    return { incomplete: true, keys: [] };
+  if (ownKeysSnapshot === undefined) {
+    try {
+      ownKeys = Reflect.ownKeys(value);
+    } catch {
+      return { descriptors: new Map(), incomplete: true, keys: [] };
+    }
+  } else {
+    ownKeys = [...ownKeysSnapshot];
   }
 
   const count = Math.min(
@@ -782,7 +826,11 @@ const getSampledEnumerableOwnKeys = (
     maximumScannedKeys,
     budget.remainingKeys,
   );
-  const entries: Array<{ index: number; key: string }> = [];
+  const entries: Array<{
+    descriptor: PropertyDescriptor;
+    index: number;
+    key: string;
+  }> = [];
   let inspectedKeys = 0;
   let incomplete = ownKeys.length > count;
   for (const index of getLeadingAndTrailingIndexes(ownKeys.length, count)) {
@@ -800,11 +848,17 @@ const getSampledEnumerableOwnKeys = (
       continue;
     }
     if (descriptor.enumerable !== true) continue;
-    entries.push({ index, key });
+    entries.push({ descriptor, index, key });
   }
   incomplete ||= inspectedKeys < count;
   entries.sort((left, right) => left.index - right.index);
-  return { incomplete, keys: entries.map(({ key }) => key) };
+  return {
+    descriptors: new Map(
+      entries.map(({ descriptor, key }) => [key, descriptor]),
+    ),
+    incomplete,
+    keys: entries.map(({ key }) => key),
+  };
 };
 
 const getEnumerableArrayIndexKeys = (
@@ -1017,8 +1071,11 @@ const mergeOwnDataProperties = (
     sourceMerge: (typeof sourceMerges)[number],
     key: string,
     expected: boolean,
+    knownDescriptor?: PropertyDescriptor,
   ) => {
-    const descriptor = getOwnPropertyDescriptorSafely(sourceMerge.source, key);
+    const descriptor =
+      knownDescriptor ??
+      getOwnPropertyDescriptorSafely(sourceMerge.source, key);
     if (descriptor === null) {
       incomplete = true;
       return false;
@@ -1056,15 +1113,26 @@ const mergeOwnDataProperties = (
     }
   }
 
+  const ownKeysBySource = sourceMerges.map((sourceMerge) => {
+    try {
+      return Reflect.ownKeys(sourceMerge.source);
+    } catch {
+      incomplete = true;
+      return null;
+    }
+  });
+  const sourceAllowances = getBalancedScanAllowances(
+    ownKeysBySource.map((ownKeys) => ownKeys?.length ?? 0),
+    ownKeyScanBudget.remainingKeys,
+  );
   for (const [index, sourceMerge] of sourceMerges.entries()) {
-    const remainingSources = sourceMerges.length - index;
-    const sourceAllowance = Math.floor(
-      ownKeyScanBudget.remainingKeys / remainingSources,
-    );
+    const ownKeys = ownKeysBySource[index];
+    if (ownKeys === null || ownKeys === undefined) continue;
     const enumerated = getSampledEnumerableOwnKeys(
       sourceMerge.source,
       ownKeyScanBudget,
-      sourceAllowance,
+      sourceAllowances[index] ?? 0,
+      ownKeys,
     );
     incomplete ||= enumerated.incomplete;
     for (const key of enumerated.keys) {
@@ -1072,7 +1140,7 @@ const mergeOwnDataProperties = (
         !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) ||
         sourceMerge.missingPriorityKeys.has(key)
       ) {
-        mergeProperty(sourceMerge, key, true);
+        mergeProperty(sourceMerge, key, true, enumerated.descriptors.get(key));
       }
     }
   }
@@ -1086,7 +1154,13 @@ const mergeOwnDataProperties = (
         value,
         writable: true,
       });
-      if (sourceMerge.prioritize) prioritizedMergedKeys.add(key);
+      if (
+        sourceMerge.prioritize &&
+        !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) &&
+        prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_KEYS
+      ) {
+        prioritizedMergedKeys.add(key);
+      }
     }
   }
 

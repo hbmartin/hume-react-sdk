@@ -89,6 +89,7 @@ export class FftStore {
   };
 
   destroy(): void {
+    this._dirty = false;
     if (this._rafId !== null) {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
