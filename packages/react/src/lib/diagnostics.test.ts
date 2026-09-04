@@ -1358,6 +1358,27 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['sensitive-0']).toBe(0);
   });
 
+  it('preserves a small sensitive payload beside a full ordinary payload', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const details = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`detail-${index}`, index]),
+    );
+    const sensitiveDetails = Object.fromEntries(
+      Array.from({ length: 5 }, (_, index) => [`sensitive-${index}`, index]),
+    );
+
+    reporter.emit({ ...input, details, sensitiveDetails });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['detail-0']).toBe(0);
+    expect(events[0]?.details).toMatchObject(sensitiveDetails);
+  });
+
   it('reuses sampled descriptors while merging ordinary keys', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({

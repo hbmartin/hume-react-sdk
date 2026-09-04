@@ -1132,7 +1132,9 @@ describe('useMicrophone', () => {
       get: () => candidateTrackEnabled,
       set(value: boolean) {
         candidateTrackEnabled = value;
-        if (!value) throw new Error('candidate track refused mute');
+        if (!value) {
+          throw new Error('candidate track mute failed after applying');
+        }
       },
     });
     const candidateStream = {
@@ -1256,6 +1258,75 @@ describe('useMicrophone', () => {
 
     await act(() => result.current.stop());
     expect(candidateTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a shared context and can restart after mute reconciliation fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const contextClose = vi.fn().mockResolvedValue(undefined);
+    const context = {
+      ...createAudioContext(),
+      close: contextClose,
+    } as AudioContext;
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrackStop = vi.fn();
+    let candidateTrackEnabled = true;
+    const candidateTrack = {
+      stop: candidateTrackStop,
+    } as unknown as MediaStreamTrack;
+    Object.defineProperty(candidateTrack, 'enabled', {
+      configurable: true,
+      get: () => candidateTrackEnabled,
+      set(value: boolean) {
+        if (!value) throw new Error('candidate track refused mute');
+        candidateTrackEnabled = value;
+      },
+    });
+    const candidateStream = {
+      getTracks: () => [candidateTrack],
+      getAudioTracks: vi
+        .fn<() => MediaStreamTrack[]>()
+        .mockReturnValueOnce([candidateTrack])
+        .mockImplementationOnce(() => {
+          throw new Error('final mute reconciliation failed');
+        }),
+    } as unknown as MediaStream;
+    const { result } = renderMicrophone();
+    result.current.start(createStream([oldTrack]), context);
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(candidateStream, context);
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+    act(() => result.current.mute());
+
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await expect(replacement).rejects.toThrow(
+        'final mute reconciliation failed',
+      );
+    });
+
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
+    expect(contextClose).not.toHaveBeenCalled();
+    expect(result.current.isMuted).toBe(false);
+
+    const nextContextClose = vi.fn().mockResolvedValue(undefined);
+    const nextContext = {
+      ...createAudioContext(),
+      close: nextContextClose,
+    } as AudioContext;
+    expect(() =>
+      result.current.start(createStream(), nextContext),
+    ).not.toThrow();
+    await act(() => result.current.stop());
+    expect(nextContextClose).not.toHaveBeenCalled();
   });
 
   it('queues stop behind an in-progress replacement', async () => {
@@ -1639,11 +1710,33 @@ describe('useMicrophone', () => {
       } as unknown as MediaStreamTrack,
     ]);
     const { result } = renderMicrophone();
+    const context = createAudioContext();
+    result.current.start(activeStream, context);
+
+    await expect(
+      result.current.replace(activeStream, context),
+    ).resolves.toBeUndefined();
+
+    expect(activeTrackStop).not.toHaveBeenCalled();
+    await act(() => result.current.stop());
+    expect(activeTrackStop).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a changed audio context for an active stream replacement', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const activeTrackStop = vi.fn();
+    const activeStream = createStream([
+      {
+        enabled: true,
+        stop: activeTrackStop,
+      } as unknown as MediaStreamTrack,
+    ]);
+    const { result } = renderMicrophone();
     result.current.start(activeStream, createAudioContext());
 
     await expect(
       result.current.replace(activeStream, createAudioContext()),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow('The microphone audio context changed.');
 
     expect(activeTrackStop).not.toHaveBeenCalled();
     await act(() => result.current.stop());

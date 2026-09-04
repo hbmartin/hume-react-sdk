@@ -322,7 +322,10 @@ const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
 // Narrow graphs can reach the node cap; wider graphs remain bounded by the
 // shared descriptor allowance.
 const MAX_PRIORITY_KEYS_PER_OBJECT = PRIORITY_DIAGNOSTIC_KEYS.length;
-const MAX_PRIORITIZED_SENSITIVE_KEYS = PRIORITY_DIAGNOSTIC_KEYS.length;
+// Reserve at most half of the output-entry budget for sensitive details. This
+// preserves ordinary diagnostic context while allowing a small sensitive
+// payload to survive a full root enumeration slice.
+const MAX_PRIORITIZED_SENSITIVE_KEYS = Math.floor(MAX_SANITIZED_ENTRIES / 2);
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -507,7 +510,7 @@ const redactCorrelationId = (value: string, matcher: RedactionMatcher) => {
 
 type EnumeratedKeys = { incomplete: boolean; keys: string[] };
 type SampledEnumerableOwnKeys = EnumeratedKeys & {
-  descriptors: ReadonlyMap<string, PropertyDescriptor>;
+  descriptors?: ReadonlyMap<string, PropertyDescriptor>;
 };
 type OwnKeyScanBudget = { remainingKeys: number };
 
@@ -805,20 +808,24 @@ const getSampledEnumerableOwnKeys = (
   value: object,
   budget: OwnKeyScanBudget,
   maximumScannedKeys: number,
-  ownKeysSnapshot?: readonly PropertyKey[],
+  options?: Readonly<{
+    captureDescriptors?: boolean;
+    ownKeysSnapshot?: readonly PropertyKey[];
+  }>,
 ): SampledEnumerableOwnKeys => {
+  const captureDescriptors = options?.captureDescriptors ?? false;
   if (budget.remainingKeys === 0) {
-    return { descriptors: new Map(), incomplete: true, keys: [] };
+    return { incomplete: true, keys: [] };
   }
-  let ownKeys: PropertyKey[];
-  if (ownKeysSnapshot === undefined) {
+  let ownKeys: readonly PropertyKey[];
+  if (options?.ownKeysSnapshot === undefined) {
     try {
       ownKeys = Reflect.ownKeys(value);
     } catch {
-      return { descriptors: new Map(), incomplete: true, keys: [] };
+      return { incomplete: true, keys: [] };
     }
   } else {
-    ownKeys = [...ownKeysSnapshot];
+    ownKeys = options.ownKeysSnapshot;
   }
 
   const count = Math.min(
@@ -852,10 +859,11 @@ const getSampledEnumerableOwnKeys = (
   }
   incomplete ||= inspectedKeys < count;
   entries.sort((left, right) => left.index - right.index);
+  const descriptors = captureDescriptors
+    ? new Map(entries.map(({ descriptor, key }) => [key, descriptor]))
+    : undefined;
   return {
-    descriptors: new Map(
-      entries.map(({ descriptor, key }) => [key, descriptor]),
-    ),
+    ...(descriptors === undefined ? undefined : { descriptors }),
     incomplete,
     keys: entries.map(({ key }) => key),
   };
@@ -1132,7 +1140,7 @@ const mergeOwnDataProperties = (
       sourceMerge.source,
       ownKeyScanBudget,
       sourceAllowances[index] ?? 0,
-      ownKeys,
+      { captureDescriptors: true, ownKeysSnapshot: ownKeys },
     );
     incomplete ||= enumerated.incomplete;
     for (const key of enumerated.keys) {
@@ -1140,7 +1148,7 @@ const mergeOwnDataProperties = (
         !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) ||
         sourceMerge.missingPriorityKeys.has(key)
       ) {
-        mergeProperty(sourceMerge, key, true, enumerated.descriptors.get(key));
+        mergeProperty(sourceMerge, key, true, enumerated.descriptors?.get(key));
       }
     }
   }

@@ -7,7 +7,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('can schedule a new flush after destroying a pending write', () => {
+it('does not accept writes after destruction', () => {
   const callbacks = new Map<number, FrameRequestCallback>();
   let nextAnimationId = 0;
   const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
@@ -27,7 +27,19 @@ it('can schedule a new flush after destroying a pending write', () => {
   store.write([2]);
 
   expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
-  expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
-  callbacks.get(2)?.(0);
-  expect(store.getSnapshot()[0]).toBe(2);
+  expect(requestAnimationFrame).toHaveBeenCalledOnce();
+  expect(callbacks.has(1)).toBe(false);
+  expect(store.getSnapshot()[0]).toBe(0);
+});
+
+it('does not retain subscribers added after destruction', () => {
+  const store = new FftStore();
+  const listener = vi.fn();
+
+  store.destroy();
+  const unsubscribe = store.subscribe(listener);
+  store.clear();
+  unsubscribe();
+
+  expect(listener).not.toHaveBeenCalled();
 });

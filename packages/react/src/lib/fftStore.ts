@@ -28,9 +28,12 @@ export class FftStore {
 
   private _dirty = false;
 
+  private _destroyed = false;
+
   private _rafId: number | null = null;
 
   write(data: number[]): void {
+    if (this._destroyed) return;
     for (let i = 0; i < BARK_BAND_COUNT; i++) {
       this._buffer[i] = data[i] ?? 0;
     }
@@ -74,6 +77,7 @@ export class FftStore {
   }
 
   subscribe = (listener: () => void): (() => void) => {
+    if (this._destroyed) return () => {};
     this._listeners.add(listener);
     return () => {
       this._listeners.delete(listener);
@@ -89,6 +93,7 @@ export class FftStore {
   };
 
   destroy(): void {
+    this._destroyed = true;
     this._dirty = false;
     if (this._rafId !== null) {
       cancelAnimationFrame(this._rafId);
