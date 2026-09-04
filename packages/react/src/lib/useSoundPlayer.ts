@@ -95,6 +95,7 @@ interface PlayerResources {
   worklet: AudioWorkletNode | null;
   source: AudioBufferSourceNode | null;
   fftRafId: number | null;
+  unknownWorkletMessageReported: boolean;
 }
 
 const BARK_BAND_COUNT = 24;
@@ -469,6 +470,7 @@ const useSoundPlayerImplementation = (
           worklet: null,
           source: null,
           fftRafId: null,
+          unknownWorkletMessageReported: false,
         };
         resourcesForInitialization = resources;
         playerResources.current = resources;
@@ -580,6 +582,18 @@ const useSoundPlayerImplementation = (
               // The worklet is loaded remotely and may add control messages
               // before this SDK learns how to consume them. Unknown extensions
               // must remain forward-compatible no-ops.
+              if (
+                !resources.unknownWorkletMessageReported &&
+                diagnostics.current?.isEnabled('debug') === true
+              ) {
+                resources.unknownWorkletMessageReported = true;
+                diagnostics.current.emit({
+                  level: 'debug',
+                  category: 'audio_player',
+                  name: 'audio.worklet_message_ignored',
+                  details: { messageType },
+                });
+              }
               return;
             }
             if (!isWorkletMessage(data)) {
@@ -661,6 +675,7 @@ const useSoundPlayerImplementation = (
       }
     },
     [
+      diagnostics,
       disposePlayerResources,
       props.enableAudioWorklet,
       fftStore,

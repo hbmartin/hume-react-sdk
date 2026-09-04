@@ -240,7 +240,7 @@ export type ToolCallHandler = (message: {
     error: (e: {
         error: string;
         code: string;
-        level?: string | null;
+        level?: Hume.empathicVoice.ErrorLevel | null;
         content: string;
     }) => Hume.empathicVoice.ToolErrorMessage;
 }) => Promise<Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage>;
@@ -405,7 +405,7 @@ export type VoiceDiagnosticEvent = Readonly<{
 }>;
 
 // @public
-export type VoiceDiagnosticEventName = 'connection.attempt_started' | 'connection.attempt_ignored' | 'connection.attempt_cancelled' | 'connection.connected' | 'connection.disconnect_started' | 'connection.disconnected' | 'socket.opened' | 'socket.closed' | 'resource.initialization_started' | 'resource.initialized' | 'resource.stop_started' | 'resource.stopped' | 'resource.cleanup_failed' | 'microphone.permission_requested' | 'microphone.permission_resolved' | 'microphone.mime_type_selected' | 'microphone.recording_started' | 'microphone.recording_stopped' | 'microphone.audio_chunk_captured' | 'microphone.flush_completed' | 'microphone.analyzer_failed' | 'audio.chunk_received' | 'audio.queue_changed' | 'audio.playback_started' | 'audio.playback_ended' | 'audio.drain_completed' | 'audio_device.switch_started' | 'audio_device.switch_completed' | 'audio_device.switch_failed' | 'audio_device.switch_ignored' | 'message.sent' | 'message.received' | 'message.skipped' | 'tool.handler_started' | 'tool.handler_completed' | 'tool.handler_failed' | 'tool.handler_skipped' | 'control.changed' | 'control.change_failed' | 'consumer.callback_failed' | 'sdk.error' | 'sdk.error_cleared';
+export type VoiceDiagnosticEventName = 'connection.attempt_started' | 'connection.attempt_ignored' | 'connection.attempt_cancelled' | 'connection.connected' | 'connection.disconnect_started' | 'connection.disconnected' | 'socket.opened' | 'socket.closed' | 'resource.initialization_started' | 'resource.initialized' | 'resource.stop_started' | 'resource.stopped' | 'resource.cleanup_failed' | 'microphone.permission_requested' | 'microphone.permission_resolved' | 'microphone.mime_type_selected' | 'microphone.recording_started' | 'microphone.recording_stopped' | 'microphone.audio_chunk_captured' | 'microphone.flush_completed' | 'microphone.analyzer_failed' | 'audio.chunk_received' | 'audio.queue_changed' | 'audio.worklet_message_ignored' | 'audio.playback_started' | 'audio.playback_ended' | 'audio.drain_completed' | 'audio_device.switch_started' | 'audio_device.switch_completed' | 'audio_device.switch_failed' | 'audio_device.switch_ignored' | 'message.sent' | 'message.received' | 'message.skipped' | 'tool.handler_started' | 'tool.handler_completed' | 'tool.handler_failed' | 'tool.handler_skipped' | 'control.changed' | 'control.change_failed' | 'consumer.callback_failed' | 'sdk.error' | 'sdk.error_cleared';
 
 // @public @deprecated
 export type VoiceDiagnosticInput = {

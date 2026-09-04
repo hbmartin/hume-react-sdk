@@ -31,6 +31,17 @@ const isCoveredSource = (path, policy) =>
   !policy.exclude.some((pattern) => matchesGlob(path, pattern));
 
 /**
+ * Coverage generation inputs include excluded tests and support modules. A
+ * change to any tracked file selected by an include glob can alter the map,
+ * even when that file is not itself required to appear in the map.
+ *
+ * @param {string} path
+ * @param {CoveragePolicy} policy
+ */
+const isCoverageInput = (path, policy) =>
+  policy.include.some((pattern) => matchesGlob(path, pattern));
+
+/**
  * @param {{ type: string, declare?: boolean | null, declaration?: null | { type: string, declare?: boolean | null } }} node
  * @returns {boolean}
  */
@@ -147,7 +158,7 @@ export const getTrackedCoverageInputs = () => {
   );
   return getTrackedFiles().filter(
     (path) =>
-      isCoveredSource(path, policy) ||
+      isCoverageInput(path, policy) ||
       path === 'vitest.config.mts' ||
       path === 'tools/vitest-config/base.mjs' ||
       path === 'coverage-policy.json' ||

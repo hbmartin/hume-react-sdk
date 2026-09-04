@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -656,7 +656,8 @@ export const runBaselinePolicy = (args = process.argv.slice(2)) => {
 
 if (
   process.argv[1] !== undefined &&
-  fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  realpathSync(fileURLToPath(import.meta.url)) ===
+    realpathSync(resolve(process.argv[1]))
 ) {
   process.exitCode = runBaselinePolicy();
 }

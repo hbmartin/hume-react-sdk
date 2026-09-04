@@ -56,6 +56,7 @@ export type VoiceDiagnosticEventName =
   | 'microphone.analyzer_failed'
   | 'audio.chunk_received'
   | 'audio.queue_changed'
+  | 'audio.worklet_message_ignored'
   | 'audio.playback_started'
   | 'audio.playback_ended'
   | 'audio.drain_completed'
@@ -1270,7 +1271,6 @@ const mergeOwnDataProperties = (
   }
 
   const mergedSensitiveKeys = new Set<string>();
-  const prioritizedSensitiveKeys = new Set<string>();
   for (const sourceMerge of sourceMerges) {
     for (const [key, value] of Object.entries(sourceMerge.properties)) {
       Object.defineProperty(target, key, {
@@ -1281,11 +1281,19 @@ const mergeOwnDataProperties = (
       });
       if (sourceMerge.prioritize) {
         mergedSensitiveKeys.add(key);
-        if (prioritizedSensitiveKeys.size < MAX_PRIORITIZED_SENSITIVE_ENTRIES) {
-          prioritizedSensitiveKeys.add(key);
-        }
       }
     }
+  }
+
+  const prioritizedSensitiveKeys = new Set<string>();
+  for (const key of PRIORITY_DIAGNOSTIC_KEYS) {
+    if (mergedSensitiveKeys.has(key)) prioritizedSensitiveKeys.add(key);
+  }
+  for (const key of mergedSensitiveKeys) {
+    if (prioritizedSensitiveKeys.size >= MAX_PRIORITIZED_SENSITIVE_ENTRIES) {
+      break;
+    }
+    prioritizedSensitiveKeys.add(key);
   }
 
   return { incomplete, mergedSensitiveKeys, prioritizedSensitiveKeys };
@@ -1633,43 +1641,11 @@ const sanitizeValue = (
         (outcome === 'retry' && sanitizeEntry(key, true) === 'stop')
       );
     };
-    const remainingEntriesBeforePriorityDetails = budget.remainingEntries;
-    const sensitiveEntryReserve =
-      sensitivePriorityKeys === undefined || sensitivePriorityKeys.size === 0
-        ? 0
-        : Math.min(
-            remainingEntriesBeforePriorityDetails,
-            MAX_PRIORITIZED_SENSITIVE_ENTRIES,
-          );
-    budget.remainingEntries =
-      remainingEntriesBeforePriorityDetails - sensitiveEntryReserve;
-    let ordinaryPriorityIndex = 0;
-    for (
-      ;
-      ordinaryPriorityIndex < ordinaryPriorityEntries.length;
-      ordinaryPriorityIndex += 1
-    ) {
-      const entry = ordinaryPriorityEntries[ordinaryPriorityIndex];
-      if (
-        entry === undefined ||
-        !sanitizePriorityEntry(entry.key, entry.expected)
-      ) {
-        break;
-      }
-    }
-    if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
-    const consumedOrdinaryPriorityEntries =
-      remainingEntriesBeforePriorityDetails -
-      sensitiveEntryReserve -
-      budget.remainingEntries;
-    budget.remainingEntries =
-      remainingEntriesBeforePriorityDetails - consumedOrdinaryPriorityEntries;
-
-    if (sensitivePriorityKeys !== undefined) {
+    if (sensitivePriorityKeys !== undefined && sensitivePriorityKeys.size > 0) {
       const remainingEntriesBeforeSensitiveDetails = budget.remainingEntries;
       const sensitiveEntryAllowance = Math.min(
         remainingEntriesBeforeSensitiveDetails,
-        sensitiveEntryReserve,
+        MAX_PRIORITIZED_SENSITIVE_ENTRIES,
       );
       let remainingSensitiveEntries = sensitiveEntryAllowance;
       try {
@@ -1694,16 +1670,17 @@ const sanitizeValue = (
       }
     }
 
-    for (
-      ;
-      ordinaryPriorityIndex < ordinaryPriorityEntries.length;
-      ordinaryPriorityIndex += 1
+    if (
+      sensitiveRootKeys !== undefined &&
+      sensitivePriorityKeys !== undefined &&
+      sensitiveRootKeys.size > sensitivePriorityKeys.size
     ) {
-      const entry = ordinaryPriorityEntries[ordinaryPriorityIndex];
-      if (
-        entry === undefined ||
-        !sanitizePriorityEntry(entry.key, entry.expected)
-      ) {
+      markSanitizedObjectTruncated(result, budget);
+    }
+    if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
+
+    for (const entry of ordinaryPriorityEntries) {
+      if (!sanitizePriorityEntry(entry.key, entry.expected)) {
         return result;
       }
     }
