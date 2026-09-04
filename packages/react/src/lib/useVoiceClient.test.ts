@@ -635,6 +635,52 @@ describe('useVoiceClient', () => {
     );
   });
 
+  it('preserves the tool-error level opt-out', async () => {
+    const socket = createSocket();
+    humeMocks.connect.mockReturnValue(socket);
+    const onToolCall = vi.fn<ToolCallHandler>((_message, send) =>
+      Promise.resolve(
+        send.error({
+          code: 'tool_failed',
+          content: 'fallback',
+          error: 'failed',
+          level: null,
+        }),
+      ),
+    );
+    const { result } = renderHook(() => useVoiceClient({ onToolCall }));
+
+    let connecting = Promise.resolve(VoiceReadyState.IDLE);
+    act(() => {
+      connecting = result.current.connect(config);
+    });
+    act(() => {
+      socket.handlers.get('message')?.({ type: 'chat_metadata' } as never);
+    });
+    await connecting;
+
+    act(() => {
+      socket.handlers.get('message')?.({
+        type: 'tool_call',
+        toolCallId: 'failed-call',
+        name: 'fail',
+        parameters: '{}',
+        toolType: 'function',
+        responseRequired: true,
+      } as never);
+    });
+
+    await waitFor(() =>
+      expect(socket.sendToolErrorMessage).toHaveBeenCalledWith({
+        type: 'tool_error',
+        toolCallId: 'failed-call',
+        error: 'failed',
+        code: 'tool_failed',
+        content: 'fallback',
+      }),
+    );
+  });
+
   it('does not emit a manual tool response when the socket send fails', async () => {
     const socket = createSocket();
     socket.sendToolResponseMessage.mockImplementation(() => {

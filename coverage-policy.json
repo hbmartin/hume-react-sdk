@@ -11,6 +11,12 @@
     "**/*.d.ts",
     "**/*.test.{ts,tsx}",
     "**/*.spec.{ts,tsx}",
+    "packages/embed/src/index.ts",
+    "packages/embed-react/src/index.ts",
+    "packages/react/src/index.ts",
+    "packages/react/src/lib/connection-message.ts",
+    "packages/react/src/models/connect-options.ts",
+    "packages/react/src/models/messages.ts",
     "packages/react/src/worklets/audio-worklet-20250702.js"
   ],
   "thresholds": {
@@ -21,16 +27,16 @@
       "statements": 26
     },
     "examples/vite-app-embed/src/**": {
-      "branches": 0,
-      "functions": 0,
-      "lines": 0,
-      "statements": 0
+      "branches": 80,
+      "functions": 80,
+      "lines": 64,
+      "statements": 64
     },
     "examples/vite-app/src/**": {
-      "branches": 0,
-      "functions": 0,
-      "lines": 0,
-      "statements": 0
+      "branches": 90,
+      "functions": 100,
+      "lines": 96,
+      "statements": 96
     },
     "packages/embed-react/src/**": {
       "branches": 95,

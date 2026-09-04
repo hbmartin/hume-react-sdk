@@ -7,6 +7,7 @@ import {
   repositoryRoot,
   resolveAuditBase,
   run,
+  runPnpm,
 } from './quality-gate-utils.mjs';
 
 /** @typedef {{ path: string, name: string, line: number, severity: string, introduced?: boolean }} AuditComplexityFinding */
@@ -46,7 +47,7 @@ const printAuditFailure = () => {
 };
 
 console.log('Verifying complete type-aware dead-code analysis before audit.');
-const semanticCheck = run('pnpm', [
+const semanticCheck = runPnpm([
   'exec',
   'fallow',
   'dead-code',
@@ -58,7 +59,7 @@ const semanticCheck = run('pnpm', [
 ]);
 
 console.log(`Running the PR audit from merge base ${mergeBase} (${base}).`);
-const audit = run('pnpm', [
+const audit = runPnpm([
   'exec',
   'fallow',
   'audit',

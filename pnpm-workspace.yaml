@@ -2,6 +2,7 @@ packages:
   - 'packages/*'
   - 'examples/*'
   - 'tools/lint-contract'
+  - 'tools/quality-gate'
   - 'tools/typescript-config'
   - 'tools/vitest-config'
   - '!packages/core'

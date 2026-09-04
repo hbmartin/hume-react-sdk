@@ -79,7 +79,7 @@ function transformReadmeLine(line, state) {
     state.listContinuationIndent,
     listItemContentStart,
   );
-  if (isOpeningFence(state.codeFence, fence)) {
+  if (fence !== null && isOpeningFence(state.codeFence, fence)) {
     state.codeFence = {
       character: fence.character,
       length: fence.length,
@@ -228,7 +228,8 @@ function findHtmlTagEnd(line, tagStart) {
 function getOpeningRawHtmlElement(tag) {
   const match = /^<(code|pre|script|style|textarea)(?:[ \t]|>|\/)/iu.exec(tag);
   if (match === null || /\/[ \t]*>$/u.test(tag)) return null;
-  return match[1].toLowerCase();
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the capture is mandatory whenever this fixed regular expression matches
+  return /** @type {string} */ (match[1]).toLowerCase();
 }
 
 /** @param {string} value */
@@ -312,7 +313,10 @@ function canContinueParagraph(line, listItemContentStart, paragraphWasOpen) {
 function updateListContainer(line, state) {
   const listItem = /^([ \t]*)(?:[-+*]|\d{1,9}[.)])([ \t]+)/u.exec(line);
   const listItemIndent =
-    listItem === null ? undefined : getColumnWidth(listItem[1]);
+    listItem === null
+      ? undefined
+      : // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the first capture is mandatory whenever this fixed regular expression matches
+        getColumnWidth(/** @type {string} */ (listItem[1]));
   const isDocumentListItem =
     listItemIndent !== undefined && listItemIndent <= 3;
   const isNestedListItem =
@@ -383,12 +387,12 @@ function getCodeFence(line, listContinuationIndent, listItemContentStart) {
   const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(candidate);
   if (match === null) return null;
 
-  const marker = match[1];
-  const trailing = match[2];
-  const character = marker[0];
-  if (character !== '`' && character !== '~') {
-    return null;
-  }
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- both captures are mandatory whenever this fixed regular expression matches
+  const marker = /** @type {string} */ (match[1]);
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- both captures are mandatory whenever this fixed regular expression matches
+  const trailing = /** @type {string} */ (match[2]);
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- marker contains at least three backticks or tildes by construction
+  const character = /** @type {'`' | '~'} */ (marker[0]);
 
   return {
     canClose: trailing.trim().length === 0,

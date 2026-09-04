@@ -111,7 +111,7 @@ function parsePackageManifest(value) {
  */
 export function parseReleaseArguments(
   arguments_,
-  environmentReleaseTag = process.env.RELEASE_TAG,
+  environmentReleaseTag = process.env['RELEASE_TAG'],
 ) {
   const dryRun = arguments_.includes('--dry-run');
   const releaseTags = arguments_.filter((argument) => argument !== '--dry-run');
@@ -428,8 +428,8 @@ export async function validatePublishedWorkspaceDependencies(
     fetchImplementation = globalThis.fetch,
     maxAttempts = defaultRegistryRequestAttempts,
     registryToken,
-    registryUrl = process.env.npm_config_registry ??
-      process.env.NPM_CONFIG_REGISTRY ??
+    registryUrl = process.env['npm_config_registry'] ??
+      process.env['NPM_CONFIG_REGISTRY'] ??
       'https://registry.npmjs.org/',
     retryDelayMs = defaultRegistryRetryDelayMs,
     timeoutMs = defaultRegistryRequestTimeoutMs,
@@ -501,7 +501,7 @@ export async function readPublishablePackages(repositoryRoot = process.cwd()) {
  */
 export async function createValidatedReleasePlan(releaseTag) {
   const packages = await readPublishablePackages();
-  validateProvenanceRepository(process.env.GITHUB_REPOSITORY, packages);
+  validateProvenanceRepository(process.env['GITHUB_REPOSITORY'], packages);
   const plan = createReleasePlan(releaseTag, packages);
   await validatePublishedWorkspaceDependencies(plan);
   return plan;

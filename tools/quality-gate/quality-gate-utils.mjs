@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { getPnpmInvocation } from '../pnpm-command.mjs';
+
 export const repositoryRoot = resolve(import.meta.dirname, '../..');
 
 /** @param {string} path */
@@ -119,6 +121,15 @@ export const run = (command, args, options = {}) => {
 
   if (result.error) throw result.error;
   return result;
+};
+
+/**
+ * @param {string[]} args
+ * @param {{ capture?: boolean }} [options]
+ */
+export const runPnpm = (args, options = {}) => {
+  const invocation = getPnpmInvocation(args);
+  return run(invocation.command, invocation.arguments, options);
 };
 
 /** @param {string[]} args */

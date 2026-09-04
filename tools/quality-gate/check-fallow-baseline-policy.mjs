@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   parseJsonc,
@@ -101,15 +102,16 @@ const readGitState = (revision) =>
   readState((path) => readGitFile(revision, path));
 
 /**
- * @param {string[]} current
- * @param {string[]} base
+ * @param {string[]} subset
+ * @param {string[]} superset
  * @param {string} label
  * @param {string[]} errors
+ * @param {'added' | 'removed'} [change]
  */
-const assertSubset = (current, base, label, errors) => {
-  for (const value of current) {
-    if (!base.includes(value))
-      errors.push(`${label} added protected value: ${value}`);
+const assertSubset = (subset, superset, label, errors, change = 'added') => {
+  for (const value of subset) {
+    if (!superset.includes(value))
+      errors.push(`${label} ${change} protected value: ${value}`);
   }
 };
 
@@ -354,6 +356,55 @@ const compareHealth = (base, current, errors) => {
 };
 
 /**
+ * @param {Record<string, FindingCategories>} counts
+ * @param {Set<string>} extensions
+ * @param {boolean} [identityMode]
+ */
+const getFindingCategoryTotals = (counts, extensions, identityMode = false) => {
+  /** @type {Record<string, number>} */
+  const totals = {};
+  for (const [key, categories] of Object.entries(counts)) {
+    const path = identityMode ? (key.split('\0')[0] ?? key) : key;
+    if (!extensions.has(extname(path))) continue;
+    for (const [category, value] of Object.entries(categories)) {
+      totals[category] = (totals[category] ?? 0) + value.count;
+    }
+  }
+  return totals;
+};
+
+/**
+ * Preserve aggregate ceilings for file kinds understood by the legacy health
+ * baseline while allowing the bootstrap to add newly analyzed file kinds.
+ *
+ * @param {HealthBaseline | null} base
+ * @param {HealthBaseline | null} current
+ * @param {string[]} errors
+ */
+const compareLegacyHealth = (base, current, errors) => {
+  if (!isRecord(base?.finding_counts)) return;
+  if (!isRecord(current?.identity_finding_counts)) {
+    errors.push('bootstrap health baseline is missing identity finding counts');
+    return;
+  }
+  const extensions = new Set(Object.keys(base.finding_counts).map(extname));
+  const baseTotals = getFindingCategoryTotals(base.finding_counts, extensions);
+  const currentTotals = getFindingCategoryTotals(
+    current.identity_finding_counts,
+    extensions,
+    true,
+  );
+  for (const [category, currentCount] of Object.entries(currentTotals)) {
+    const baseCount = baseTotals[category] ?? 0;
+    if (currentCount > baseCount) {
+      errors.push(
+        `legacy health baseline increased ${category}: ${baseCount} -> ${currentCount}`,
+      );
+    }
+  }
+};
+
+/**
  * @param {DupesBaseline | null} base
  * @param {DupesBaseline | null} current
  * @param {string[]} errors
@@ -417,6 +468,7 @@ const compareCoverage = (base, current, errors) => {
     validCurrent.include,
     'coverage include',
     errors,
+    'removed',
   );
   assertSubset(
     validCurrent.exclude,
@@ -519,15 +571,22 @@ export const compareBaselineStates = (base, current) => {
     validateCoveragePolicy(current.coverage, 'bootstrap', errors);
     compareBootstrapFallowIgnores(base.fallow, current.fallow, errors);
 
-    // A missing marker can also represent an interrupted marker read. If the
-    // base already uses the identity schema, treat it as fully compatible and
-    // enforce every existing ceiling instead of granting bootstrap semantics.
+    // Protect each pre-existing compatible subsystem independently. A schema
+    // migration in one baseline must not disable ceilings in the others.
     if (isRecord(base.health?.identity_finding_counts)) {
       compareHealth(base.health, current.health, errors);
+    } else {
+      compareLegacyHealth(base.health, current.health, errors);
+    }
+    if (
+      isStringArray(base.dupes?.normalized_clone_fingerprints) &&
+      JSON.stringify(base.fallow?.duplicates ?? null) ===
+        JSON.stringify(current.fallow?.duplicates ?? null)
+    ) {
       compareDupes(base.dupes, current.dupes, errors);
-      if (base.coverage !== null) {
-        compareCoverage(base.coverage, current.coverage, errors);
-      }
+    }
+    if (base.coverage !== null) {
+      compareCoverage(base.coverage, current.coverage, errors);
     }
     return errors;
   }
@@ -542,47 +601,59 @@ export const compareBaselineStates = (base, current) => {
   return errors;
 };
 
-const compareDirectoriesIndex = process.argv.indexOf('--compare-directories');
-let baseState;
-let currentState;
-let comparisonLabel;
+/** @param {string[]} [args] */
+export const runBaselinePolicy = (args = process.argv.slice(2)) => {
+  const compareDirectoriesIndex = args.indexOf('--compare-directories');
+  let baseState;
+  let currentState;
+  let comparisonLabel;
 
-if (compareDirectoriesIndex !== -1) {
-  const baseDirectory = process.argv[compareDirectoriesIndex + 1];
-  const currentDirectory = process.argv[compareDirectoriesIndex + 2];
-  if (
-    baseDirectory === undefined ||
-    baseDirectory === '' ||
-    currentDirectory === undefined ||
-    currentDirectory === ''
-  ) {
-    throw new Error(
-      '--compare-directories requires BASE and CURRENT directories.',
-    );
+  if (compareDirectoriesIndex !== -1) {
+    const baseDirectory = args[compareDirectoriesIndex + 1];
+    const currentDirectory = args[compareDirectoriesIndex + 2];
+    if (
+      baseDirectory === undefined ||
+      baseDirectory === '' ||
+      currentDirectory === undefined ||
+      currentDirectory === ''
+    ) {
+      throw new Error(
+        '--compare-directories requires BASE and CURRENT directories.',
+      );
+    }
+    baseState = readDirectoryState(baseDirectory);
+    currentState = readDirectoryState(currentDirectory);
+    comparisonLabel = baseDirectory;
+  } else {
+    const explicitBase = args[0];
+    const { base, mergeBase } = resolveAuditBase(explicitBase);
+    baseState = readGitState(mergeBase);
+    currentState = readDirectoryState(repositoryRoot);
+    comparisonLabel = `${mergeBase} (${base})`;
   }
-  baseState = readDirectoryState(baseDirectory);
-  currentState = readDirectoryState(currentDirectory);
-  comparisonLabel = baseDirectory;
-} else {
-  const explicitBase = process.argv[2];
-  const { base, mergeBase } = resolveAuditBase(explicitBase);
-  baseState = readGitState(mergeBase);
-  currentState = readDirectoryState(repositoryRoot);
-  comparisonLabel = `${mergeBase} (${base})`;
-}
 
-const errors = compareBaselineStates(baseState, currentState);
-if (errors.length > 0) {
-  console.error(`Baseline policy rejected changes against ${comparisonLabel}:`);
-  for (const error of errors) console.error(`- ${error}`);
-  process.exitCode = 1;
-} else {
+  const errors = compareBaselineStates(baseState, currentState);
+  if (errors.length > 0) {
+    console.error(
+      `Baseline policy rejected changes against ${comparisonLabel}:`,
+    );
+    for (const error of errors) console.error(`- ${error}`);
+    return 1;
+  }
   console.log(`Baseline policy passed against ${comparisonLabel}.`);
+  return 0;
+};
+
+if (
+  process.argv[1] !== undefined &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1])
+) {
+  process.exitCode = runBaselinePolicy();
 }
 
 /** @typedef {{ count: number }} CountEntry */
 /** @typedef {Record<string, CountEntry>} FindingCategories */
-/** @typedef {{ identity_finding_counts?: Record<string, FindingCategories> }} HealthBaseline */
+/** @typedef {{ finding_counts?: Record<string, FindingCategories>, identity_finding_counts?: Record<string, FindingCategories> }} HealthBaseline */
 /** @typedef {{ normalized_clone_fingerprints?: string[] }} DupesBaseline */
 /** @typedef {{ statements: number, branches: number, functions: number, lines: number }} CoverageFloors */
 /** @typedef {{ include: string[], exclude: string[], thresholds: Record<string, CoverageFloors> }} CoveragePolicy */

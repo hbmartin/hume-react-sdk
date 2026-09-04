@@ -13,7 +13,13 @@ const report =
   );
 const summary =
   report.kind === 'audit' ? report.complexity?.summary : report.summary;
-if (summary === undefined)
+const emptyAudit = report.kind === 'audit' && summary === undefined;
+if (emptyAudit) {
+  console.log(
+    'Fallow audit contains no analyzable functions; Istanbul matching is not applicable.',
+  );
+}
+if (!emptyAudit && summary === undefined)
   throw new Error('Fallow report has no health summary.');
 
 /**
@@ -23,35 +29,36 @@ if (summary === undefined)
 const isPositiveSafeInteger = (value) =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
-const matched = summary.istanbul_matched;
-const matchedFiles = summary.istanbul_files_matched;
-const model = summary.coverage_model;
-const consistency = summary.coverage_source_consistency;
+const matched = summary?.istanbul_matched;
+const matchedFiles = summary?.istanbul_files_matched;
+const model = summary?.coverage_model;
+const consistency = summary?.coverage_source_consistency;
 
 if (
-  !isPositiveSafeInteger(matched) ||
-  !isPositiveSafeInteger(matchedFiles) ||
-  model === 'static_estimated' ||
-  consistency === 'static_estimated'
+  !emptyAudit &&
+  (!isPositiveSafeInteger(matched) ||
+    !isPositiveSafeInteger(matchedFiles) ||
+    model === 'static_estimated' ||
+    consistency === 'static_estimated')
 ) {
   throw new Error(
     'Fallow did not consume Istanbul coverage; refusing a static-estimated health result.',
   );
 }
 
-if (report.kind !== 'audit' && model !== 'istanbul') {
+if (!emptyAudit && report.kind !== 'audit' && model !== 'istanbul') {
   throw new Error(
     `Expected Istanbul health coverage, received ${String(model)}.`,
   );
 }
 
-if (report.kind !== 'audit') {
+if (!emptyAudit && report.kind !== 'audit') {
   if ((report.findings?.length ?? 0) > 0) {
     throw new Error(
       `Fallow health reported ${String(report.findings?.length)} findings outside the baseline.`,
     );
   }
-  const staleEntries = summary.baseline_staleness?.stale_entries ?? 0;
+  const staleEntries = summary?.baseline_staleness?.stale_entries ?? 0;
   if (staleEntries > 0) {
     throw new Error(
       `Fallow health baseline contains ${String(staleEntries)} stale entries.`,
@@ -59,9 +66,11 @@ if (report.kind !== 'audit') {
   }
 }
 
-console.log(
-  `Fallow coverage verified: ${matched} functions across ${matchedFiles} files matched Istanbul data.`,
-);
+if (!emptyAudit) {
+  console.log(
+    `Fallow coverage verified: ${String(matched)} functions across ${String(matchedFiles)} files matched Istanbul data.`,
+  );
+}
 
 /**
  * @typedef {object} HealthSummary

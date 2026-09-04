@@ -31,8 +31,8 @@ const packages = [
 
 function getReleaseTestEnvironment() {
   const environment = { ...process.env };
-  delete environment.GITHUB_REPOSITORY;
-  delete environment.RELEASE_TAG;
+  delete environment['GITHUB_REPOSITORY'];
+  delete environment['RELEASE_TAG'];
   return environment;
 }
 
@@ -236,6 +236,7 @@ await test('unrelated runtime workspace dependency versions are verified instead
 });
 
 await test('published version-skewed workspace dependencies pass validation', async () => {
+  /** @type {string[]} */
   const requestedUrls = [];
   await validatePublishedWorkspaceDependencies(
     {
@@ -282,10 +283,10 @@ await test('registry validation forwards npm token authentication', async () => 
 });
 
 await test('registry validation does not forward ambient npm tokens', async () => {
-  const previousNodeAuthToken = process.env.NODE_AUTH_TOKEN;
-  const previousNpmToken = process.env.NPM_TOKEN;
-  process.env.NODE_AUTH_TOKEN = 'ambient-node-token';
-  process.env.NPM_TOKEN = 'ambient-npm-token';
+  const previousNodeAuthToken = process.env['NODE_AUTH_TOKEN'];
+  const previousNpmToken = process.env['NPM_TOKEN'];
+  process.env['NODE_AUTH_TOKEN'] = 'ambient-node-token';
+  process.env['NPM_TOKEN'] = 'ambient-npm-token';
   let authorization;
 
   try {
@@ -305,10 +306,11 @@ await test('registry validation does not forward ambient npm tokens', async () =
       },
     );
   } finally {
-    if (previousNodeAuthToken === undefined) delete process.env.NODE_AUTH_TOKEN;
-    else process.env.NODE_AUTH_TOKEN = previousNodeAuthToken;
-    if (previousNpmToken === undefined) delete process.env.NPM_TOKEN;
-    else process.env.NPM_TOKEN = previousNpmToken;
+    if (previousNodeAuthToken === undefined)
+      delete process.env['NODE_AUTH_TOKEN'];
+    else process.env['NODE_AUTH_TOKEN'] = previousNodeAuthToken;
+    if (previousNpmToken === undefined) delete process.env['NPM_TOKEN'];
+    else process.env['NPM_TOKEN'] = previousNpmToken;
   }
 
   assert.equal(authorization, null);

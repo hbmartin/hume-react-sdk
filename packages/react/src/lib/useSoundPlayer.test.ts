@@ -1214,6 +1214,29 @@ describe('useSoundPlayer', () => {
     );
   });
 
+  it('ignores unknown worklet protocol extensions', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'protocol_extension', value: true },
+      } as MessageEvent);
+    });
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(result.current.queueLength).toBe(0);
+    expect(result.current.isPlaying).toBe(false);
+  });
+
   it('reports the first teardown failure instead of retrying a detached player', async () => {
     const onError = vi.fn();
     const { result } = renderHook(() =>

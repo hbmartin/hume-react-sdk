@@ -12,7 +12,11 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
-import { getTrackedCoverageInputs } from '../quality-gate/check-coverage-map.mjs';
+import {
+  getCoveragePolicyErrors,
+  getTrackedCoverageInputs,
+} from '../quality-gate/check-coverage-map.mjs';
+import { compareBaselineStates } from '../quality-gate/check-fallow-baseline-policy.mjs';
 import {
   parseJsonc,
   resolveAuditBase,
@@ -231,6 +235,20 @@ void test('production Oxlint config enforces every promoted rule with passing co
         "export const rejected = Promise.reject(new Error('failure')); void rejected;",
     },
     {
+      name: 'floating-promise',
+      rule: 'typescript(no-floating-promises)',
+      failing: 'async function run() {} run();',
+      passing: 'async function run() {} void run();',
+    },
+    {
+      name: 'unsafe-assignment',
+      rule: 'typescript(no-unsafe-assignment)',
+      failing:
+        'declare const unsafeValue: any; export const result = unsafeValue;',
+      passing:
+        'declare const value: unknown; export const result = typeof value === "string" ? value : "";',
+    },
+    {
       name: 'unnecessary-assertion',
       rule: 'typescript(no-unnecessary-type-assertion)',
       failing:
@@ -252,6 +270,14 @@ void test('production Oxlint config enforces every promoted rule with passing co
         "import { useCallback, useRef } from 'react'; type Reporter = { emit: (input: { error: unknown; muted: boolean }) => void }; function useLatest<T>(value: T): { readonly current: T } { const latest = useRef(value); /* oxlint-disable-next-line react/refs -- fixture synchronizes an event ref */ latest.current = value; return latest; } export function useReportFailure(reporter: Reporter) { const latest = useLatest(reporter); return useCallback((muted: boolean, error: unknown) => { latest.current.emit({ error, muted }); }, [latest]); }",
       passing:
         "import { useMemo } from 'react'; export function Component({ value }: { value: { text: string } }) { return useMemo(() => value.text, [value]); }",
+    },
+    {
+      name: 'exhaustive-deps.tsx',
+      rule: 'react-hooks(exhaustive-deps)',
+      failing:
+        "import { useEffect } from 'react'; export function Component({ value }: { value: string }) { useEffect(() => { value.trim(); }, []); return null; }",
+      passing:
+        "import { useEffect } from 'react'; export function Component({ value }: { value: string }) { useEffect(() => { value.trim(); }, [value]); return null; }",
     },
     {
       name: 'throw-message.test',
@@ -301,6 +327,14 @@ void test('production Oxlint config enforces every promoted rule with passing co
         "import { it } from 'vitest'; it.skip('disabled', () => undefined);",
       passing:
         "import { expect, it } from 'vitest'; it('enabled', () => { expect(true).toBe(true); });",
+    },
+    {
+      name: 'focused.test',
+      rule: 'vitest(no-focused-tests)',
+      failing:
+        "import { it } from 'vitest'; it.only('focused', () => undefined);",
+      passing:
+        "import { expect, it } from 'vitest'; it('ordinary', () => { expect(true).toBe(true); });",
     },
     {
       name: 'conditional.test',
@@ -357,7 +391,7 @@ void test('production Oxlint config enforces every promoted rule with passing co
       include: ['**/*.ts', '**/*.tsx'],
     }),
     'react.d.ts':
-      "declare module 'react' { export function useCallback<T>(callback: T, dependencies: readonly unknown[]): T; export function useMemo<T>(factory: () => T, dependencies: readonly unknown[]): T; export function useRef<T>(value: T): { current: T }; }",
+      "declare module 'react' { export function useCallback<T>(callback: T, dependencies: readonly unknown[]): T; export function useEffect(effect: () => void, dependencies: readonly unknown[]): void; export function useMemo<T>(factory: () => T, dependencies: readonly unknown[]): T; export function useRef<T>(value: T): { current: T }; }",
   };
   for (const fixture of cases) {
     const extension = fixture.name.endsWith('.tsx') ? '' : '.ts';
@@ -688,7 +722,22 @@ void test('semantic duplication detects exact and near-miss clones', (t) => {
   );
 });
 
-/** @param {PolicyFixtureOptions} [options] */
+/** @param {string[]} identities @returns {Record<string, FindingCategories>} */
+const aggregateFixtureCounts = (identities) => {
+  /** @type {Record<string, FindingCategories>} */
+  const counts = {};
+  for (const identity of identities) {
+    const path = identity.replace('\\u0000', '\0').split('\0')[0];
+    if (path === undefined) throw new Error('Invalid fixture identity');
+    counts[path] = { complexity_high: { count: 1 } };
+  }
+  return counts;
+};
+
+/**
+ * @param {PolicyFixtureOptions} [options]
+ * @returns {Record<string, string>}
+ */
 const policyStateFiles = ({
   identities = ['src/index.ts\\u0000work'],
   fingerprints = ['dup:stable:2'],
@@ -699,6 +748,7 @@ const policyStateFiles = ({
     bootstrap: 'strict-fallow-quality-gate-2026-09-04',
   }),
   '.fallow-baselines/health.json': JSON.stringify({
+    finding_counts: aggregateFixtureCounts(identities),
     identity_finding_counts: Object.fromEntries(
       identities.map((identity) => [
         identity.replace('\\u0000', '\0'),
@@ -788,12 +838,16 @@ void test('baseline policy rejects growth and lower floors but permits shrinkage
 void test('baseline policy rejects missing coverage metrics', (t) => {
   const base = createFixture(t, 'policy-metric-base', policyStateFiles());
   const currentFiles = policyStateFiles();
+  const coverageSource = currentFiles['coverage-policy.json'];
+  if (coverageSource === undefined) throw new Error('Missing coverage policy');
   const coverage =
     /** @type {{ thresholds: Record<string, Partial<Record<'branches' | 'functions' | 'lines' | 'statements', number>>> }} */ (
       // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- this fixture intentionally removes a field from a known policy shape
-      JSON.parse(currentFiles['coverage-policy.json'])
+      JSON.parse(coverageSource)
     );
-  delete coverage.thresholds['src/**'].branches;
+  const sourceFloors = coverage.thresholds['src/**'];
+  assert.notEqual(sourceFloors, undefined);
+  if (sourceFloors !== undefined) delete sourceFloors.branches;
   currentFiles['coverage-policy.json'] = JSON.stringify(coverage);
   const current = createFixture(t, 'policy-metric-current', currentFiles);
 
@@ -834,6 +888,69 @@ void test('bootstrap still protects compatible baseline state', (t) => {
   assert.match(`${result.stdout}${result.stderr}`, /fingerprint/);
 });
 
+void test('bootstrap protects each independently compatible policy subsystem', (t) => {
+  const baseFiles = policyStateFiles();
+  delete baseFiles['.fallow-baselines/policy.json'];
+  baseFiles['.fallow-baselines/health.json'] = JSON.stringify({
+    finding_counts: { complexity_high: 1 },
+  });
+  const base = createFixture(t, 'policy-independent-base', baseFiles);
+  const current = createFixture(
+    t,
+    'policy-independent-current',
+    policyStateFiles({
+      fingerprints: ['dup:stable:2', 'dup:new:2'],
+      statements: 79,
+    }),
+  );
+
+  const result = runPolicyComparison(base, current);
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.notEqual(
+    result.status,
+    0,
+    'compatible policy growth unexpectedly passed',
+  );
+  assert.match(output, /fingerprint/);
+  assert.match(output, /coverage floor reduced/);
+});
+
+void test('bootstrap preserves compatible legacy health totals', (t) => {
+  const baseFiles = policyStateFiles();
+  delete baseFiles['.fallow-baselines/policy.json'];
+  const baseHealthSource = baseFiles['.fallow-baselines/health.json'];
+  if (baseHealthSource === undefined)
+    throw new Error('Missing health baseline');
+  const baseHealth = /** @type {{ finding_counts: unknown }} */ (
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the fixture deliberately projects the generated aggregate section into a legacy baseline
+    JSON.parse(baseHealthSource)
+  );
+  baseFiles['.fallow-baselines/health.json'] = JSON.stringify({
+    finding_counts: baseHealth.finding_counts,
+  });
+  const base = createFixture(t, 'policy-legacy-health-base', baseFiles);
+  const current = createFixture(
+    t,
+    'policy-legacy-health-current',
+    policyStateFiles({
+      identities: ['src/index.ts\\u0000work', 'src/new.ts\\u0000newWork'],
+    }),
+  );
+
+  const result = runPolicyComparison(base, current);
+
+  assert.notEqual(result.status, 0, 'legacy health growth unexpectedly passed');
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /legacy health baseline increased/,
+  );
+});
+
+void test('baseline policy module is import-safe', () => {
+  assert.equal(typeof compareBaselineStates, 'function');
+});
+
 void test('Fallow coverage validation rejects nonnumeric match counts', (t) => {
   const validator = resolve(
     repositoryRoot,
@@ -864,6 +981,49 @@ void test('Fallow coverage validation rejects nonnumeric match counts', (t) => {
       /Fallow did not consume Istanbul coverage/,
     );
   }
+});
+
+void test('Fallow coverage validation accepts an audit with no functions', (t) => {
+  const validator = resolve(
+    repositoryRoot,
+    'tools/quality-gate/check-fallow-coverage.mjs',
+  );
+  const root = createFixture(t, 'fallow-coverage-empty-audit', {
+    'report.json': JSON.stringify({ kind: 'audit', findings: [] }),
+  });
+  const result = spawnSync(
+    process.execPath,
+    [validator, resolve(root, 'report.json')],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.match(result.stdout, /no analyzable functions/);
+});
+
+void test('coverage policy rejects missing maps, empty globs, and zero floors', () => {
+  const policy = {
+    include: ['src/**/*.ts', 'renamed/**/*.ts'],
+    exclude: ['**/*.test.ts'],
+    thresholds: {
+      'src/**': { branches: 0, functions: 0, lines: 0, statements: 0 },
+      'removed/**': { branches: 50, functions: 50, lines: 50, statements: 50 },
+    },
+  };
+  const errors = getCoveragePolicyErrors(
+    policy,
+    ['src/index.ts', 'src/worker.ts'],
+    ['src/index.ts'],
+  );
+
+  assert.ok(errors.some((error) => error.includes('renamed/**/*.ts')));
+  assert.ok(errors.some((error) => error.includes('src/worker.ts')));
+  assert.ok(errors.some((error) => error.includes('removed/**')));
+  assert.equal(
+    errors.filter((error) => error.includes('threshold must be positive'))
+      .length,
+    4,
+  );
 });
 
 void test('JSONC parsing preserves strings and supports both comment forms', () => {
@@ -928,6 +1088,8 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
   assert.match(auditScript, /type-aware-require/);
   assert.match(auditScript, /complete/);
   assert.match(auditScript, /Fallow audit failed/);
+  assert.match(auditScript, /runPnpm/);
+  assert.doesNotMatch(auditScript, /run\('pnpm'/);
 
   const previewScript = readFileSync(
     resolve(repositoryRoot, 'tools/quality-gate/preview-fallow-baselines.mjs'),
@@ -937,10 +1099,18 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
   assert.match(previewScript, /'--complexity'/);
   assert.match(previewScript, /'--score'/);
   assert.doesNotMatch(previewScript, /\.fallow-baselines\/health\.json/);
+  assert.match(previewScript, /runPnpm/);
+  assert.doesNotMatch(previewScript, /run\('pnpm'/);
   assert.ok(
     getTrackedCoverageInputs().includes('tools/vitest-config/base.mjs'),
     'shared Vitest config must invalidate stale coverage',
   );
+  const vitestConfig = readFileSync(
+    resolve(repositoryRoot, 'vitest.config.mts'),
+    'utf8',
+  );
+  assert.match(vitestConfig, /packages\/\*\/vitest\.config\.mts/);
+  assert.match(vitestConfig, /examples\/\*\/vitest\.config\.mts/);
 
   const config = /** @type {OxlintContractConfig} */ (
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the production config is schema-validated by Oxlint and the consumed fields are asserted below
@@ -960,6 +1130,8 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
 });
 
 /** @typedef {{ entry?: string[], projects?: string[], rules?: Record<string, string>, boundaries?: unknown, duplicates?: unknown }} FallowFixtureConfig */
+/** @typedef {{ count: number }} CountEntry */
+/** @typedef {Record<string, CountEntry>} FindingCategories */
 /** @typedef {{ private_type_leaks: unknown[], boundary_coverage_violations: unknown[], unresolved_imports: unknown[], clone_groups: unknown[], _meta: { type_aware: { executed: boolean, projects: { status: string }[] } } }} FallowFixtureReport */
 /** @typedef {{ config?: string, cwd?: string }} OxlintRunOptions */
 /** @typedef {{ identities?: string[], fingerprints?: string[], statements?: number }} PolicyFixtureOptions */

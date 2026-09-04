@@ -1,23 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, matchesGlob, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { readJson, repositoryRoot } from './quality-gate-utils.mjs';
 
 const coveragePath = resolve(repositoryRoot, 'coverage/coverage-final.json');
-const coveredRoots = [
-  'packages/embed/src/',
-  'packages/embed-react/src/',
-  'packages/react/src/',
-  'examples/next-app/app/',
-  'examples/next-app/components/',
-  'examples/next-app/utils/',
-  'examples/vite-app/src/',
-  'examples/vite-app-embed/src/',
-];
 
-export const getTrackedCoverageInputs = () => {
+/** @param {string} path */
+const normalizePath = (path) => path.replaceAll('\\', '/');
+
+const getTrackedFiles = () => {
   const result = spawnSync('git', ['ls-files', '-z'], {
     cwd: repositoryRoot,
     encoding: 'utf8',
@@ -25,25 +18,93 @@ export const getTrackedCoverageInputs = () => {
   if (result.error) throw result.error;
   if (result.status !== 0)
     throw new Error('Unable to list tracked coverage inputs.');
+  return result.stdout.split('\0').filter(Boolean).map(normalizePath);
+};
 
-  return result.stdout
-    .split('\0')
-    .filter(Boolean)
-    .filter(
-      (path) =>
-        (coveredRoots.some((root) => path.startsWith(root)) &&
-          /\.(?:ts|tsx)$/.test(path) &&
-          !path.endsWith('.d.ts')) ||
-        path === 'vitest.config.mts' ||
-        path === 'tools/vitest-config/base.mjs' ||
-        path === 'coverage-policy.json' ||
-        path === 'pnpm-lock.yaml' ||
-        path === 'package.json' ||
-        path === 'tsconfig.json' ||
-        path.endsWith('/tsconfig.json') ||
-        /\/tsconfig\.[^/]+\.json$/.test(path) ||
-        path.endsWith('/vitest.config.mts'),
-    );
+/**
+ * @param {string} path
+ * @param {CoveragePolicy} policy
+ */
+const isCoveredSource = (path, policy) =>
+  policy.include.some((pattern) => matchesGlob(path, pattern)) &&
+  !policy.exclude.some((pattern) => matchesGlob(path, pattern));
+
+/**
+ * @param {CoveragePolicy} policy
+ * @param {string[]} trackedFiles
+ * @param {string[]} coverageFiles
+ */
+export const getCoveragePolicyErrors = (
+  policy,
+  trackedFiles,
+  coverageFiles,
+) => {
+  const errors = [];
+  for (const pattern of policy.include) {
+    if (!trackedFiles.some((path) => matchesGlob(path, pattern))) {
+      errors.push(`coverage include matches no tracked files: ${pattern}`);
+    }
+  }
+
+  const expectedFiles = trackedFiles.filter((path) =>
+    isCoveredSource(path, policy),
+  );
+  const coveredFiles = new Set(coverageFiles.map(normalizePath));
+  for (const path of expectedFiles) {
+    if (!coveredFiles.has(path)) {
+      errors.push(`coverage map is missing tracked source: ${path}`);
+    }
+  }
+
+  for (const [pattern, floors] of Object.entries(policy.thresholds)) {
+    if (!expectedFiles.some((path) => matchesGlob(path, pattern))) {
+      errors.push(`coverage threshold matches no tracked sources: ${pattern}`);
+    }
+    for (const metric of /** @type {const} */ ([
+      'branches',
+      'functions',
+      'lines',
+      'statements',
+    ])) {
+      const floor = floors[metric];
+      if (typeof floor !== 'number' || !Number.isFinite(floor) || floor <= 0) {
+        errors.push(
+          `coverage threshold must be positive: ${pattern} ${metric}`,
+        );
+      }
+    }
+  }
+
+  for (const path of expectedFiles) {
+    if (
+      !Object.keys(policy.thresholds).some((pattern) =>
+        matchesGlob(path, pattern),
+      )
+    ) {
+      errors.push(`tracked coverage source has no threshold: ${path}`);
+    }
+  }
+  return errors;
+};
+
+export const getTrackedCoverageInputs = () => {
+  const policy = /** @type {CoveragePolicy} */ (
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- policy shape is validated through glob and numeric field use below
+    readJson(resolve(repositoryRoot, 'coverage-policy.json'))
+  );
+  return getTrackedFiles().filter(
+    (path) =>
+      isCoveredSource(path, policy) ||
+      path === 'vitest.config.mts' ||
+      path === 'tools/vitest-config/base.mjs' ||
+      path === 'coverage-policy.json' ||
+      path === 'pnpm-lock.yaml' ||
+      path === 'package.json' ||
+      path === 'tsconfig.json' ||
+      path.endsWith('/tsconfig.json') ||
+      /\/tsconfig\.[^/]+\.json$/.test(path) ||
+      path.endsWith('/vitest.config.mts'),
+  );
 };
 
 export const validateCoverageMap = () => {
@@ -60,6 +121,24 @@ export const validateCoverageMap = () => {
     );
   const files = Object.values(coverage);
   if (files.length === 0) throw new Error('Coverage map is empty.');
+
+  const policy = /** @type {CoveragePolicy} */ (
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- policy fields are validated by getCoveragePolicyErrors before use by the gate
+    readJson(resolve(repositoryRoot, 'coverage-policy.json'))
+  );
+  const coverageFiles = Object.keys(coverage).map((path) =>
+    normalizePath(isAbsolute(path) ? relative(repositoryRoot, path) : path),
+  );
+  const policyErrors = getCoveragePolicyErrors(
+    policy,
+    getTrackedFiles(),
+    coverageFiles,
+  );
+  if (policyErrors.length > 0) {
+    throw new Error(
+      `Invalid coverage policy or map:\n- ${policyErrors.join('\n- ')}`,
+    );
+  }
 
   let statementCount = 0;
   let executedStatementCount = 0;
@@ -107,3 +186,6 @@ if (isMain) {
     process.exitCode = 1;
   }
 }
+
+/** @typedef {{ branches?: unknown, functions?: unknown, lines?: unknown, statements?: unknown }} CoverageFloors */
+/** @typedef {{ include: string[], exclude: string[], thresholds: Record<string, CoverageFloors> }} CoveragePolicy */

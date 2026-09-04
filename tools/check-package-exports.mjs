@@ -25,12 +25,12 @@ const manifestValue = JSON.parse(
 
 if (
   !isRecord(manifestValue) ||
-  typeof manifestValue.name !== 'string' ||
-  manifestValue.name === ''
+  typeof manifestValue['name'] !== 'string' ||
+  manifestValue['name'] === ''
 ) {
   throw new Error(`Package at ${packageRoot} does not have a valid name`);
 }
-const packageName = manifestValue.name;
+const packageName = manifestValue['name'];
 
 const fixtureRoot = await mkdtemp(join(tmpdir(), 'hume-package-check-'));
 
@@ -47,12 +47,12 @@ try {
 
     if (
       !isRecord(packResult) ||
-      typeof packResult.filename !== 'string' ||
-      packResult.filename === ''
+      typeof packResult['filename'] !== 'string' ||
+      packResult['filename'] === ''
     ) {
       throw new Error(`pnpm pack did not return a tarball for ${root}`);
     }
-    tarballPaths.push(packResult.filename);
+    tarballPaths.push(packResult['filename']);
   }
 
   await writeFile(
