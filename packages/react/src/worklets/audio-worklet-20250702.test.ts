@@ -27,7 +27,7 @@ describe('AudioStreamProcessor', () => {
     }
 
     const source = await readFile(
-      resolve(process.cwd(), 'src/worklets/audio-worklet-20250702.js'),
+      resolve(import.meta.dirname, 'audio-worklet-20250702.js'),
       'utf8',
     );
     runInNewContext(source, {
