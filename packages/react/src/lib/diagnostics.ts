@@ -308,21 +308,20 @@ const PRIORITY_DIAGNOSTIC_KEYS = [
 ] as const;
 const PRIORITY_DIAGNOSTIC_KEY_SET = new Set<string>(PRIORITY_DIAGNOSTIC_KEYS);
 const MAX_PRIORITY_SEARCH_DEPTH = 8;
-// Priority discovery can inspect every object that sanitization could retain.
-// Its fixed priority probes and sampled traversal keys share the same budget.
-const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS;
-// Reserve half of the per-event descriptor work for discovery before merging
-// input details. Unused discovery work is returned to sanitization.
+// Priority discovery can inspect every object that sanitization could retain
+// plus a similarly sized nested frontier. Without the second frontier, many
+// ordinary siblings can hide a late container whose child is the real failure.
+const MAX_PRIORITY_SEARCH_NODES = MAX_SANITIZED_OBJECTS * 2;
+// Reserve enough descriptor work to probe and sample that larger frontier
+// while retaining a quarter of the event allowance for merging and ordinary
+// sanitization. Unused discovery work is returned after the search.
 const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
-  MAX_SCANNED_TOTAL_OBJECT_KEYS / 2,
+  (MAX_SCANNED_TOTAL_OBJECT_KEYS * 3) / 4,
 );
-// After the fixed probes, share the remaining discovery work across its node
-// allowance. Sampling both ends keeps appended failures visible.
-const MAX_PRIORITY_KEYS_PER_OBJECT = Math.max(
-  1,
-  Math.floor(MAX_PRIORITY_SCANNED_TOTAL_KEYS / MAX_PRIORITY_SEARCH_NODES) -
-    PRIORITY_DIAGNOSTIC_KEYS.length,
-);
+// Sample as many ordinary traversal keys as there are direct priority probes.
+// The shared budget still caps adversarial wide graphs, while ordinary objects
+// retain the four-key discovery breadth used before the frontier was restored.
+const MAX_PRIORITY_KEYS_PER_OBJECT = PRIORITY_DIAGNOSTIC_KEYS.length;
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -752,9 +751,23 @@ const getEnumerableOwnKeys = (
   return { incomplete, keys };
 };
 
-const getEnumerableOwnKeysForMerge = (
+const getLeadingAndTrailingIndexes = (length: number, count: number) => {
+  const leadingCount = Math.ceil(count / 2);
+  const trailingCount = count - leadingCount;
+  const indexes: number[] = [];
+  for (let offset = 0; offset < leadingCount; offset += 1) {
+    indexes.push(offset);
+    if (offset < trailingCount) {
+      indexes.push(length - trailingCount + offset);
+    }
+  }
+  return indexes;
+};
+
+const getSampledEnumerableOwnKeys = (
   value: object,
   budget: OwnKeyScanBudget,
+  maximumScannedKeys: number,
 ): EnumeratedKeys => {
   if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
   let ownKeys: PropertyKey[];
@@ -766,24 +779,19 @@ const getEnumerableOwnKeysForMerge = (
 
   const count = Math.min(
     ownKeys.length,
-    MAX_SCANNED_OBJECT_KEYS,
+    maximumScannedKeys,
     budget.remainingKeys,
   );
-  budget.remainingKeys -= count;
-  const leadingCount = Math.ceil(count / 2);
-  const trailingCount = count - leadingCount;
-  const indexes = Array.from({ length: leadingCount }, (_, index) => index);
-  for (
-    let index = ownKeys.length - trailingCount;
-    index < ownKeys.length;
-    index += 1
-  ) {
-    indexes.push(index);
-  }
-
-  const keys: string[] = [];
+  const entries: Array<{ index: number; key: string }> = [];
+  let inspectedKeys = 0;
   let incomplete = ownKeys.length > count;
-  for (const index of indexes) {
+  for (const index of getLeadingAndTrailingIndexes(ownKeys.length, count)) {
+    if (entries.length === MAX_ENUMERATED_OBJECT_KEYS) {
+      incomplete = true;
+      break;
+    }
+    inspectedKeys += 1;
+    budget.remainingKeys -= 1;
     const key = ownKeys[index];
     if (typeof key !== 'string') continue;
     const descriptor = getOwnPropertyDescriptorSafely(value, key);
@@ -792,13 +800,11 @@ const getEnumerableOwnKeysForMerge = (
       continue;
     }
     if (descriptor.enumerable !== true) continue;
-    if (keys.length === MAX_ENUMERATED_OBJECT_KEYS) {
-      incomplete = true;
-      break;
-    }
-    keys.push(key);
+    entries.push({ index, key });
   }
-  return { incomplete, keys };
+  incomplete ||= inspectedKeys < count;
+  entries.sort((left, right) => left.index - right.index);
+  return { incomplete, keys: entries.map(({ key }) => key) };
 };
 
 const getEnumerableArrayIndexKeys = (
@@ -821,60 +827,16 @@ const getEnumerableArrayIndexKeys = (
     budget.remainingKeys,
   );
   budget.remainingKeys -= count;
-  const leadingCount = Math.ceil(count / 2);
-  const trailingCount = count - leadingCount;
-  const keys = Array.from({ length: leadingCount }, (_, index) =>
-    String(index),
-  );
-  for (let index = length - trailingCount; index < length; index += 1) {
-    keys.push(String(index));
-  }
+  const keys = getLeadingAndTrailingIndexes(length, count)
+    .sort((left, right) => left - right)
+    .map(String);
   return { incomplete: length > count, keys };
 };
 
 const getEnumerablePriorityObjectKeys = (
   value: object,
   budget: OwnKeyScanBudget,
-): EnumeratedKeys => {
-  if (budget.remainingKeys === 0) return { incomplete: true, keys: [] };
-  let ownKeys: PropertyKey[];
-  try {
-    ownKeys = Reflect.ownKeys(value);
-  } catch {
-    return { incomplete: true, keys: [] };
-  }
-
-  const count = Math.min(
-    ownKeys.length,
-    MAX_PRIORITY_KEYS_PER_OBJECT,
-    budget.remainingKeys,
-  );
-  budget.remainingKeys -= count;
-  const leadingCount = Math.ceil(count / 2);
-  const trailingCount = count - leadingCount;
-  const indexes = Array.from({ length: leadingCount }, (_, index) => index);
-  for (
-    let index = ownKeys.length - trailingCount;
-    index < ownKeys.length;
-    index += 1
-  ) {
-    indexes.push(index);
-  }
-
-  const keys: string[] = [];
-  let incomplete = ownKeys.length > count;
-  for (const index of indexes) {
-    const key = ownKeys[index];
-    if (typeof key !== 'string') continue;
-    const descriptor = getOwnPropertyDescriptorSafely(value, key);
-    if (descriptor === null || descriptor === undefined) {
-      incomplete = true;
-      continue;
-    }
-    if (descriptor.enumerable === true) keys.push(key);
-  }
-  return { incomplete, keys };
-};
+) => getSampledEnumerableOwnKeys(value, budget, MAX_PRIORITY_KEYS_PER_OBJECT);
 
 const isPriorityDiagnosticObject = (value: object) =>
   getAggregateErrorDetails(value) !== null ||
@@ -1039,12 +1001,13 @@ const mergeOwnDataProperties = (
   ownKeyScanBudget: OwnKeyScanBudget,
 ) => {
   let incomplete = false;
-  const sourceMerges = sources.flatMap((source) =>
+  const sourceMerges = sources.flatMap((source, sourceIndex) =>
     source === undefined
       ? []
       : [
           {
             missingPriorityKeys: new Set<string>(),
+            prioritize: sourceIndex > 0,
             properties: {} as Record<string, unknown>,
             source,
           },
@@ -1093,10 +1056,15 @@ const mergeOwnDataProperties = (
     }
   }
 
-  for (const sourceMerge of sourceMerges) {
-    const enumerated = getEnumerableOwnKeysForMerge(
+  for (const [index, sourceMerge] of sourceMerges.entries()) {
+    const remainingSources = sourceMerges.length - index;
+    const sourceAllowance = Math.floor(
+      ownKeyScanBudget.remainingKeys / remainingSources,
+    );
+    const enumerated = getSampledEnumerableOwnKeys(
       sourceMerge.source,
       ownKeyScanBudget,
+      sourceAllowance,
     );
     incomplete ||= enumerated.incomplete;
     for (const key of enumerated.keys) {
@@ -1109,6 +1077,7 @@ const mergeOwnDataProperties = (
     }
   }
 
+  const prioritizedMergedKeys = new Set<string>();
   for (const sourceMerge of sourceMerges) {
     for (const [key, value] of Object.entries(sourceMerge.properties)) {
       Object.defineProperty(target, key, {
@@ -1117,10 +1086,11 @@ const mergeOwnDataProperties = (
         value,
         writable: true,
       });
+      if (sourceMerge.prioritize) prioritizedMergedKeys.add(key);
     }
   }
 
-  return incomplete;
+  return { incomplete, prioritizedMergedKeys };
 };
 
 const sanitizeValue = (
@@ -1477,6 +1447,7 @@ const sanitizeDetails = (
   ownKeyScanBudget: OwnKeyScanBudget,
   priorityScanBudget: OwnKeyScanBudget,
   rootEnumeratedKeys: EnumeratedKeys,
+  initiallyPrioritizedKeys: ReadonlySet<string>,
   initiallyTruncated = false,
 ): Readonly<{ details: VoiceDiagnosticDetails; truncated: boolean }> => {
   const priorityDiscovery = getPrioritizedKeysByObject(
@@ -1484,6 +1455,12 @@ const sanitizeDetails = (
     priorityScanBudget,
     rootEnumeratedKeys,
   );
+  if (initiallyPrioritizedKeys.size > 0) {
+    const rootPriorityKeys =
+      priorityDiscovery.prioritizedKeys.get(details) ?? new Set<string>();
+    for (const key of initiallyPrioritizedKeys) rootPriorityKeys.add(key);
+    priorityDiscovery.prioritizedKeys.set(details, rootPriorityKeys);
+  }
   // Discovery and sanitization remain independently useful without exceeding
   // the shared per-event own-key scan allowance.
   ownKeyScanBudget.remainingKeys += priorityScanBudget.remainingKeys;
@@ -1603,7 +1580,7 @@ export const createVoiceDiagnosticsReporter = (
           remainingKeys:
             MAX_SCANNED_TOTAL_OBJECT_KEYS - MAX_PRIORITY_SCANNED_TOTAL_KEYS,
         };
-        const mergeIncomplete = mergeOwnDataProperties(
+        const merged = mergeOwnDataProperties(
           combinedDetails,
           [
             input.details,
@@ -1622,7 +1599,8 @@ export const createVoiceDiagnosticsReporter = (
           ownKeyScanBudget,
           priorityScanBudget,
           rootEnumeratedKeys,
-          mergeIncomplete,
+          merged.prioritizedMergedKeys,
+          merged.incomplete,
         );
         details = sanitized.details;
         detailsTruncated = sanitized.truncated;

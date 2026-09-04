@@ -334,6 +334,50 @@ describe('useMicrophone', () => {
     expect(videoTrack.enabled).toBe(true);
   });
 
+  it('keeps successfully muted tracks disabled when another track rejects mute', () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const mutedTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    let stubbornEnabled = true;
+    const stubbornTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    Object.defineProperty(stubbornTrack, 'enabled', {
+      configurable: true,
+      get: () => stubbornEnabled,
+      set(value: boolean) {
+        if (!value) throw new Error('track refused mute');
+        stubbornEnabled = value;
+      },
+    });
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(
+      createStream([mutedTrack, stubbornTrack]),
+      createAudioContext(),
+    );
+
+    act(() => result.current.mute());
+
+    expect(mutedTrack.enabled).toBe(false);
+    expect(stubbornTrack.enabled).toBe(true);
+    expect(result.current.isMuted).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      name: 'control.change_failed',
+      details: {
+        value: true,
+        error: { message: 'track refused mute' },
+      },
+    });
+
+    act(() => result.current.unmute());
+    expect(mutedTrack.enabled).toBe(true);
+  });
+
   it('clears a stale FFT snapshot when muted without an analyzer', () => {
     let flushFft: FrameRequestCallback | undefined;
     vi.stubGlobal(
@@ -407,19 +451,21 @@ describe('useMicrophone', () => {
     ).toBe(true);
 
     act(() => result.current.mute());
-    act(() => {
-      const draw = rafCallbacks.get(2);
-      rafCallbacks.delete(2);
-      draw?.(0);
-      const nextDraw = rafCallbacks.get(3);
-      rafCallbacks.delete(3);
-      nextDraw?.(0);
-    });
 
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+    expect(rafCallbacks.size).toBe(0);
     expect(getByteFrequencyData).toHaveBeenCalledOnce();
     expect(
       result.current.fftStore.getSnapshot().every((value) => value === 0),
     ).toBe(true);
+
+    act(() => result.current.unmute());
+
+    expect(getByteFrequencyData).toHaveBeenCalledTimes(2);
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(4);
+    expect(rafCallbacks.has(3)).toBe(true);
+    expect(rafCallbacks.has(4)).toBe(true);
   });
 
   it('keeps mute state unchanged and reports when track enumeration fails', () => {
@@ -972,6 +1018,60 @@ describe('useMicrophone', () => {
     expect(candidateTrack.enabled).toBe(false);
   });
 
+  it('keeps muting the current stream when pending track enumeration fails', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const oldTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateTrack = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const candidateStream = {
+      getTracks: () => [candidateTrack],
+      getAudioTracks: () => {
+        throw new Error('pending track enumeration failed');
+      },
+    } as unknown as MediaStream;
+    const { result } = renderMicrophone({ diagnostics });
+    const context = createAudioContext();
+    result.current.start(createStream([oldTrack]), context);
+    const oldRecorder = recorders[0];
+    if (!oldRecorder) throw new Error('Expected the original MediaRecorder.');
+    oldRecorder.stop.mockImplementationOnce(() => {});
+
+    let replacement = Promise.resolve();
+    act(() => {
+      replacement = result.current.replace(candidateStream, context);
+    });
+    await waitFor(() => expect(oldRecorder.stop).toHaveBeenCalledOnce());
+
+    act(() => result.current.mute());
+
+    expect(oldTrack.enabled).toBe(false);
+    expect(result.current.isMuted).toBe(false);
+    expect(events.at(-1)).toMatchObject({
+      name: 'control.change_failed',
+      details: {
+        value: true,
+        error: { message: 'pending track enumeration failed' },
+      },
+    });
+
+    await act(async () => {
+      oldRecorder.emit('stop', new Event('stop'));
+      await expect(replacement).rejects.toThrow(
+        'pending track enumeration failed',
+      );
+    });
+  });
+
   it('applies an unmute requested while a replacement is in progress', async () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM));
     const oldTrack = {
@@ -1418,7 +1518,7 @@ describe('useMicrophone', () => {
     expect(candidateTrackStop).toHaveBeenCalledOnce();
   });
 
-  it('attempts every candidate track and retries failed candidate cleanup', async () => {
+  it('does not retain a caller-owned candidate whose cleanup fails', async () => {
     vi.stubGlobal('MediaRecorder', undefined);
     const firstTrackStop = vi.fn().mockImplementationOnce(() => {
       throw new Error('candidate track cleanup failed');
@@ -1460,8 +1560,8 @@ describe('useMicrophone', () => {
     });
 
     await act(() => result.current.stop());
-    expect(firstTrackStop).toHaveBeenCalledTimes(2);
-    expect(secondTrackStop).toHaveBeenCalledTimes(2);
+    expect(firstTrackStop).toHaveBeenCalledOnce();
+    expect(secondTrackStop).toHaveBeenCalledOnce();
   });
 
   it('releases a replacement candidate when the microphone is not recording', async () => {
@@ -1518,6 +1618,27 @@ describe('useMicrophone', () => {
     expect(candidateTrackStop).toHaveBeenCalledOnce();
     expect(oldTrackStop).not.toHaveBeenCalled();
     await act(() => result.current.stop());
+  });
+
+  it('rejects an active stream as its own replacement without stopping it', async () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const activeTrackStop = vi.fn();
+    const activeStream = createStream([
+      {
+        enabled: true,
+        stop: activeTrackStop,
+      } as unknown as MediaStreamTrack,
+    ]);
+    const { result } = renderMicrophone();
+    result.current.start(activeStream, createAudioContext());
+
+    await expect(
+      result.current.replace(activeStream, createAudioContext()),
+    ).rejects.toThrow('The replacement microphone stream is already active.');
+
+    expect(activeTrackStop).not.toHaveBeenCalled();
+    await act(() => result.current.stop());
+    expect(activeTrackStop).toHaveBeenCalledOnce();
   });
 
   it('reports an error and refuses to record when MediaRecorder is absent', () => {
