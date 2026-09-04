@@ -320,10 +320,10 @@ const MAX_PRIORITY_SCANNED_TOTAL_KEYS = Math.floor(
 // Narrow graphs can reach the node cap; wider graphs remain bounded by the
 // shared descriptor allowance.
 const MAX_PRIORITY_KEYS_PER_OBJECT = PRIORITY_DIAGNOSTIC_KEYS.length;
-// Reserve at most half of the output-entry budget for sensitive details. This
-// preserves ordinary diagnostic context while allowing a small sensitive
-// payload to survive a full root enumeration slice.
-const MAX_PRIORITIZED_SENSITIVE_KEYS = Math.floor(MAX_SANITIZED_ENTRIES / 2);
+// Spend at most half of the output-entry budget while sanitizing prioritized
+// sensitive details. The same limit also bounds how many sensitive root keys
+// are queued, since every retained root key consumes at least one entry.
+const MAX_PRIORITIZED_SENSITIVE_ENTRIES = Math.floor(MAX_SANITIZED_ENTRIES / 2);
 const REDACTED_KEYS = new Set([
   'apikey',
   'accesstoken',
@@ -508,7 +508,7 @@ const redactCorrelationId = (value: string, matcher: RedactionMatcher) => {
 
 type EnumeratedKeys = { incomplete: boolean; keys: string[] };
 type SampledEnumerableOwnKeys = EnumeratedKeys & {
-  descriptors?: ReadonlyMap<string, PropertyDescriptor>;
+  descriptors: ReadonlyMap<string, PropertyDescriptor>;
 };
 type OwnKeyScanBudget = { remainingKeys: number };
 
@@ -516,10 +516,12 @@ type SanitizationBudget = {
   enumeratedKeysByObject: WeakMap<object, EnumeratedKeys>;
   ownKeyScanBudget: OwnKeyScanBudget;
   prioritizedKeys: WeakMap<object, Set<string>>;
+  prioritizedSensitiveKeys: ReadonlySet<string>;
   remainingEntries: number;
   remainingObjects: number;
   remainingRedactionWork: number;
   remainingStringLength: number;
+  sensitiveDetailsRoot: object;
   truncated: boolean;
 };
 
@@ -802,25 +804,45 @@ const getBalancedScanAllowances = (
   return allowances;
 };
 
-const getSampledEnumerableOwnKeys = (
+type SampledEnumerableOwnKeyOptions = Readonly<{
+  captureDescriptors?: boolean;
+  ownKeysSnapshot?: readonly PropertyKey[];
+}>;
+
+function getSampledEnumerableOwnKeys(
   value: object,
   budget: OwnKeyScanBudget,
   maximumScannedKeys: number,
-  options?: Readonly<{
-    captureDescriptors?: boolean;
-    ownKeysSnapshot?: readonly PropertyKey[];
-  }>,
-): SampledEnumerableOwnKeys => {
+  options: SampledEnumerableOwnKeyOptions &
+    Readonly<{ captureDescriptors: true }>,
+): SampledEnumerableOwnKeys;
+function getSampledEnumerableOwnKeys(
+  value: object,
+  budget: OwnKeyScanBudget,
+  maximumScannedKeys: number,
+  options?: SampledEnumerableOwnKeyOptions &
+    Readonly<{ captureDescriptors?: false }>,
+): EnumeratedKeys;
+function getSampledEnumerableOwnKeys(
+  value: object,
+  budget: OwnKeyScanBudget,
+  maximumScannedKeys: number,
+  options?: SampledEnumerableOwnKeyOptions,
+): EnumeratedKeys | SampledEnumerableOwnKeys {
   const captureDescriptors = options?.captureDescriptors ?? false;
   if (budget.remainingKeys === 0) {
-    return { incomplete: true, keys: [] };
+    return captureDescriptors
+      ? { descriptors: new Map(), incomplete: true, keys: [] }
+      : { incomplete: true, keys: [] };
   }
   let ownKeys: readonly PropertyKey[];
   if (options?.ownKeysSnapshot === undefined) {
     try {
       ownKeys = Reflect.ownKeys(value);
     } catch {
-      return { incomplete: true, keys: [] };
+      return captureDescriptors
+        ? { descriptors: new Map(), incomplete: true, keys: [] }
+        : { incomplete: true, keys: [] };
     }
   } else {
     ownKeys = options.ownKeysSnapshot;
@@ -831,11 +853,10 @@ const getSampledEnumerableOwnKeys = (
     maximumScannedKeys,
     budget.remainingKeys,
   );
-  const entries: Array<{
-    descriptor: PropertyDescriptor;
-    index: number;
-    key: string;
-  }> = [];
+  const entries: Array<{ index: number; key: string }> = [];
+  const descriptors = captureDescriptors
+    ? new Map<string, PropertyDescriptor>()
+    : undefined;
   let inspectedKeys = 0;
   let incomplete = ownKeys.length > count;
   for (const index of getLeadingAndTrailingIndexes(ownKeys.length, count)) {
@@ -853,19 +874,16 @@ const getSampledEnumerableOwnKeys = (
       continue;
     }
     if (descriptor.enumerable !== true) continue;
-    entries.push({ descriptor, index, key });
+    entries.push({ index, key });
+    descriptors?.set(key, descriptor);
   }
   incomplete ||= inspectedKeys < count;
   entries.sort((left, right) => left.index - right.index);
-  const descriptors = captureDescriptors
-    ? new Map(entries.map(({ descriptor, key }) => [key, descriptor]))
-    : undefined;
-  return {
-    ...(descriptors === undefined ? undefined : { descriptors }),
-    incomplete,
-    keys: entries.map(({ key }) => key),
-  };
-};
+  const keys = entries.map(({ key }) => key);
+  return descriptors === undefined
+    ? { incomplete, keys }
+    : { descriptors, incomplete, keys };
+}
 
 const getEnumerableArrayIndexKeys = (
   value: unknown[],
@@ -1151,7 +1169,7 @@ const mergeOwnDataProperties = (
         !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) ||
         sourceMerge.missingPriorityKeys.has(key)
       ) {
-        mergeProperty(sourceMerge, key, true, enumerated.descriptors?.get(key));
+        mergeProperty(sourceMerge, key, true, enumerated.descriptors.get(key));
       }
     }
   }
@@ -1168,7 +1186,7 @@ const mergeOwnDataProperties = (
       if (
         sourceMerge.prioritize &&
         !PRIORITY_DIAGNOSTIC_KEY_SET.has(key) &&
-        prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_KEYS
+        prioritizedMergedKeys.size < MAX_PRIORITIZED_SENSITIVE_ENTRIES
       ) {
         prioritizedMergedKeys.add(key);
       }
@@ -1495,14 +1513,43 @@ const sanitizeValue = (
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
     const priorityKeys = budget.prioritizedKeys.get(value);
     if (priorityKeys !== undefined) {
+      const sensitivePriorityKeys =
+        value === budget.sensitiveDetailsRoot
+          ? budget.prioritizedSensitiveKeys
+          : undefined;
       for (const key of priorityKeys) {
         if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+        if (sensitivePriorityKeys?.has(key) === true) continue;
         if (sanitizeEntry(key, true) === 'stop') return result;
+      }
+    }
+    const sensitivePriorityKeys =
+      value === budget.sensitiveDetailsRoot
+        ? budget.prioritizedSensitiveKeys
+        : undefined;
+    if (sensitivePriorityKeys !== undefined) {
+      const remainingEntriesBeforeSensitiveDetails = budget.remainingEntries;
+      const sensitiveEntryAllowance = Math.min(
+        remainingEntriesBeforeSensitiveDetails,
+        MAX_PRIORITIZED_SENSITIVE_ENTRIES,
+      );
+      budget.remainingEntries = sensitiveEntryAllowance;
+      try {
+        for (const key of sensitivePriorityKeys) {
+          if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
+          if (sanitizeEntry(key, true) === 'stop') break;
+        }
+      } finally {
+        const consumedSensitiveEntries =
+          sensitiveEntryAllowance - budget.remainingEntries;
+        budget.remainingEntries =
+          remainingEntriesBeforeSensitiveDetails - consumedSensitiveEntries;
       }
     }
     for (const key of enumerated.keys) {
       if (PRIORITY_DIAGNOSTIC_KEY_SET.has(key)) continue;
       if (priorityKeys?.has(key) === true) continue;
+      if (sensitivePriorityKeys?.has(key) === true) continue;
       if (sanitizeEntry(key, true) === 'stop') break;
     }
     return result;
@@ -1542,12 +1589,6 @@ const sanitizeDetails = (
     priorityScanBudget,
     rootEnumeratedKeys,
   );
-  if (initiallyPrioritizedKeys.size > 0) {
-    const rootPriorityKeys =
-      priorityDiscovery.prioritizedKeys.get(details) ?? new Set<string>();
-    for (const key of initiallyPrioritizedKeys) rootPriorityKeys.add(key);
-    priorityDiscovery.prioritizedKeys.set(details, rootPriorityKeys);
-  }
   // Discovery and sanitization remain independently useful without exceeding
   // the shared per-event own-key scan allowance.
   ownKeyScanBudget.remainingKeys += priorityScanBudget.remainingKeys;
@@ -1555,10 +1596,12 @@ const sanitizeDetails = (
     enumeratedKeysByObject: priorityDiscovery.enumeratedKeysByObject,
     ownKeyScanBudget,
     prioritizedKeys: priorityDiscovery.prioritizedKeys,
+    prioritizedSensitiveKeys: initiallyPrioritizedKeys,
     remainingEntries: MAX_SANITIZED_ENTRIES,
     remainingObjects: MAX_SANITIZED_OBJECTS,
     remainingRedactionWork: MAX_SANITIZED_TOTAL_REDACTION_WORK,
     remainingStringLength: MAX_SANITIZED_TOTAL_STRING_LENGTH,
+    sensitiveDetailsRoot: details,
     truncated: initiallyTruncated,
   };
   const sanitized = sanitizeValue(details, matcher, new WeakSet(), budget);

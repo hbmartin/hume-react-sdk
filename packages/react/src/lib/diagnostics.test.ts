@@ -1358,6 +1358,31 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['sensitive-0']).toBe(0);
   });
 
+  it('does not let nested sensitive content consume the ordinary entry reserve', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const sensitivePayload = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`nested-${index}`, index]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { phase: 'preserved' },
+      sensitiveDetails: { payload: sensitivePayload },
+    });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['phase']).toBe('preserved');
+    expect(events[0]?.details['payload']).toMatchObject({
+      'nested-0': 0,
+      __humeDiagnosticTruncated: true,
+    });
+  });
+
   it('preserves a small sensitive payload beside a full ordinary payload', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
