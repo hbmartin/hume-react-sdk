@@ -33,6 +33,13 @@ const getAudioMessage = (result: ParsedMessageResult) => {
   return result.message;
 };
 
+const getParseError = (result: ParsedMessageResult): ParsedMessageError => {
+  if (result.success) {
+    throw new Error('Expected socket message parsing to fail.');
+  }
+  return result.error;
+};
+
 describe('parseMessageData', () => {
   it('parses a valid serialized subscribe event', async () => {
     await expect(
@@ -48,34 +55,28 @@ describe('parseMessageData', () => {
       JSON.stringify({ type: 'not_a_subscribe_event' }),
     );
 
-    expect(result.success).toBe(false);
-    if (result.success === false) {
-      expect(result.error).toBeInstanceOf(SocketUnknownMessageError);
-      expect(result.error.code).toBe('unknown_message_type');
-      expect(classifyParseError(result.error)).toBe('unknown');
-    }
+    const error = getParseError(result);
+    expect(error).toBeInstanceOf(SocketUnknownMessageError);
+    expect(error.code).toBe('unknown_message_type');
+    expect(classifyParseError(error)).toBe('unknown');
   });
 
   it('reports malformed JSON as a parse failure with its cause', async () => {
     const result = await parseMessageData('{');
 
-    expect(result.success).toBe(false);
-    if (result.success === false) {
-      expect(result.error).toBeInstanceOf(SocketFailedToParseMessageError);
-      expect(result.error.code).toBe('failed_to_parse_message');
-      expect(result.error.cause).toBeInstanceOf(SyntaxError);
-      expect(classifyParseError(result.error)).toBe('parse');
-    }
+    const error = getParseError(result);
+    expect(error).toBeInstanceOf(SocketFailedToParseMessageError);
+    expect(error.code).toBe('failed_to_parse_message');
+    expect(error.cause).toBeInstanceOf(SyntaxError);
+    expect(classifyParseError(error)).toBe('parse');
   });
 
   it('describes unsupported non-string data precisely', async () => {
     const result = await parseMessageData(null);
 
-    expect(result.success).toBe(false);
-    if (result.success === false) {
-      expect(result.error).toBeInstanceOf(SocketFailedToParseMessageError);
-      expect(result.error.message).toContain('received null');
-    }
+    const error = getParseError(result);
+    expect(error).toBeInstanceOf(SocketFailedToParseMessageError);
+    expect(error.message).toContain('received null');
   });
 
   it('parses an ArrayBuffer as audio', async () => {
@@ -149,11 +150,9 @@ describe('parseMessageData', () => {
 
     const result = await parseMessageData(blob);
 
-    expect(result.success).toBe(false);
-    if (result.success === false) {
-      expect(result.error).toBeInstanceOf(SocketFailedToParseMessageError);
-      expect(result.error.cause).toBe(cause);
-    }
+    const error = getParseError(result);
+    expect(error).toBeInstanceOf(SocketFailedToParseMessageError);
+    expect(error.cause).toBe(cause);
   });
 
   it('does not reject when unsupported data has hostile accessors', async () => {

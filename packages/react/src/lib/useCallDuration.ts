@@ -1,5 +1,5 @@
 import { intervalToDuration } from 'date-fns';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * Store backing the granular call-duration subscription hook.
@@ -43,7 +43,7 @@ class CallDurationStore {
 export const useCallDuration = () => {
   const interval = useRef<number | null>(null);
   const startTime = useRef<number | null>(null);
-  const store = useRef(new CallDurationStore()).current;
+  const [store] = useState(() => new CallDurationStore());
 
   const start = useCallback(() => {
     startTime.current = Date.now();

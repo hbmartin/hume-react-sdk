@@ -277,9 +277,18 @@ describe('getHumeAccessToken', () => {
           }
 
           return new Promise<Response>((_resolve, reject) => {
-            signal.addEventListener('abort', () => reject(signal.reason), {
-              once: true,
-            });
+            signal.addEventListener(
+              'abort',
+              () => {
+                const reason: unknown = signal.reason;
+                reject(
+                  reason instanceof Error
+                    ? reason
+                    : new Error('Token request aborted.', { cause: reason }),
+                );
+              },
+              { once: true },
+            );
           });
         },
       )

@@ -14,8 +14,8 @@ export const appendCleanupFailures = (
   failures: unknown[],
   error: unknown,
 ): void => {
-  const aggregateAncestors = new WeakSet<object>();
-  const expandedAggregates = new WeakSet<object>();
+  const aggregateAncestors = new WeakSet();
+  const expandedAggregates = new WeakSet();
   let visitedNodes = 0;
   let reportedTruncation = false;
 

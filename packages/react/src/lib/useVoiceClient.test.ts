@@ -290,7 +290,9 @@ describe('useVoiceClient', () => {
     act(() => {
       generatedSocket.handlers.get('close')?.({ code: 1006 } as never);
     });
-    await expect(generatedConnection).rejects.toThrow();
+    await expect(generatedConnection).rejects.toThrow(
+      'The websocket closed before the voice connection opened',
+    );
 
     let suppliedConnection = Promise.resolve(VoiceReadyState.IDLE);
     act(() => {
@@ -299,7 +301,9 @@ describe('useVoiceClient', () => {
     act(() => {
       suppliedSocket.handlers.get('close')?.({ code: 1006 } as never);
     });
-    await expect(suppliedConnection).rejects.toThrow();
+    await expect(suppliedConnection).rejects.toThrow(
+      'The websocket closed before the voice connection opened',
+    );
 
     expect(onClose).toHaveBeenNthCalledWith(
       1,
@@ -327,7 +331,9 @@ describe('useVoiceClient', () => {
     act(() => {
       firstSocket.handlers.get('close')?.({ code: 1006 } as never);
     });
-    await expect(firstConnection).rejects.toThrow();
+    await expect(firstConnection).rejects.toThrow(
+      'The websocket closed before the voice connection opened',
+    );
 
     const generationError = await result.current
       .connect(config, undefined, 9)

@@ -228,7 +228,7 @@ function findHtmlTagEnd(line, tagStart) {
 function getOpeningRawHtmlElement(tag) {
   const match = /^<(code|pre|script|style|textarea)(?:[ \t]|>|\/)/iu.exec(tag);
   if (match === null || /\/[ \t]*>$/u.test(tag)) return null;
-  return /** @type {string} */ (match[1]).toLowerCase();
+  return match[1].toLowerCase();
 }
 
 /** @param {string} value */
@@ -383,9 +383,12 @@ function getCodeFence(line, listContinuationIndent, listItemContentStart) {
   const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(candidate);
   if (match === null) return null;
 
-  const marker = /** @type {string} */ (match[1]);
-  const trailing = /** @type {string} */ (match[2]);
-  const character = /** @type {'`' | '~'} */ (marker[0]);
+  const marker = match[1];
+  const trailing = match[2];
+  const character = marker[0];
+  if (character !== '`' && character !== '~') {
+    return null;
+  }
 
   return {
     canClose: trailing.trim().length === 0,

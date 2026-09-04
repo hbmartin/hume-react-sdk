@@ -185,7 +185,7 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   }, []);
 
   useEffect(() => {
-    if (accessToken === null) return;
+    if (accessToken === null) return undefined;
 
     const expiringToken = accessToken;
     const expiresAfterMs = Math.max(
@@ -202,7 +202,7 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
   }, [accessToken]);
 
   useEffect(() => {
-    if (HUME_VOICE_HOSTNAME === null) return;
+    if (HUME_VOICE_HOSTNAME === null) return undefined;
 
     let cancelled = false;
     let refreshTimer: number | undefined;

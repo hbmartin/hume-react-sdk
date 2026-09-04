@@ -1436,18 +1436,18 @@ describe('voice diagnostics reporter', () => {
     let priorityProbeReads = 0;
     // With the root, scan consumer, and noise array, this frontier fills the
     // 2,000-node discovery allowance.
-    const targets = Array.from(
+    const targets: Record<string, unknown>[] = Array.from(
       { length: 1_997 },
-      () => ({}) as Record<string, unknown>,
+      () => ({}),
     );
     const frontier = targets.map(
       (target) =>
         new Proxy(target, {
-          getOwnPropertyDescriptor(target, key) {
+          getOwnPropertyDescriptor(proxyTarget, key) {
             if (typeof key === 'string' && priorityKeys.has(key)) {
               priorityProbeReads += 1;
             }
-            return Reflect.getOwnPropertyDescriptor(target, key);
+            return Reflect.getOwnPropertyDescriptor(proxyTarget, key);
           },
         }),
     );
@@ -2134,15 +2134,15 @@ describe('voice diagnostics reporter', () => {
     );
     let unstableDescriptorReads = 0;
     const nested = new Proxy(target, {
-      getOwnPropertyDescriptor(target, key) {
+      getOwnPropertyDescriptor(proxyTarget, key) {
         if (key === 'unstable') {
           unstableDescriptorReads += 1;
           if (unstableDescriptorReads === 2) {
-            Reflect.deleteProperty(target, key);
+            Reflect.deleteProperty(proxyTarget, key);
             return undefined;
           }
         }
-        return Reflect.getOwnPropertyDescriptor(target, key);
+        return Reflect.getOwnPropertyDescriptor(proxyTarget, key);
       },
     });
 

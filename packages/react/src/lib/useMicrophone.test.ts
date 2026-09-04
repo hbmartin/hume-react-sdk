@@ -39,7 +39,7 @@ const stubMediaRecorder = (
     >();
 
     start = vi.fn(() => {
-      onStart?.(instances.indexOf(this as unknown as RecorderInstance));
+      onStart?.(instances.indexOf(this));
     });
 
     stop = vi.fn(() => {

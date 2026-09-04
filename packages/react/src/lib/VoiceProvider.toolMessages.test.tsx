@@ -28,7 +28,7 @@ vi.mock('./useVoiceClient', async () => {
   return {
     ...actual,
     useVoiceClient: (props: Parameters<typeof actual.useVoiceClient>[0]) => {
-      mocks.clientProps = props as typeof mocks.clientProps;
+      mocks.clientProps = props;
       return {
         connect: vi.fn().mockResolvedValue(actual.VoiceReadyState.OPEN),
         disconnect: vi.fn(),

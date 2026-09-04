@@ -938,7 +938,7 @@ const getPrioritizedKeysByObject = (
   > = [{ depth: 0, path: null, value: root }];
   // Explore a shared object through its first breadth-first path only. Walking
   // every alias would make the bounded search exponential on ordinary DAGs.
-  const scheduled = new WeakSet<object>();
+  const scheduled = new WeakSet();
   scheduled.add(root);
   let cursor = 0;
   let scheduledNodes = 1;
@@ -1063,14 +1063,19 @@ const mergeOwnDataProperties = (
   ownKeyScanBudget: OwnKeyScanBudget,
 ) => {
   let incomplete = false;
-  const sourceMerges = sources.flatMap((source, sourceIndex) =>
+  const sourceMerges: Array<{
+    missingPriorityKeys: Set<string>;
+    prioritize: boolean;
+    properties: Record<string, unknown>;
+    source: Record<string, unknown>;
+  }> = sources.flatMap((source, sourceIndex) =>
     source === undefined
       ? []
       : [
           {
             missingPriorityKeys: new Set<string>(),
             prioritize: sourceIndex > 0,
-            properties: {} as Record<string, unknown>,
+            properties: {},
             source,
           },
         ],
@@ -1181,14 +1186,11 @@ const sanitizeValue = (
   seen: WeakSet<object>,
   budget: SanitizationBudget,
 ): VoiceDiagnosticValue | undefined => {
-  if (
-    value === null ||
-    typeof value === 'boolean' ||
-    typeof value === 'number'
-  ) {
-    return Number.isFinite(value as number) || typeof value !== 'number'
-      ? value
-      : String(value);
+  if (value === null || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : String(value);
   }
   if (typeof value === 'string') {
     return sanitizeString(value, matcher, budget);
@@ -1523,6 +1525,11 @@ const freezeDiagnosticValue = <Value extends VoiceDiagnosticValue>(
   return value;
 };
 
+const isSanitizedRecord = (
+  value: VoiceDiagnosticValue | undefined,
+): value is Record<string, VoiceDiagnosticValue> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 const sanitizeDetails = (
   details: Record<string, unknown>,
   matcher: RedactionMatcher,
@@ -1557,22 +1564,12 @@ const sanitizeDetails = (
     truncated: initiallyTruncated,
   };
   const sanitized = sanitizeValue(details, matcher, new WeakSet(), budget);
-  if (
-    sanitized !== null &&
-    !Array.isArray(sanitized) &&
-    typeof sanitized === 'object'
-  ) {
+  if (isSanitizedRecord(sanitized)) {
     if (initiallyTruncated) {
-      setSanitizedProperty(
-        sanitized as Record<string, VoiceDiagnosticValue>,
-        TRUNCATED_PROPERTY,
-        true,
-      );
+      setSanitizedProperty(sanitized, TRUNCATED_PROPERTY, true);
     }
     return {
-      details: freezeDiagnosticValue(
-        sanitized as Record<string, VoiceDiagnosticValue>,
-      ),
+      details: freezeDiagnosticValue(sanitized),
       truncated: budget.truncated,
     };
   }

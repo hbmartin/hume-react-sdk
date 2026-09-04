@@ -69,7 +69,7 @@ const addMessageKeepingInterimLast = (
 ) => {
   const last = messages[messages.length - 1];
 
-  if (last?.type === 'user_message' && last.interim === true) {
+  if (last?.type === 'user_message' && last.interim) {
     const result = messages.slice(0, -1);
     result.push(messageToAdd, last);
     return keepLastN(messageHistoryLimit, result);
@@ -85,7 +85,7 @@ const addUserMessage = (
 ) => {
   const last = messages[messages.length - 1];
 
-  if (last?.type === 'user_message' && last.interim === true) {
+  if (last?.type === 'user_message' && last.interim) {
     return keepLastN(
       messageHistoryLimit,
       messages.slice(0, -1).concat([message]),
@@ -128,7 +128,7 @@ const messageStoreReducer = (
           action.message,
           action.messageHistoryLimit,
         ),
-        ...(action.message.interim === false
+        ...(!action.message.interim
           ? { lastUserMessage: action.message }
           : undefined),
       };
@@ -164,6 +164,10 @@ const messageStoreReducer = (
       };
     case 'clear':
       return createInitialMessageStoreState();
+    default: {
+      const exhaustiveAction: never = action;
+      throw new Error(`Unhandled message action: ${String(exhaustiveAction)}`);
+    }
   }
 };
 

@@ -16,6 +16,84 @@ const defaultRegistryRequestTimeoutMs = 10_000;
 const defaultRegistryRetryDelayMs = 250;
 
 /**
+ * @param {object} value
+ * @param {PropertyKey} key
+ * @returns {unknown}
+ */
+function getOwnValue(value, key) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && 'value' in descriptor
+    ? descriptor.value
+    : undefined;
+}
+
+/** @param {unknown} value */
+function toStringRecord(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  /** @type {Record<string, string>} */
+  const result = {};
+  for (const key of Object.keys(value)) {
+    const entry = getOwnValue(value, key);
+    if (typeof entry !== 'string') return undefined;
+    result[key] = entry;
+  }
+  return result;
+}
+
+/** @param {unknown} value @returns {PackageManifest} */
+function parsePackageManifest(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Package manifest must be an object.');
+  }
+  const name = getOwnValue(value, 'name');
+  const version = getOwnValue(value, 'version');
+  const privatePackage = getOwnValue(value, 'private');
+  const repository = getOwnValue(value, 'repository');
+  const dependenciesValue = getOwnValue(value, 'dependencies');
+  const optionalDependenciesValue = getOwnValue(value, 'optionalDependencies');
+  if (typeof name !== 'string' || typeof version !== 'string') {
+    throw new Error(
+      'Package manifest requires string name and version fields.',
+    );
+  }
+  if (privatePackage !== undefined && typeof privatePackage !== 'boolean') {
+    throw new Error('Package manifest private field must be boolean.');
+  }
+  const repositoryUrl =
+    typeof repository === 'object' && repository !== null
+      ? getOwnValue(repository, 'url')
+      : undefined;
+  if (repositoryUrl !== undefined && typeof repositoryUrl !== 'string') {
+    throw new Error('Package manifest repository URL must be a string.');
+  }
+  const dependencies = toStringRecord(dependenciesValue);
+  const optionalDependencies = toStringRecord(optionalDependenciesValue);
+  if (dependenciesValue !== undefined && dependencies === undefined) {
+    throw new Error('Package manifest dependencies must contain only strings.');
+  }
+  if (
+    optionalDependenciesValue !== undefined &&
+    optionalDependencies === undefined
+  ) {
+    throw new Error(
+      'Package manifest optionalDependencies must contain only strings.',
+    );
+  }
+  return {
+    name,
+    version,
+    ...(privatePackage === undefined ? {} : { private: privatePackage }),
+    ...(repositoryUrl === undefined
+      ? {}
+      : { repository: { url: repositoryUrl } }),
+    ...(dependencies === undefined ? {} : { dependencies }),
+    ...(optionalDependencies === undefined ? {} : { optionalDependencies }),
+  };
+}
+
+/**
  * @typedef {{
  *   name: string,
  *   version: string,
@@ -129,8 +207,11 @@ function includeRuntimeWorkspaceDependencies(
   const workspaceDependenciesToVerify = new Map();
   for (const packageName of includedPackageNames) {
     const packageManifest = packagesByName.get(packageName);
+    if (packageManifest === undefined) {
+      throw new Error(`Selected package ${packageName} is not publishable.`);
+    }
     for (const dependencyName of getRuntimeWorkspaceDependencies(
-      /** @type {PackageManifest} */ (packageManifest),
+      packageManifest,
     )) {
       const dependency = requirePublishableWorkspaceDependency(
         dependencyName,
@@ -254,6 +335,7 @@ async function fetchRegistryResponse(
   const abortController = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timeout;
+  /** @type {Promise<never>} */
   const timeoutPromise = new Promise((_, reject) => {
     timeout = setTimeout(() => {
       const error = new Error(
@@ -265,20 +347,18 @@ async function fetchRegistryResponse(
   });
 
   try {
-    return await /** @type {Promise<Response>} */ (
-      Promise.race([
-        fetchImplementation(url, {
-          headers: {
-            accept: 'application/json',
-            ...(registryToken === undefined || registryToken === ''
-              ? {}
-              : { authorization: `Bearer ${registryToken}` }),
-          },
-          signal: abortController.signal,
-        }),
-        timeoutPromise,
-      ])
-    );
+    return await Promise.race([
+      fetchImplementation(url, {
+        headers: {
+          accept: 'application/json',
+          ...(registryToken === undefined || registryToken === ''
+            ? {}
+            : { authorization: `Bearer ${registryToken}` }),
+        },
+        signal: abortController.signal,
+      }),
+      timeoutPromise,
+    ]);
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
   }
@@ -409,7 +489,7 @@ export async function readPublishablePackages(repositoryRoot = process.cwd()) {
         resolve(repositoryRoot, packagePath),
         'utf8',
       );
-      return /** @type {PackageManifest} */ (JSON.parse(contents));
+      return parsePackageManifest(JSON.parse(contents));
     }),
   );
 }
