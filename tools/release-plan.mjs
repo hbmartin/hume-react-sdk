@@ -2,6 +2,8 @@ import { readFile, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { getOwnValue, getOwnValues, isObjectRecord } from './safe-object.mjs';
+
 const publishablePackagePaths = [
   'packages/embed/package.json',
   'packages/embed-react/package.json',
@@ -15,21 +17,9 @@ const defaultRegistryRequestAttempts = 3;
 const defaultRegistryRequestTimeoutMs = 10_000;
 const defaultRegistryRetryDelayMs = 250;
 
-/**
- * @param {object} value
- * @param {PropertyKey} key
- * @returns {unknown}
- */
-function getOwnValue(value, key) {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor
-    ? descriptor.value
-    : undefined;
-}
-
 /** @param {unknown} value */
 function toStringRecord(value) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isObjectRecord(value)) {
     return undefined;
   }
   /** @type {Record<string, string>} */
@@ -44,15 +34,24 @@ function toStringRecord(value) {
 
 /** @param {unknown} value @returns {PackageManifest} */
 function parsePackageManifest(value) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isObjectRecord(value)) {
     throw new Error('Package manifest must be an object.');
   }
-  const name = getOwnValue(value, 'name');
-  const version = getOwnValue(value, 'version');
-  const privatePackage = getOwnValue(value, 'private');
-  const repository = getOwnValue(value, 'repository');
-  const dependenciesValue = getOwnValue(value, 'dependencies');
-  const optionalDependenciesValue = getOwnValue(value, 'optionalDependencies');
+  const [
+    name,
+    version,
+    privatePackage,
+    repository,
+    dependenciesValue,
+    optionalDependenciesValue,
+  ] = getOwnValues(value, [
+    'name',
+    'version',
+    'private',
+    'repository',
+    'dependencies',
+    'optionalDependencies',
+  ]);
   if (typeof name !== 'string' || typeof version !== 'string') {
     throw new Error(
       'Package manifest requires string name and version fields.',

@@ -1,11 +1,6 @@
 import { getAggregateErrorDetails } from './aggregateErrors';
 import { getBrowserErrorMessage } from './browserErrors';
 
-type CleanupErrorOptions = {
-  /** Cause attached when multiple failures require an aggregate wrapper. */
-  cause?: unknown;
-};
-
 const MAX_CLEANUP_FAILURE_NODES = 1_000;
 const CLEANUP_FAILURES_TRUNCATED_MESSAGE = `Cleanup failure traversal was truncated after ${MAX_CLEANUP_FAILURE_NODES} nodes.`;
 
@@ -67,7 +62,10 @@ const describeCleanupFailure = (failure: unknown): string => {
 export const createCleanupError = (
   failures: readonly unknown[],
   summary: string,
-  options: CleanupErrorOptions = {},
+  options: {
+    /** Cause attached when multiple failures require an aggregate wrapper. */
+    cause?: unknown;
+  } = {},
 ): unknown => {
   if (failures.length === 0) return undefined;
   if (failures.length === 1) return failures[0];
@@ -86,7 +84,10 @@ export const createCleanupError = (
 export const throwCleanupFailures = (
   failures: readonly unknown[],
   summary: string,
-  options: CleanupErrorOptions = {},
+  options: {
+    /** Cause attached when multiple failures require an aggregate wrapper. */
+    cause?: unknown;
+  } = {},
 ): void => {
   if (failures.length === 0) return;
   throw createCleanupError(failures, summary, options);

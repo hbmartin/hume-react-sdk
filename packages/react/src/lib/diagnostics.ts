@@ -155,8 +155,6 @@ export interface VoiceDiagnosticsOptions {
   includeContent?: boolean;
 }
 
-type DiagnosticConfiguration = false | VoiceDiagnosticsOptions | undefined;
-
 /**
  * Low-level diagnostic event input accepted by a diagnostics reporter.
  *
@@ -1579,7 +1577,9 @@ const sanitizeDetails = (
   };
 };
 
-const getConfiguration = (configuration: DiagnosticConfiguration) => {
+const getConfiguration = (
+  configuration: false | VoiceDiagnosticsOptions | undefined,
+) => {
   if (configuration === false) {
     return null;
   }
@@ -1596,7 +1596,7 @@ const getConfiguration = (configuration: DiagnosticConfiguration) => {
 };
 
 export const createVoiceDiagnosticsReporter = (
-  getOptions: () => DiagnosticConfiguration,
+  getOptions: () => false | VoiceDiagnosticsOptions | undefined,
 ): VoiceDiagnosticsReporter => {
   const instanceId = createId('instance');
   const secrets = new Set<string>();

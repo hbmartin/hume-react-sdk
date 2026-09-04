@@ -25,6 +25,19 @@ const getMonotonicTime = () => {
   return globalThis.performance?.now() ?? Date.now();
 };
 
+const assignDefinedProperty = (
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+) => {
+  if (value !== undefined) target[key] = value;
+};
+
+const getStringDataProperty = (value: object, key: string) => {
+  const property = getDataProperty(value, key)?.value;
+  return typeof property === 'string' ? property : undefined;
+};
+
 const getMessageDiagnostics = (message: { type: string }) => {
   const nestedValue = getDataProperty(message, 'message')?.value;
   const nestedMessage =
@@ -38,27 +51,35 @@ const getMessageDiagnostics = (message: { type: string }) => {
     getDataProperty(message, 'content')?.value;
   const parameters = getDataProperty(message, 'parameters')?.value;
   const toolError = getDataProperty(message, 'error')?.value;
-  const toolName = getDataProperty(message, 'name')?.value;
+  const toolName = getStringDataProperty(message, 'name');
   const contentLength =
     typeof content === 'string' ? content.length : undefined;
+
+  const details: Record<string, unknown> = {
+    direction: 'inbound',
+    type: message.type,
+  };
+  assignDefinedProperty(
+    details,
+    'messageId',
+    getStringDataProperty(message, 'id'),
+  );
+  assignDefinedProperty(
+    details,
+    'toolCallId',
+    getStringDataProperty(message, 'toolCallId'),
+  );
+  assignDefinedProperty(details, 'toolName', toolName);
+  assignDefinedProperty(details, 'contentLength', contentLength);
+
+  const sensitiveDetails: Record<string, unknown> = {};
+  assignDefinedProperty(sensitiveDetails, 'content', content);
+  assignDefinedProperty(sensitiveDetails, 'parameters', parameters);
+  assignDefinedProperty(sensitiveDetails, 'error', toolError);
+
   return {
-    details: {
-      direction: 'inbound',
-      type: message.type,
-      ...(typeof getDataProperty(message, 'id')?.value === 'string'
-        ? { messageId: getDataProperty(message, 'id')?.value }
-        : undefined),
-      ...(typeof getDataProperty(message, 'toolCallId')?.value === 'string'
-        ? { toolCallId: getDataProperty(message, 'toolCallId')?.value }
-        : undefined),
-      ...(typeof toolName === 'string' ? { toolName } : undefined),
-      ...(contentLength === undefined ? undefined : { contentLength }),
-    },
-    sensitiveDetails: {
-      ...(content === undefined ? undefined : { content }),
-      ...(parameters === undefined ? undefined : { parameters }),
-      ...(toolError === undefined ? undefined : { error: toolError }),
-    },
+    details,
+    sensitiveDetails,
   };
 };
 

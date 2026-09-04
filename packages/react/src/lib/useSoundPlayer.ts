@@ -59,6 +59,19 @@ const getMonotonicTime = () => {
   return globalThis.performance?.now() ?? Date.now();
 };
 
+const releaseSafely = (
+  failures: string[],
+  label: string,
+  action: () => void,
+) => {
+  try {
+    action();
+  } catch (error) {
+    const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
+    failures.push(`${label}: ${detail}`);
+  }
+};
+
 interface PlayerResources {
   context: AudioContext | null;
   ownsContext: boolean;
@@ -209,14 +222,8 @@ const useSoundPlayerImplementation = (
       }
 
       const failures: string[] = [];
-      const release = (label: string, action: () => void) => {
-        try {
-          action();
-        } catch (error) {
-          const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-          failures.push(`${label}: ${detail}`);
-        }
-      };
+      const release = (label: string, action: () => void) =>
+        releaseSafely(failures, label, action);
 
       release('FFT cleanup failed', () => cancelPlayerFft(resources));
 
@@ -924,14 +931,8 @@ const useSoundPlayerImplementation = (
       clipQueue.current = [];
 
       const failures: string[] = [];
-      const release = (label: string, action: () => void) => {
-        try {
-          action();
-        } catch (error) {
-          const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-          failures.push(`${label}: ${detail}`);
-        }
-      };
+      const release = (label: string, action: () => void) =>
+        releaseSafely(failures, label, action);
 
       if (resourcesToStop) {
         release('FFT cleanup failed', () => cancelPlayerFft(resourcesToStop));

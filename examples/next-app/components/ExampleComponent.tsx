@@ -6,7 +6,14 @@ import {
   useCallDurationTimestamp,
   useVoice,
 } from '@humeai/voice-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
 
@@ -235,51 +242,52 @@ export const ExampleComponent = ({ configId }: { configId?: string }) => {
     };
   }, [refreshAccessToken]);
 
-  const selectInputDevice = async (value: string) => {
+  const selectDevice = async (
+    value: string,
+    setSelectedDeviceId: Dispatch<SetStateAction<string | null>>,
+    setIsSwitching: Dispatch<SetStateAction<boolean>>,
+    switchDevice: (deviceId: string | null) => Promise<void>,
+    fallbackErrorMessage: string,
+  ) => {
     const deviceId = fromDeviceValue(value);
     if (status.value !== 'connected') {
-      setSelectedMicrophoneId(deviceId);
+      setSelectedDeviceId(deviceId);
       return;
     }
 
-    setIsSwitchingInput(true);
+    setIsSwitching(true);
     setDeviceSwitchError(null);
     try {
-      await setInputDevice(deviceId);
-      setSelectedMicrophoneId(deviceId);
+      await switchDevice(deviceId);
+      setSelectedDeviceId(deviceId);
     } catch (error) {
       setDeviceSwitchError(
         isAudioDeviceSwitchError(error)
           ? error
-          : new Error('The microphone could not be switched.'),
+          : new Error(fallbackErrorMessage),
       );
     } finally {
-      setIsSwitchingInput(false);
+      setIsSwitching(false);
     }
   };
 
-  const selectOutputDevice = async (value: string) => {
-    const deviceId = fromDeviceValue(value);
-    if (status.value !== 'connected') {
-      setSelectedSpeakerId(deviceId);
-      return;
-    }
+  const selectInputDevice = (value: string) =>
+    selectDevice(
+      value,
+      setSelectedMicrophoneId,
+      setIsSwitchingInput,
+      setInputDevice,
+      'The microphone could not be switched.',
+    );
 
-    setIsSwitchingOutput(true);
-    setDeviceSwitchError(null);
-    try {
-      await setOutputDevice(deviceId);
-      setSelectedSpeakerId(deviceId);
-    } catch (error) {
-      setDeviceSwitchError(
-        isAudioDeviceSwitchError(error)
-          ? error
-          : new Error('The speaker could not be switched.'),
-      );
-    } finally {
-      setIsSwitchingOutput(false);
-    }
-  };
+  const selectOutputDevice = (value: string) =>
+    selectDevice(
+      value,
+      setSelectedSpeakerId,
+      setIsSwitchingOutput,
+      setOutputDevice,
+      'The speaker could not be switched.',
+    );
 
   const connectOptions =
     HUME_VOICE_HOSTNAME === null

@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { getOwnValue, getOwnValues, isObjectRecord } from './safe-object.mjs';
+
 /**
  * Builds the VitePress sidebar for the generated API reference.
  *
@@ -64,28 +66,18 @@ function isUnknownArray(value) {
   return Array.isArray(value);
 }
 
-/**
- * @param {object} value
- * @param {PropertyKey} key
- * @returns {unknown}
- */
-function getOwnValue(value, key) {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor
-    ? descriptor.value
-    : undefined;
-}
-
 /** @param {unknown} value @returns {ApiMember} */
 function parseApiMember(value) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isObjectRecord(value)) {
     throw new Error('API model member must be an object.');
   }
-  const kind = getOwnValue(value, 'kind');
-  const name = getOwnValue(value, 'name');
-  const docComment = getOwnValue(value, 'docComment');
-  const overloadIndex = getOwnValue(value, 'overloadIndex');
-  const members = getOwnValue(value, 'members');
+  const [kind, name, docComment, overloadIndex, members] = getOwnValues(value, [
+    'kind',
+    'name',
+    'docComment',
+    'overloadIndex',
+    'members',
+  ]);
   if (typeof kind !== 'string') {
     throw new Error('API model member kind must be a string.');
   }
@@ -116,7 +108,7 @@ function parseApiMember(value) {
 
 /** @param {unknown} value @returns {ApiModel} */
 function parseApiModel(value) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isObjectRecord(value)) {
     throw new Error('API model must be an object.');
   }
   const name = getOwnValue(value, 'name');

@@ -38,6 +38,24 @@ const getMonotonicTime = () => {
   return globalThis.performance?.now() ?? Date.now();
 };
 
+const settleBeforeDeadline = async (
+  operation: PromiseLike<unknown>,
+  deadline: number,
+): Promise<boolean> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const completed = await Promise.race([
+    Promise.resolve(operation).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timeoutId = setTimeout(
+        () => resolve(false),
+        Math.max(0, deadline - Date.now()),
+      );
+    }),
+  ]);
+  if (timeoutId !== undefined) clearTimeout(timeoutId);
+  return completed;
+};
+
 const createMicrophoneAbortError = () =>
   new DOMException(
     'The microphone operation was interrupted by a lifecycle change.',
@@ -289,6 +307,19 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [diagnostics],
   );
 
+  const reportDataReadFailure = useCallback(
+    (message: string, error: unknown) => {
+      diagnostics.current.emit({
+        level: 'warn',
+        category: 'microphone',
+        name: 'resource.cleanup_failed',
+        details: { resource: 'microphone', message, error },
+      });
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
+    [diagnostics],
+  );
+
   const stopFftAnalyzer = useCallback(() => {
     const animationId = fftAnimationId.current;
     fftAnimationId.current = null;
@@ -377,16 +408,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
           }
         })
         .catch((err: unknown) => {
-          diagnostics.current.emit({
-            level: 'warn',
-            category: 'microphone',
-            name: 'resource.cleanup_failed',
-            details: {
-              resource: 'microphone',
-              message: 'Failed to read captured microphone data.',
-              error: err,
-            },
-          });
+          reportDataReadFailure(
+            'Failed to read captured microphone data.',
+            err,
+          );
         });
       pendingDataTasks.current.add(task);
       void task.then(
@@ -395,7 +420,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       );
     },
     // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
-    [diagnostics, sendAudio],
+    [diagnostics, reportDataReadFailure, sendAudio],
   );
 
   const startFftAnalyzer = useCallback(
@@ -489,12 +514,17 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       let recorderStopped = true;
       if (recorderToStop) {
-        const removeDataHandler = () => {
+        const removeRecorderListener = <
+          EventName extends keyof MediaRecorderEventMap,
+        >(
+          type: EventName,
+          listener: (
+            this: MediaRecorder,
+            event: MediaRecorderEventMap[EventName],
+          ) => unknown,
+        ) => {
           try {
-            recorderToStop.removeEventListener(
-              'dataavailable',
-              recorderHandlerToRemove,
-            );
+            recorderToStop.removeEventListener(type, listener);
           } catch (error) {
             diagnostics.current.emit({
               level: 'warn',
@@ -507,6 +537,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
               },
             });
           }
+        };
+        const removeDataHandler = () => {
+          removeRecorderListener('dataavailable', recorderHandlerToRemove);
         };
         let resolveRecorderStop = noop;
         const recorderStopEvent = new Promise<void>((resolve) => {
@@ -531,20 +564,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           resolveRecorderStop();
         };
         const removeStopHandler = () => {
-          try {
-            recorderToStop.removeEventListener('stop', handleRecorderStop);
-          } catch (error) {
-            diagnostics.current.emit({
-              level: 'warn',
-              category: 'microphone',
-              name: 'resource.cleanup_failed',
-              details: {
-                resource: 'microphone',
-                message: 'Recorder listener cleanup failed.',
-                error,
-              },
-            });
-          }
+          removeRecorderListener('stop', handleRecorderStop);
         };
         let stopListenerAttached = false;
         try {
@@ -586,19 +606,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
         const finalDataDeadline = Date.now() + RECORDER_FINAL_DATA_TIMEOUT_MS;
 
         if (recorderStopped && stopListenerAttached) {
-          let timeoutId: ReturnType<typeof setTimeout> | undefined;
-          const stopEventReceived = await Promise.race([
-            recorderStopEvent.then(() => true),
-            new Promise<boolean>((resolve) => {
-              timeoutId = setTimeout(
-                () => resolve(false),
-                Math.max(0, finalDataDeadline - Date.now()),
-              );
-            }),
-          ]);
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
+          const stopEventReceived = await settleBeforeDeadline(
+            recorderStopEvent,
+            finalDataDeadline,
+          );
           if (!stopEventReceived) {
             recorderStopped = false;
             removeDataHandler();
@@ -613,19 +624,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
         if (recorderStopped && pendingDataTasks.current.size > 0) {
           const flushStartedAt = getMonotonicTime();
-          let timeoutId: ReturnType<typeof setTimeout> | undefined;
-          const finalDataFlushed = await Promise.race([
-            Promise.allSettled(pendingDataTasks.current).then(() => true),
-            new Promise<boolean>((resolve) => {
-              timeoutId = setTimeout(
-                () => resolve(false),
-                Math.max(0, finalDataDeadline - Date.now()),
-              );
-            }),
-          ]);
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
+          const finalDataFlushed = await settleBeforeDeadline(
+            Promise.allSettled(pendingDataTasks.current),
+            finalDataDeadline,
+          );
           if (!finalDataFlushed) {
             failures.push(
               new Error('Recorder cleanup failed: final audio data timed out'),
@@ -918,16 +920,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
             }
           })
           .catch((error: unknown) => {
-            diagnostics.current.emit({
-              level: 'warn',
-              category: 'microphone',
-              name: 'resource.cleanup_failed',
-              details: {
-                resource: 'microphone',
-                message: 'Failed to read replacement microphone data.',
-                error,
-              },
-            });
+            reportDataReadFailure(
+              'Failed to read replacement microphone data.',
+              error,
+            );
           });
         candidateDataChain = task;
         const tasks =
@@ -1099,6 +1095,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       diagnostics,
       fftStore,
       reportClosureFailure,
+      reportDataReadFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
