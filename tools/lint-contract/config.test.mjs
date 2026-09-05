@@ -1283,6 +1283,28 @@ void test('coverage policy rejects floors above 100', () => {
   );
 });
 
+void test('coverage policy accepts floors of exactly 100', () => {
+  const policy = {
+    include: ['src/**/*.ts'],
+    exclude: [],
+    thresholds: {
+      'src/**': {
+        branches: 100,
+        functions: 100,
+        lines: 100,
+        statements: 100,
+      },
+    },
+  };
+  const errors = getCoveragePolicyErrors(
+    policy,
+    ['src/index.ts'],
+    ['src/index.ts'],
+  );
+
+  assert.deepEqual(errors, []);
+});
+
 void test('coverage policy accepts only counter-free sources missing from Istanbul', () => {
   const policy = {
     include: ['src/**/*.ts'],
