@@ -1,10 +1,27 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { getPnpmInvocation } from '../pnpm-command.mjs';
 
 export const repositoryRoot = resolve(import.meta.dirname, '../..');
+
+/**
+ * @param {string | undefined} executablePath
+ * @param {string} moduleUrl
+ */
+export const isDirectExecution = (executablePath, moduleUrl) => {
+  if (executablePath === undefined || executablePath === '') return false;
+  try {
+    return (
+      realpathSync(resolve(executablePath)) ===
+      realpathSync(fileURLToPath(moduleUrl))
+    );
+  } catch {
+    return false;
+  }
+};
 
 /** @param {string} path */
 export const readJson = (path) =>
@@ -143,26 +160,49 @@ const gitOutput = (args) => {
 /** @param {string} ref */
 const refExists = (ref) => gitOutput(['rev-parse', '--verify', ref]) !== null;
 
+/**
+ * @param {string[]} candidates
+ * @param {string | null | undefined} candidate
+ * @param {string} [prefix]
+ */
+const appendAuditBaseCandidate = (candidates, candidate, prefix = '') => {
+  if (candidate === undefined || candidate === null || candidate === '') return;
+  candidates.push(`${prefix}${candidate}`);
+};
+
+/**
+ * @param {{ explicitBase: string | undefined, configuredBase: string | undefined, githubBase: string | undefined, remoteHead: string | null | undefined }} options
+ */
+export const getAuditBaseCandidates = ({
+  explicitBase,
+  configuredBase,
+  githubBase,
+  remoteHead,
+}) => {
+  /** @type {string[]} */
+  const candidates = [];
+  appendAuditBaseCandidate(candidates, explicitBase);
+  appendAuditBaseCandidate(candidates, configuredBase);
+  appendAuditBaseCandidate(candidates, githubBase, 'origin/');
+  appendAuditBaseCandidate(
+    candidates,
+    remoteHead?.replace(/^refs\/remotes\//, ''),
+  );
+  candidates.push('origin/main', 'main');
+  return candidates;
+};
+
 /** @param {string | undefined} explicitBase */
 export const resolveAuditBase = (explicitBase) => {
-  const candidates = [];
-  if (explicitBase !== undefined && explicitBase !== '') {
-    candidates.push(explicitBase);
-  }
   const configuredBase = process.env['FALLOW_AUDIT_BASE'];
-  if (configuredBase !== undefined && configuredBase !== '') {
-    candidates.push(configuredBase);
-  }
   const githubBase = process.env['GITHUB_BASE_REF'];
-  if (githubBase !== undefined && githubBase !== '') {
-    candidates.push(`origin/${githubBase}`);
-  }
-
   const remoteHead = gitOutput(['symbolic-ref', 'refs/remotes/origin/HEAD']);
-  if (remoteHead !== null && remoteHead !== '') {
-    candidates.push(remoteHead.replace(/^refs\/remotes\//, ''));
-  }
-  candidates.push('origin/main', 'main');
+  const candidates = getAuditBaseCandidates({
+    configuredBase,
+    explicitBase,
+    githubBase,
+    remoteHead,
+  });
 
   const base = candidates.find((candidate) => refExists(candidate));
   if (base === undefined) {

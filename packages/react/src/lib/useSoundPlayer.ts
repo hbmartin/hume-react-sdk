@@ -95,7 +95,7 @@ interface PlayerResources {
   worklet: AudioWorkletNode | null;
   source: AudioBufferSourceNode | null;
   fftRafId: number | null;
-  unknownWorkletMessageReported: boolean;
+  reportedUnknownWorkletMessageTypes: Set<string>;
 }
 
 const BARK_BAND_COUNT = 24;
@@ -470,7 +470,7 @@ const useSoundPlayerImplementation = (
           worklet: null,
           source: null,
           fftRafId: null,
-          unknownWorkletMessageReported: false,
+          reportedUnknownWorkletMessageTypes: new Set(),
         };
         resourcesForInitialization = resources;
         playerResources.current = resources;
@@ -583,10 +583,12 @@ const useSoundPlayerImplementation = (
               // before this SDK learns how to consume them. Unknown extensions
               // must remain forward-compatible no-ops.
               if (
-                !resources.unknownWorkletMessageReported &&
+                !resources.reportedUnknownWorkletMessageTypes.has(
+                  messageType,
+                ) &&
                 diagnostics.current?.isEnabled('debug') === true
               ) {
-                resources.unknownWorkletMessageReported = true;
+                resources.reportedUnknownWorkletMessageTypes.add(messageType);
                 diagnostics.current.emit({
                   level: 'debug',
                   category: 'audio_player',

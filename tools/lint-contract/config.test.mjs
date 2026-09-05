@@ -14,12 +14,15 @@ import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  getCoverageCounterFreeFiles,
   getCoveragePolicyErrors,
   getTrackedCoverageInputs,
   isCoverageCounterFreeSource,
 } from '../quality-gate/check-coverage-map.mjs';
 import { compareBaselineStates } from '../quality-gate/check-fallow-baseline-policy.mjs';
 import {
+  getAuditBaseCandidates,
+  isDirectExecution,
   parseJsonc,
   resolveAuditBase,
 } from '../quality-gate/quality-gate-utils.mjs';
@@ -31,6 +34,10 @@ const oxlintConfig = resolve(repositoryRoot, '.oxlintrc.json');
 const baselinePolicy = resolve(
   repositoryRoot,
   'tools/quality-gate/check-fallow-baseline-policy.mjs',
+);
+const coverageMapGate = resolve(
+  repositoryRoot,
+  'tools/quality-gate/check-coverage-map.mjs',
 );
 
 /**
@@ -953,6 +960,14 @@ void test('baseline policy module is import-safe', () => {
   assert.equal(typeof compareBaselineStates, 'function');
 });
 
+void test('direct execution detection tolerates an absent caller path', (t) => {
+  const root = createFixture(t, 'missing-caller', {});
+  assert.equal(
+    isDirectExecution(resolve(root, 'removed-entry.mjs'), import.meta.url),
+    false,
+  );
+});
+
 void test('baseline policy executes when invoked through a symlink', (t) => {
   const root = createFixture(t, 'policy-symlink', {});
   const linkedPolicy = resolve(root, 'baseline-policy.mjs');
@@ -968,6 +983,23 @@ void test('baseline policy executes when invoked through a symlink', (t) => {
   assert.match(
     `${result.stdout}${result.stderr}`,
     /requires BASE and CURRENT directories/,
+  );
+});
+
+void test('coverage-map policy executes when invoked through a symlink', (t) => {
+  const root = createFixture(t, 'coverage-symlink', {});
+  const linkedGate = resolve(root, 'coverage-map.mjs');
+  symlinkSync(coverageMapGate, linkedGate);
+
+  const result = spawnSync(process.execPath, [linkedGate], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  });
+
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /Coverage map/,
+    'symlinked coverage-map policy unexpectedly skipped',
   );
 });
 
@@ -1190,6 +1222,39 @@ void test('coverage counter-free detection is conservative', () => {
   );
 });
 
+void test('coverage counter-free detection reads only omitted sources and tolerates missing files', () => {
+  const policy = {
+    include: ['src/**/*.ts'],
+    exclude: [],
+    thresholds: {
+      'src/**': { branches: 50, functions: 50, lines: 50, statements: 50 },
+    },
+  };
+  /** @type {string[]} */
+  const reads = [];
+  const counterFreeFiles = getCoverageCounterFreeFiles(
+    policy,
+    ['src/covered.ts', 'src/types.ts', 'src/missing.ts'],
+    ['src/covered.ts'],
+    (path) => {
+      reads.push(path);
+      return path === 'src/missing.ts' ? null : 'export type Value = string;';
+    },
+  );
+
+  assert.deepEqual(reads, ['src/types.ts', 'src/missing.ts']);
+  assert.deepEqual([...counterFreeFiles], ['src/types.ts']);
+  assert.match(
+    getCoveragePolicyErrors(
+      policy,
+      ['src/covered.ts', 'src/types.ts', 'src/missing.ts'],
+      ['src/covered.ts'],
+      counterFreeFiles,
+    ).join('\n'),
+    /src\/missing\.ts/,
+  );
+});
+
 void test('JSONC parsing preserves strings and supports both comment forms', () => {
   assert.deepEqual(
     parseJsonc(`{
@@ -1206,7 +1271,7 @@ void test('JSONC parsing preserves strings and supports both comment forms', () 
   );
 });
 
-void test('the configured audit base resolves in a shallow checkout', () => {
+void test('the configured audit base takes precedence', () => {
   const previousAuditBase = process.env['FALLOW_AUDIT_BASE'];
   process.env['FALLOW_AUDIT_BASE'] = 'HEAD';
   try {
@@ -1220,6 +1285,27 @@ void test('the configured audit base resolves in a shallow checkout', () => {
       process.env['FALLOW_AUDIT_BASE'] = previousAuditBase;
     }
   }
+});
+
+void test('the implicit audit base preserves its remote and local fallback chain', () => {
+  assert.deepEqual(
+    getAuditBaseCandidates({
+      configuredBase: undefined,
+      explicitBase: undefined,
+      githubBase: 'release',
+      remoteHead: 'refs/remotes/origin/trunk',
+    }),
+    ['origin/release', 'origin/trunk', 'origin/main', 'main'],
+  );
+  assert.deepEqual(
+    getAuditBaseCandidates({
+      configuredBase: undefined,
+      explicitBase: undefined,
+      githubBase: undefined,
+      remoteHead: null,
+    }),
+    ['origin/main', 'main'],
+  );
 });
 
 void test('scripts encode the complete gate and cannot casually bless debt', () => {

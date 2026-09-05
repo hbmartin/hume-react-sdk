@@ -1218,7 +1218,7 @@ describe('useSoundPlayer', () => {
     );
   });
 
-  it('reports one debug event for unknown worklet protocol extensions', async () => {
+  it('reports one debug event per unknown worklet protocol extension', async () => {
     const onError = vi.fn();
     const events: VoiceDiagnosticEvent[] = [];
     const diagnostics = createVoiceDiagnosticsReporter(() => ({
@@ -1242,6 +1242,9 @@ describe('useSoundPlayer', () => {
         data: { type: 'protocol_extension', value: true },
       } as MessageEvent);
       fakePort.onmessage?.({
+        data: { type: 'protocol_extension', value: false },
+      } as MessageEvent);
+      fakePort.onmessage?.({
         data: { type: 'another_extension', value: true },
       } as MessageEvent);
     });
@@ -1252,9 +1255,10 @@ describe('useSoundPlayer', () => {
     const ignoredEvents = events.filter(
       (event) => event.name === 'audio.worklet_message_ignored',
     );
-    expect(ignoredEvents).toHaveLength(1);
+    expect(ignoredEvents).toHaveLength(2);
     expect(ignoredEvents[0]?.level).toBe('debug');
     expect(ignoredEvents[0]?.details['messageType']).toBe('protocol_extension');
+    expect(ignoredEvents[1]?.details['messageType']).toBe('another_extension');
   });
 
   it('reports the first teardown failure instead of retrying a detached player', async () => {

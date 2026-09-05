@@ -1,8 +1,8 @@
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
+  isDirectExecution,
   parseJsonc,
   repositoryRoot,
   resolveAuditBase,
@@ -374,25 +374,6 @@ const getFindingCategoryTotals = (counts, extensions, identityMode = false) => {
 };
 
 /**
- * @param {HealthBaseline | null} base
- * @param {HealthBaseline | null} current
- * @param {string[]} errors
- * @returns {[Record<string, number>, Record<string, number>] | null}
- */
-const getLegacyHealthTotals = (base, current, errors) => {
-  if (!isRecord(base?.finding_counts)) return null;
-  if (!isRecord(current?.identity_finding_counts)) {
-    errors.push('bootstrap health baseline is missing identity finding counts');
-    return null;
-  }
-  const extensions = new Set(Object.keys(base.finding_counts).map(extname));
-  return [
-    getFindingCategoryTotals(base.finding_counts, extensions),
-    getFindingCategoryTotals(current.identity_finding_counts, extensions, true),
-  ];
-};
-
-/**
  * Preserve aggregate ceilings for file kinds understood by the legacy health
  * baseline while allowing the bootstrap to add newly analyzed file kinds.
  *
@@ -401,9 +382,18 @@ const getLegacyHealthTotals = (base, current, errors) => {
  * @param {string[]} errors
  */
 const compareLegacyHealth = (base, current, errors) => {
-  const totals = getLegacyHealthTotals(base, current, errors);
-  if (totals === null) return;
-  const [baseTotals, currentTotals] = totals;
+  if (!isRecord(base?.finding_counts)) return;
+  if (!isRecord(current?.identity_finding_counts)) {
+    errors.push('bootstrap health baseline is missing identity finding counts');
+    return;
+  }
+  const extensions = new Set(Object.keys(base.finding_counts).map(extname));
+  const baseTotals = getFindingCategoryTotals(base.finding_counts, extensions);
+  const currentTotals = getFindingCategoryTotals(
+    current.identity_finding_counts,
+    extensions,
+    true,
+  );
   for (const [category, currentCount] of Object.entries(currentTotals)) {
     const baseCount = baseTotals[category] ?? 0;
     if (currentCount > baseCount) {
@@ -654,11 +644,7 @@ export const runBaselinePolicy = (args = process.argv.slice(2)) => {
   return 0;
 };
 
-if (
-  process.argv[1] !== undefined &&
-  realpathSync(fileURLToPath(import.meta.url)) ===
-    realpathSync(resolve(process.argv[1]))
-) {
+if (isDirectExecution(process.argv[1], import.meta.url)) {
   process.exitCode = runBaselinePolicy();
 }
 

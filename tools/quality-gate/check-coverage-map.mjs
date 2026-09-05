@@ -2,14 +2,31 @@ import { parse } from '@babel/parser';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, matchesGlob, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { readJson, repositoryRoot } from './quality-gate-utils.mjs';
+import {
+  isDirectExecution,
+  readJson,
+  repositoryRoot,
+} from './quality-gate-utils.mjs';
 
 const coveragePath = resolve(repositoryRoot, 'coverage/coverage-final.json');
 
 /** @param {string} path */
 const normalizePath = (path) => path.replaceAll('\\', '/');
+
+/** @param {unknown} error */
+const isMissingFileError = (error) =>
+  error instanceof Error && 'code' in error && error.code === 'ENOENT';
+
+/** @param {string} path */
+const readCoverageSource = (path) => {
+  try {
+    return readFileSync(resolve(repositoryRoot, path), 'utf8');
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    throw error;
+  }
+};
 
 const getTrackedFiles = () => {
   const result = spawnSync('git', ['ls-files', '-z'], {
@@ -41,32 +58,39 @@ const isCoveredSource = (path, policy) =>
 const isCoverageInput = (path, policy) =>
   policy.include.some((pattern) => matchesGlob(path, pattern));
 
+const counterFreeNodeTypes = new Set([
+  'EmptyStatement',
+  'ExportAllDeclaration',
+  'ImportDeclaration',
+  'TSDeclareFunction',
+  'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration',
+]);
+const exportDeclarationNodeTypes = new Set([
+  'ExportDefaultDeclaration',
+  'ExportNamedDeclaration',
+]);
+
+/**
+ * @param {null | undefined | { type: string, declare?: boolean | null }} declaration
+ */
+const isCoverageCounterFreeDeclaration = (declaration) => {
+  if (declaration === null) return true;
+  return declaration === undefined
+    ? false
+    : isCoverageCounterFreeNode(declaration);
+};
+
 /**
  * @param {{ type: string, declare?: boolean | null, declaration?: null | { type: string, declare?: boolean | null } }} node
  * @returns {boolean}
  */
 const isCoverageCounterFreeNode = (node) => {
   if (node.declare === true) return true;
-  if (
-    node.type === 'ImportDeclaration' ||
-    node.type === 'ExportAllDeclaration' ||
-    node.type === 'TSInterfaceDeclaration' ||
-    node.type === 'TSTypeAliasDeclaration' ||
-    node.type === 'TSDeclareFunction' ||
-    node.type === 'EmptyStatement'
-  ) {
-    return true;
-  }
-  if (
-    node.type !== 'ExportNamedDeclaration' &&
-    node.type !== 'ExportDefaultDeclaration'
-  ) {
-    return false;
-  }
+  if (counterFreeNodeTypes.has(node.type)) return true;
   return (
-    node.declaration === null ||
-    (node.declaration !== undefined &&
-      isCoverageCounterFreeNode(node.declaration))
+    exportDeclarationNodeTypes.has(node.type) &&
+    isCoverageCounterFreeDeclaration(node.declaration)
   );
 };
 
@@ -89,6 +113,35 @@ export const isCoverageCounterFreeSource = (path, source) => {
   } catch {
     return false;
   }
+};
+
+/**
+ * Parse only covered sources that Istanbul omitted. A missing tracked source is
+ * deliberately not exempted so the ordinary coverage-policy error identifies
+ * it instead of leaking a raw filesystem exception.
+ *
+ * @param {CoveragePolicy} policy
+ * @param {string[]} trackedFiles
+ * @param {string[]} coverageFiles
+ * @param {(path: string) => string | null} readSource
+ */
+export const getCoverageCounterFreeFiles = (
+  policy,
+  trackedFiles,
+  coverageFiles,
+  readSource,
+) => {
+  const coveredFiles = new Set(coverageFiles.map(normalizePath));
+  return new Set(
+    trackedFiles
+      .filter(
+        (path) => isCoveredSource(path, policy) && !coveredFiles.has(path),
+      )
+      .filter((path) => {
+        const source = readSource(path);
+        return source !== null && isCoverageCounterFreeSource(path, source);
+      }),
+  );
 };
 
 /**
@@ -194,15 +247,11 @@ export const validateCoverageMap = () => {
     normalizePath(isAbsolute(path) ? relative(repositoryRoot, path) : path),
   );
   const trackedFiles = getTrackedFiles();
-  const counterFreeFiles = new Set(
-    trackedFiles
-      .filter((path) => isCoveredSource(path, policy))
-      .filter((path) =>
-        isCoverageCounterFreeSource(
-          path,
-          readFileSync(resolve(repositoryRoot, path), 'utf8'),
-        ),
-      ),
+  const counterFreeFiles = getCoverageCounterFreeFiles(
+    policy,
+    trackedFiles,
+    coverageFiles,
+    readCoverageSource,
   );
   const policyErrors = getCoveragePolicyErrors(
     policy,
@@ -245,13 +294,7 @@ export const validateCoverageMap = () => {
   return { executedStatementCount, fileCount: files.length, statementCount };
 };
 
-const executablePath = process.argv[1];
-const isMain =
-  executablePath !== undefined && executablePath !== ''
-    ? fileURLToPath(import.meta.url) === resolve(executablePath)
-    : false;
-
-if (isMain) {
+if (isDirectExecution(process.argv[1], import.meta.url)) {
   try {
     const result = validateCoverageMap();
     console.log(

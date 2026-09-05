@@ -77,7 +77,6 @@
       "**/*.test.{js,mjs,cjs,ts,tsx}",
       "**/*.spec.{js,mjs,cjs,ts,tsx}",
       "packages/react/src/worklets/audio-worklet-20250702.js",
-      "tools/**",
     ],
   },
   "overrides": [

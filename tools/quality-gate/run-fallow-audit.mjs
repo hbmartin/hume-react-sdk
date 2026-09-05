@@ -79,21 +79,16 @@ const audit = runPnpm([
   '--output-file',
   reportPath,
 ]);
-if (audit.status !== 0) {
-  if (existsSync(reportPath)) {
-    printAuditFailure();
-  } else {
-    console.error(`Fallow audit failed without writing ${reportPath}.`);
-  }
+const reportExists = existsSync(reportPath);
+if (!reportExists) {
+  console.error(`Fallow audit failed without writing ${reportPath}.`);
+} else if (audit.status !== 0) {
+  printAuditFailure();
 }
 
-const coverageCheck = run('node', [
-  'tools/quality-gate/check-fallow-coverage.mjs',
-  reportPath,
-]);
-if (
-  semanticCheck.status !== 0 ||
-  audit.status !== 0 ||
-  coverageCheck.status !== 0
-)
+const coverageStatus = reportExists
+  ? run('node', ['tools/quality-gate/check-fallow-coverage.mjs', reportPath])
+      .status
+  : 1;
+if (semanticCheck.status !== 0 || audit.status !== 0 || coverageStatus !== 0)
   process.exitCode = 1;
