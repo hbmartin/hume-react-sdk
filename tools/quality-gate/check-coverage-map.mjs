@@ -1,5 +1,6 @@
+import { parse } from '@babel/parser';
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, matchesGlob, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,14 +31,77 @@ const isCoveredSource = (path, policy) =>
   !policy.exclude.some((pattern) => matchesGlob(path, pattern));
 
 /**
+ * Coverage generation inputs include excluded tests and support modules. A
+ * change to any tracked file selected by an include glob can alter the map,
+ * even when that file is not itself required to appear in the map.
+ *
+ * @param {string} path
+ * @param {CoveragePolicy} policy
+ */
+const isCoverageInput = (path, policy) =>
+  policy.include.some((pattern) => matchesGlob(path, pattern));
+
+/**
+ * @param {{ type: string, declare?: boolean | null, declaration?: null | { type: string, declare?: boolean | null } }} node
+ * @returns {boolean}
+ */
+const isCoverageCounterFreeNode = (node) => {
+  if (node.declare === true) return true;
+  if (
+    node.type === 'ImportDeclaration' ||
+    node.type === 'ExportAllDeclaration' ||
+    node.type === 'TSInterfaceDeclaration' ||
+    node.type === 'TSTypeAliasDeclaration' ||
+    node.type === 'TSDeclareFunction' ||
+    node.type === 'EmptyStatement'
+  ) {
+    return true;
+  }
+  if (
+    node.type !== 'ExportNamedDeclaration' &&
+    node.type !== 'ExportDefaultDeclaration'
+  ) {
+    return false;
+  }
+  return (
+    node.declaration === null ||
+    (node.declaration !== undefined &&
+      isCoverageCounterFreeNode(node.declaration))
+  );
+};
+
+/**
+ * Istanbul omits modules that cannot receive a statement, branch, or function
+ * counter. Recognize only syntax that TypeScript erases or that merely links
+ * modules; everything else must still appear in the coverage map.
+ *
+ * @param {string} path
+ * @param {string} source
+ */
+export const isCoverageCounterFreeSource = (path, source) => {
+  try {
+    const file = parse(source, {
+      plugins: path.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
+      sourceFilename: path,
+      sourceType: 'module',
+    });
+    return file.program.body.every(isCoverageCounterFreeNode);
+  } catch {
+    return false;
+  }
+};
+
+/**
  * @param {CoveragePolicy} policy
  * @param {string[]} trackedFiles
  * @param {string[]} coverageFiles
+ * @param {ReadonlySet<string>} [counterFreeFiles]
  */
 export const getCoveragePolicyErrors = (
   policy,
   trackedFiles,
   coverageFiles,
+  counterFreeFiles = new Set(),
 ) => {
   const errors = [];
   for (const pattern of policy.include) {
@@ -51,7 +115,7 @@ export const getCoveragePolicyErrors = (
   );
   const coveredFiles = new Set(coverageFiles.map(normalizePath));
   for (const path of expectedFiles) {
-    if (!coveredFiles.has(path)) {
+    if (!coveredFiles.has(path) && !counterFreeFiles.has(path)) {
       errors.push(`coverage map is missing tracked source: ${path}`);
     }
   }
@@ -94,7 +158,7 @@ export const getTrackedCoverageInputs = () => {
   );
   return getTrackedFiles().filter(
     (path) =>
-      isCoveredSource(path, policy) ||
+      isCoverageInput(path, policy) ||
       path === 'vitest.config.mts' ||
       path === 'tools/vitest-config/base.mjs' ||
       path === 'coverage-policy.json' ||
@@ -129,10 +193,22 @@ export const validateCoverageMap = () => {
   const coverageFiles = Object.keys(coverage).map((path) =>
     normalizePath(isAbsolute(path) ? relative(repositoryRoot, path) : path),
   );
+  const trackedFiles = getTrackedFiles();
+  const counterFreeFiles = new Set(
+    trackedFiles
+      .filter((path) => isCoveredSource(path, policy))
+      .filter((path) =>
+        isCoverageCounterFreeSource(
+          path,
+          readFileSync(resolve(repositoryRoot, path), 'utf8'),
+        ),
+      ),
+  );
   const policyErrors = getCoveragePolicyErrors(
     policy,
-    getTrackedFiles(),
+    trackedFiles,
     coverageFiles,
+    counterFreeFiles,
   );
   if (policyErrors.length > 0) {
     throw new Error(

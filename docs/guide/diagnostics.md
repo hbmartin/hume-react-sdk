@@ -103,7 +103,7 @@ The complete catalogue for schema version 1:
 | Socket         | `socket.opened`, `socket.closed`                                                                                                                                                                                                                                    |
 | Resource       | `resource.initialization_started`, `resource.initialized`, `resource.stop_started`, `resource.stopped`, `resource.cleanup_failed`                                                                                                                                   |
 | Microphone     | `microphone.permission_requested`, `microphone.permission_resolved`, `microphone.mime_type_selected`, `microphone.recording_started`, `microphone.recording_stopped`, `microphone.audio_chunk_captured`, `microphone.flush_completed`, `microphone.analyzer_failed` |
-| Audio playback | `audio.chunk_received`, `audio.queue_changed`, `audio.playback_started`, `audio.playback_ended`, `audio.drain_completed`                                                                                                                                            |
+| Audio playback | `audio.chunk_received`, `audio.queue_changed`, `audio.worklet_message_ignored`, `audio.playback_started`, `audio.playback_ended`, `audio.drain_completed`                                                                                                           |
 | Audio devices  | `audio_device.switch_started`, `audio_device.switch_completed`, `audio_device.switch_failed`, `audio_device.switch_ignored`                                                                                                                                         |
 | Messages       | `message.sent`, `message.received`, `message.skipped`                                                                                                                                                                                                               |
 | Tools          | `tool.handler_started`, `tool.handler_completed`, `tool.handler_failed`, `tool.handler_skipped`                                                                                                                                                                     |
@@ -117,7 +117,8 @@ category of the affected subsystem: for example, `control.changed` can be
 the error they report.
 
 The high-volume names — `microphone.audio_chunk_captured`, `audio.chunk_received`,
-`audio.queue_changed`, and `message.received` — only appear at `debug` level.
+`audio.queue_changed`, `audio.worklet_message_ignored`, and `message.received` —
+only appear at `debug` level.
 
 ## Reference
 

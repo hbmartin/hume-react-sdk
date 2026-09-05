@@ -11,12 +11,6 @@
     "**/*.d.ts",
     "**/*.test.{ts,tsx}",
     "**/*.spec.{ts,tsx}",
-    "packages/embed/src/index.ts",
-    "packages/embed-react/src/index.ts",
-    "packages/react/src/index.ts",
-    "packages/react/src/lib/connection-message.ts",
-    "packages/react/src/models/connect-options.ts",
-    "packages/react/src/models/messages.ts",
     "packages/react/src/worklets/audio-worklet-20250702.js"
   ],
   "thresholds": {

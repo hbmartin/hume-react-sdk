@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +16,7 @@ import { test } from 'node:test';
 import {
   getCoveragePolicyErrors,
   getTrackedCoverageInputs,
+  isCoverageCounterFreeSource,
 } from '../quality-gate/check-coverage-map.mjs';
 import { compareBaselineStates } from '../quality-gate/check-fallow-baseline-policy.mjs';
 import {
@@ -951,6 +953,51 @@ void test('baseline policy module is import-safe', () => {
   assert.equal(typeof compareBaselineStates, 'function');
 });
 
+void test('baseline policy executes when invoked through a symlink', (t) => {
+  const root = createFixture(t, 'policy-symlink', {});
+  const linkedPolicy = resolve(root, 'baseline-policy.mjs');
+  symlinkSync(baselinePolicy, linkedPolicy);
+
+  const result = spawnSync(
+    process.execPath,
+    [linkedPolicy, '--compare-directories'],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+
+  assert.notEqual(result.status, 0, 'symlinked policy unexpectedly skipped');
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /requires BASE and CURRENT directories/,
+  );
+});
+
+/** @param {Record<string, unknown>} [summaryOverrides] */
+const emptyAuditReport = (summaryOverrides = {}) => ({
+  kind: 'audit',
+  verdict: 'pass',
+  changed_files_count: 0,
+  summary: {
+    dead_code_issues: 0,
+    dead_code_has_errors: false,
+    complexity_findings: 0,
+    max_cyclomatic: null,
+    duplication_clone_groups: 0,
+    ...summaryOverrides,
+  },
+  attribution: {
+    gate: 'new-only',
+    dead_code_introduced: 0,
+    dead_code_inherited: 0,
+    complexity_introduced: 0,
+    complexity_inherited: 0,
+    duplication_introduced: 0,
+    duplication_inherited: 0,
+    styling_introduced: 0,
+    styling_inherited: 0,
+    duplication_demoted: 0,
+  },
+});
+
 void test('Fallow coverage validation rejects nonnumeric match counts', (t) => {
   const validator = resolve(
     repositoryRoot,
@@ -989,7 +1036,7 @@ void test('Fallow coverage validation accepts an audit with no functions', (t) =
     'tools/quality-gate/check-fallow-coverage.mjs',
   );
   const root = createFixture(t, 'fallow-coverage-empty-audit', {
-    'report.json': JSON.stringify({ kind: 'audit', findings: [] }),
+    'report.json': JSON.stringify(emptyAuditReport()),
   });
   const result = spawnSync(
     process.execPath,
@@ -999,6 +1046,77 @@ void test('Fallow coverage validation accepts an audit with no functions', (t) =
 
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.match(result.stdout, /no analyzable functions/);
+});
+
+void test('Fallow coverage validation rejects an unproven empty audit', (t) => {
+  const validator = resolve(
+    repositoryRoot,
+    'tools/quality-gate/check-fallow-coverage.mjs',
+  );
+  const root = createFixture(t, 'fallow-coverage-unproven-empty-audit', {
+    'report.json': JSON.stringify({ kind: 'audit', findings: [] }),
+  });
+  const result = spawnSync(
+    process.execPath,
+    [validator, resolve(root, 'report.json')],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+
+  assert.notEqual(
+    result.status,
+    0,
+    'malformed empty audit unexpectedly passed',
+  );
+  assert.match(`${result.stdout}${result.stderr}`, /no health summary/);
+});
+
+void test('Fallow coverage validation rejects static coverage on an empty-shaped audit', (t) => {
+  const validator = resolve(
+    repositoryRoot,
+    'tools/quality-gate/check-fallow-coverage.mjs',
+  );
+  const root = createFixture(t, 'fallow-coverage-static-empty-audit', {
+    'report.json': JSON.stringify(
+      emptyAuditReport({ coverage_model: 'static_estimated' }),
+    ),
+  });
+  const result = spawnSync(
+    process.execPath,
+    [validator, resolve(root, 'report.json')],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+
+  assert.notEqual(result.status, 0, 'static empty audit unexpectedly passed');
+  assert.match(`${result.stdout}${result.stderr}`, /static-estimated/);
+});
+
+void test('Fallow coverage validation checks a present audit health summary', (t) => {
+  const validator = resolve(
+    repositoryRoot,
+    'tools/quality-gate/check-fallow-coverage.mjs',
+  );
+  const root = createFixture(t, 'fallow-coverage-audit-health-summary', {
+    'report.json': JSON.stringify({
+      ...emptyAuditReport(),
+      complexity: {
+        summary: {
+          coverage_model: 'istanbul',
+          coverage_source_consistency: 'istanbul',
+          istanbul_matched: 1,
+          istanbul_files_matched: 1,
+        },
+      },
+    }),
+  });
+  const result = spawnSync(
+    process.execPath,
+    [validator, resolve(root, 'report.json')],
+    { cwd: repositoryRoot, encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.doesNotMatch(result.stdout, /no analyzable functions/);
+  assert.match(result.stdout, /Fallow coverage verified/);
 });
 
 void test('coverage policy rejects missing maps, empty globs, and zero floors', () => {
@@ -1026,6 +1144,52 @@ void test('coverage policy rejects missing maps, empty globs, and zero floors', 
   );
 });
 
+void test('coverage policy accepts only counter-free sources missing from Istanbul', () => {
+  const policy = {
+    include: ['src/**/*.ts'],
+    exclude: [],
+    thresholds: {
+      'src/**': { branches: 50, functions: 50, lines: 50, statements: 50 },
+    },
+  };
+  const trackedFiles = ['src/index.ts', 'src/worker.ts'];
+  const counterFreeFiles = new Set(['src/index.ts']);
+  const errors = getCoveragePolicyErrors(
+    policy,
+    trackedFiles,
+    [],
+    counterFreeFiles,
+  );
+
+  assert.doesNotMatch(errors.join('\n'), /src\/index\.ts/);
+  assert.match(errors.join('\n'), /src\/worker\.ts/);
+});
+
+void test('coverage counter-free detection is conservative', () => {
+  assert.equal(
+    isCoverageCounterFreeSource(
+      'src/index.ts',
+      `import type { Config } from './config';
+       export { createClient } from './client';
+       export interface Options extends Config {}
+       export type Result = string;`,
+    ),
+    true,
+  );
+  assert.equal(
+    isCoverageCounterFreeSource('src/value.ts', 'export const value = 1;'),
+    false,
+  );
+  assert.equal(
+    isCoverageCounterFreeSource('src/value.ts', 'export enum Value { One }'),
+    false,
+  );
+  assert.equal(
+    isCoverageCounterFreeSource('src/broken.ts', 'export const = ;'),
+    false,
+  );
+});
+
 void test('JSONC parsing preserves strings and supports both comment forms', () => {
   assert.deepEqual(
     parseJsonc(`{
@@ -1042,10 +1206,20 @@ void test('JSONC parsing preserves strings and supports both comment forms', () 
   );
 });
 
-void test('the implicit audit base resolves to the target branch', () => {
-  const { base, mergeBase } = resolveAuditBase(undefined);
-  assert.ok(base === 'origin/main' || base === 'main', base);
-  assert.notEqual(mergeBase, '');
+void test('the configured audit base resolves in a shallow checkout', () => {
+  const previousAuditBase = process.env['FALLOW_AUDIT_BASE'];
+  process.env['FALLOW_AUDIT_BASE'] = 'HEAD';
+  try {
+    const { base, mergeBase } = resolveAuditBase(undefined);
+    assert.equal(base, 'HEAD');
+    assert.notEqual(mergeBase, '');
+  } finally {
+    if (previousAuditBase === undefined) {
+      delete process.env['FALLOW_AUDIT_BASE'];
+    } else {
+      process.env['FALLOW_AUDIT_BASE'] = previousAuditBase;
+    }
+  }
 });
 
 void test('scripts encode the complete gate and cannot casually bless debt', () => {
@@ -1104,6 +1278,12 @@ void test('scripts encode the complete gate and cannot casually bless debt', () 
   assert.ok(
     getTrackedCoverageInputs().includes('tools/vitest-config/base.mjs'),
     'shared Vitest config must invalidate stale coverage',
+  );
+  assert.ok(
+    getTrackedCoverageInputs().includes(
+      'packages/react/src/lib/useMicrophone.test.ts',
+    ),
+    'excluded tests selected by coverage includes must invalidate stale coverage',
   );
   const vitestConfig = readFileSync(
     resolve(repositoryRoot, 'vitest.config.mts'),

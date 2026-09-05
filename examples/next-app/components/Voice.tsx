@@ -88,7 +88,7 @@ export const Voice = ({ configId }: { configId?: string }) => {
           return response.error({
             error: 'Weather tool error',
             code: 'weather_tool_error',
-            level: 'error',
+            level: 'warn',
             content: 'There was an error with the weather tool',
           });
         }
@@ -96,7 +96,7 @@ export const Voice = ({ configId }: { configId?: string }) => {
         return response.error({
           error: 'Tool not found',
           code: 'tool_not_found',
-          level: 'warning',
+          level: 'warn',
           content: 'The tool you requested was not found',
         });
       }

@@ -1384,6 +1384,31 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['sensitive-500']).toBeUndefined();
   });
 
+  it('prioritizes named sensitive fields and signals omitted sensitive entries', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const sensitiveDetails = {
+      ...Object.fromEntries(
+        Array.from({ length: 500 }, (_, index) => [
+          `sensitive-${index}`,
+          index,
+        ]),
+      ),
+      error: 'Preserved priority error',
+    };
+
+    reporter.emit({ ...input, sensitiveDetails });
+
+    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.details['error']).toBe('Preserved priority error');
+    expect(events[0]?.details['sensitive-499']).toBeUndefined();
+    expect(events[0]?.details['__humeDiagnosticTruncated']).toBe(true);
+  });
+
   it('does not let nested sensitive content consume the ordinary entry reserve', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
@@ -1428,6 +1453,31 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(events[0]?.details['detail-0']).toBe(0);
     expect(events[0]?.details).toMatchObject(sensitiveDetails);
+  });
+
+  it('returns unused sensitive capacity before traversing ordinary priority data', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const reporter = createVoiceDiagnosticsReporter(() => ({
+      includeContent: true,
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const ordinaryError = Object.fromEntries(
+      Array.from({ length: 600 }, (_, index) => [`error-${index}`, index]),
+    );
+
+    reporter.emit({
+      ...input,
+      details: { error: ordinaryError },
+      sensitiveDetails: { content: 'Preserved sensitive content' },
+    });
+
+    expect(events[0]?.detailsTruncated).toBeUndefined();
+    expect(events[0]?.details['content']).toBe('Preserved sensitive content');
+    expect(events[0]?.details['error']).toMatchObject({
+      'error-0': 0,
+      'error-599': 599,
+    });
   });
 
   it('reserves sensitive entries before traversing a wide ordinary priority value', () => {

@@ -12,6 +12,10 @@ import {
 import type { AudioOutputMessage } from '../models/messages';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import {
+  createVoiceDiagnosticsReporter,
+  type VoiceDiagnosticEvent,
+} from './diagnostics';
+import {
   useSoundPlayer,
   useSoundPlayerForVoiceProvider,
 } from './useSoundPlayer';
@@ -1214,10 +1218,17 @@ describe('useSoundPlayer', () => {
     );
   });
 
-  it('ignores unknown worklet protocol extensions', async () => {
+  it('reports one debug event for unknown worklet protocol extensions', async () => {
     const onError = vi.fn();
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
     const { result } = renderHook(() =>
       useSoundPlayer({
+        diagnostics,
         enableAudioWorklet: true,
         onError,
         onPlayAudio: vi.fn(),
@@ -1230,11 +1241,20 @@ describe('useSoundPlayer', () => {
       fakePort.onmessage?.({
         data: { type: 'protocol_extension', value: true },
       } as MessageEvent);
+      fakePort.onmessage?.({
+        data: { type: 'another_extension', value: true },
+      } as MessageEvent);
     });
 
     expect(onError).not.toHaveBeenCalled();
     expect(result.current.queueLength).toBe(0);
     expect(result.current.isPlaying).toBe(false);
+    const ignoredEvents = events.filter(
+      (event) => event.name === 'audio.worklet_message_ignored',
+    );
+    expect(ignoredEvents).toHaveLength(1);
+    expect(ignoredEvents[0]?.level).toBe('debug');
+    expect(ignoredEvents[0]?.details['messageType']).toBe('protocol_extension');
   });
 
   it('reports the first teardown failure instead of retrying a detached player', async () => {
