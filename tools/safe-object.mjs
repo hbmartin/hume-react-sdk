@@ -6,10 +6,14 @@
  * @returns {unknown}
  */
 export function getOwnValue(value, key) {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor
-    ? descriptor.value
-    : undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor
+      ? descriptor.value
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

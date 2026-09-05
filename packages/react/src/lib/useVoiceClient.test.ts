@@ -681,7 +681,7 @@ describe('useVoiceClient', () => {
     );
   });
 
-  it('preserves the supported consumer tool-error level', async () => {
+  it('normalizes a non-null consumer tool-error level to warn', async () => {
     const socket = createSocket();
     humeMocks.connect.mockReturnValue(socket);
     const onToolCall = vi.fn<ToolCallHandler>((_message, send) =>
@@ -690,7 +690,7 @@ describe('useVoiceClient', () => {
           code: 'tool_failed',
           content: 'fallback',
           error: 'failed',
-          level: 'warn',
+          level: 'error',
         }),
       ),
     );

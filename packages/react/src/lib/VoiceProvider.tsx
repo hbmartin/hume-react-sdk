@@ -39,6 +39,7 @@ import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
 } from '../utils/closeAudioContextWithTimeout';
+import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { getAuthStrategyError } from './auth';
 import type { ConnectionMessage } from './connection-message';
 import {
@@ -234,11 +235,6 @@ type ForcedPlayerCleanupResult =
   | Readonly<{ status: 'fulfilled' }>
   | Readonly<{ status: 'pending' }>
   | Readonly<{ failure: unknown; status: 'rejected' }>;
-
-const getMonotonicTime = () => {
-  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
-  return globalThis.performance?.now() ?? Date.now();
-};
 
 const RESOURCE_CLEANUP_TIMEOUT_MS = 15_000;
 

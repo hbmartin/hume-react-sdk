@@ -7,12 +7,7 @@
     "examples/vite-app/src/**/*.{ts,tsx}",
     "examples/vite-app-embed/src/**/*.{ts,tsx}"
   ],
-  "exclude": [
-    "**/*.d.ts",
-    "**/*.test.{ts,tsx}",
-    "**/*.spec.{ts,tsx}",
-    "packages/react/src/worklets/audio-worklet-20250702.js"
-  ],
+  "exclude": ["**/*.d.ts", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
   "thresholds": {
     "examples/next-app/**": {
       "branches": 23,

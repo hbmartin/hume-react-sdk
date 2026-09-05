@@ -1670,13 +1670,6 @@ const sanitizeValue = (
       }
     }
 
-    if (
-      sensitiveRootKeys !== undefined &&
-      sensitivePriorityKeys !== undefined &&
-      sensitiveRootKeys.size > sensitivePriorityKeys.size
-    ) {
-      markSanitizedObjectTruncated(result, budget);
-    }
     if (enumerated.incomplete) markSanitizedObjectTruncated(result, budget);
 
     for (const entry of ordinaryPriorityEntries) {
@@ -1689,6 +1682,16 @@ const sanitizeValue = (
       if (priorityKeys?.has(key) === true) continue;
       if (sensitiveRootKeys?.has(key) === true) continue;
       if (sanitizeEntry(key, true) === 'stop') break;
+    }
+    // Sensitive keys beyond the priority allowance run only after every
+    // ordinary class. This preserves the ordinary entry reserve without
+    // discarding sensitive details when shared capacity remains.
+    if (sensitiveRootKeys !== undefined) {
+      for (const key of enumerated.keys) {
+        if (!sensitiveRootKeys.has(key)) continue;
+        if (sensitivePriorityKeys?.has(key) === true) continue;
+        if (sanitizeEntry(key, true) === 'stop') break;
+      }
     }
     return result;
   } finally {

@@ -492,6 +492,66 @@ describe('useMicrophone', () => {
     expect(rafCallbacks.has(4)).toBe(true);
   });
 
+  it('keeps the microphone unmuted when restarting the analyzer fails', () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const track = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const disconnect = vi.fn();
+    const getByteFrequencyData = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error('analyzer resume failed');
+      });
+    const context = {
+      ...createAudioContext(),
+      createMediaStreamSource: vi.fn(() => ({
+        connect: vi.fn(),
+        disconnect,
+      })),
+      createAnalyser: vi.fn(() => ({
+        fftSize: 0,
+        frequencyBinCount: 1024,
+        getByteFrequencyData,
+      })),
+    } as unknown as AudioContext;
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream([track]), context);
+
+    act(() => result.current.mute());
+    expect(track.enabled).toBe(false);
+
+    expect(() => act(() => result.current.unmute())).not.toThrow();
+
+    expect(track.enabled).toBe(true);
+    expect(result.current.isMuted).toBe(false);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(
+      events.find((event) => event.name === 'microphone.analyzer_failed'),
+    ).toMatchObject({
+      level: 'warn',
+      category: 'microphone',
+      details: {
+        message: 'analyzer resume failed',
+        error: { message: 'analyzer resume failed' },
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      level: 'info',
+      category: 'microphone',
+      name: 'control.changed',
+      details: { control: 'microphone_mute', value: false },
+    });
+  });
+
   it('keeps mute state unchanged and reports when track enumeration fails', () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const events: VoiceDiagnosticEvent[] = [];
@@ -1573,7 +1633,17 @@ describe('useMicrophone', () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM));
     const oldTrackStop = vi.fn();
     const candidateTrackStop = vi.fn();
-    const { result, unmount, onAudioCaptured } = renderMicrophone();
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const onStopRecording = vi.fn();
+    const { result, unmount, onAudioCaptured } = renderMicrophone({
+      diagnostics,
+      onStopRecording,
+    });
     const context = createAudioContext();
     result.current.start(
       createStream([
@@ -1621,6 +1691,10 @@ describe('useMicrophone', () => {
     expect(candidateRecorder.stop).toHaveBeenCalledOnce();
     expect(candidateTrackStop).toHaveBeenCalledOnce();
     expect(onAudioCaptured).not.toHaveBeenCalled();
+    expect(onStopRecording).toHaveBeenCalledOnce();
+    expect(
+      events.filter((event) => event.name === 'microphone.recording_stopped'),
+    ).toHaveLength(1);
   });
 
   it('keeps the original capture when candidate recorder startup fails', async () => {
