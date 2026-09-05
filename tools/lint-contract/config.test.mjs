@@ -957,6 +957,67 @@ void test('bootstrap preserves compatible legacy health totals', (t) => {
   );
 });
 
+void test('bootstrap reports malformed legacy health records as policy errors', (t) => {
+  const baseFiles = policyStateFiles();
+  delete baseFiles['.fallow-baselines/policy.json'];
+  baseFiles['.fallow-baselines/health.json'] = JSON.stringify({
+    finding_counts: {
+      'src/invalid-categories.ts': null,
+      'src/invalid-count.ts': { complexity_high: null },
+    },
+  });
+  const base = createFixture(t, 'policy-malformed-legacy-base', baseFiles);
+  const current = createFixture(
+    t,
+    'policy-malformed-legacy-current',
+    policyStateFiles(),
+  );
+
+  const result = runPolicyComparison(base, current);
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.notEqual(
+    result.status,
+    0,
+    'malformed legacy health unexpectedly passed',
+  );
+  assert.match(output, /base health legacy path has invalid categories/);
+  assert.match(output, /base health legacy path has invalid count/);
+  assert.doesNotMatch(output, /TypeError/);
+});
+
+void test('bootstrap does not aggregate malformed current health records', (t) => {
+  const baseFiles = policyStateFiles();
+  delete baseFiles['.fallow-baselines/policy.json'];
+  const baseHealthSource = baseFiles['.fallow-baselines/health.json'];
+  if (baseHealthSource === undefined)
+    throw new Error('Missing health baseline');
+  const baseHealth = /** @type {{ finding_counts: unknown }} */ (
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the fixture deliberately projects the generated aggregate section into a legacy baseline
+    JSON.parse(baseHealthSource)
+  );
+  baseFiles['.fallow-baselines/health.json'] = JSON.stringify({
+    finding_counts: baseHealth.finding_counts,
+  });
+  const currentFiles = policyStateFiles();
+  currentFiles['.fallow-baselines/health.json'] = JSON.stringify({
+    identity_finding_counts: { 'src/index.ts\u0000work': null },
+  });
+  const base = createFixture(t, 'policy-valid-legacy-base', baseFiles);
+  const current = createFixture(t, 'policy-malformed-current', currentFiles);
+
+  const result = runPolicyComparison(base, current);
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.notEqual(
+    result.status,
+    0,
+    'malformed current health unexpectedly passed',
+  );
+  assert.match(output, /bootstrap health identity has invalid categories/);
+  assert.doesNotMatch(output, /TypeError/);
+});
+
 void test('baseline policy module is import-safe', () => {
   assert.equal(typeof compareBaselineStates, 'function');
 });
