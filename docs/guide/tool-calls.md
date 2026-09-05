@@ -80,12 +80,12 @@ Three things are easy to get wrong:
 
 `send.error` takes four fields:
 
-| Field     | Purpose                                   |
-| --------- | ----------------------------------------- |
-| `error`   | A short machine-ish label for the failure |
-| `code`    | Your error code, for your own logs        |
-| `level`   | Severity, for example `warn`              |
-| `content` | What EVI should tell the user             |
+| Field     | Purpose                                           |
+| --------- | ------------------------------------------------- |
+| `error`   | A short machine-ish label for the failure         |
+| `code`    | Your error code, for your own logs                |
+| `level`   | Optional; `warn` by default, or `null` to omit it |
+| `content` | What EVI should tell the user                     |
 
 `content` is the part the assistant may speak, so write it for a listener.
 

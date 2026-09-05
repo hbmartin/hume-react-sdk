@@ -514,7 +514,7 @@ export const useVoiceClient = (props: {
                           toolCallId: messageWithReceivedAt.toolCallId,
                           error,
                           code,
-                          ...(level === null ? {} : { level: level ?? 'warn' }),
+                          ...(level === null ? {} : { level: 'warn' as const }),
                           content,
                         }),
                       },

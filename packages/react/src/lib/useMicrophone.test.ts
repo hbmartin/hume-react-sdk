@@ -573,7 +573,7 @@ describe('useMicrophone', () => {
     const disconnect = vi.fn();
     const getByteFrequencyData = vi
       .fn()
-      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce((data: Uint8Array) => data.fill(255))
       .mockImplementationOnce(() => {
         throw new Error('animation frame analyzer failed');
       });
@@ -591,12 +591,19 @@ describe('useMicrophone', () => {
     } as unknown as AudioContext;
     const { result } = renderMicrophone({ diagnostics });
     result.current.start(createStream(), context);
+    act(() => rafCallbacks.get(1)?.(0));
+    expect(
+      result.current.fftStore.getSnapshot().some((value) => value > 0),
+    ).toBe(true);
 
     expect(() => act(() => rafCallbacks.get(2)?.(0))).not.toThrow();
 
     expect(getByteFrequencyData).toHaveBeenCalledTimes(2);
     expect(disconnect).toHaveBeenCalledOnce();
     expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+    expect(
+      result.current.fftStore.getSnapshot().every((value) => value === 0),
+    ).toBe(true);
     expect(
       events.find((event) => event.name === 'microphone.analyzer_failed'),
     ).toMatchObject({
@@ -609,7 +616,7 @@ describe('useMicrophone', () => {
     });
   });
 
-  it('completes the mute transition when analyzer cleanup throws', () => {
+  it('reports cancellation failures without disabling the analyzer', () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     vi.stubGlobal(
       'cancelAnimationFrame',
@@ -627,26 +634,216 @@ describe('useMicrophone', () => {
       enabled: true,
       stop: vi.fn(),
     } as unknown as MediaStreamTrack;
+    const getByteFrequencyData = vi.fn();
+    const context = {
+      ...createAudioContext(),
+      createAnalyser: vi.fn(() => ({
+        fftSize: 0,
+        frequencyBinCount: 1024,
+        getByteFrequencyData,
+      })),
+    } as unknown as AudioContext;
     const { result } = renderMicrophone({ diagnostics });
-    result.current.start(createStream([track]), createAudioContext());
+    result.current.start(createStream([track]), context);
 
     expect(() => act(() => result.current.mute())).not.toThrow();
 
     expect(track.enabled).toBe(false);
     expect(result.current.isMuted).toBe(true);
     expect(
-      events.find((event) => event.name === 'microphone.analyzer_failed'),
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to pause the microphone analyzer animation frame.',
+      ),
     ).toMatchObject({
       level: 'warn',
       category: 'microphone',
-      details: { message: 'animation cancellation failed' },
+      details: {
+        message: 'Failed to pause the microphone analyzer animation frame.',
+        error: { message: 'animation cancellation failed' },
+      },
     });
+    expect(
+      events.find((event) => event.name === 'microphone.analyzer_failed'),
+    ).toBeUndefined();
     expect(events.at(-1)).toMatchObject({
       level: 'info',
       category: 'microphone',
       name: 'control.changed',
       details: { control: 'microphone_mute', value: true },
     });
+
+    act(() => result.current.unmute());
+
+    expect(track.enabled).toBe(true);
+    expect(result.current.isMuted).toBe(false);
+    expect(getByteFrequencyData).toHaveBeenCalledTimes(2);
+  });
+
+  it('finishes teardown when analyzer and FFT cleanup fail', async () => {
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn(() => {
+        throw new Error('animation cancellation failed');
+      }),
+    );
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const trackStop = vi.fn();
+    const { contextClose } = stubOwnedAudioContext();
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(
+      createStream([
+        { enabled: true, stop: trackStop } as unknown as MediaStreamTrack,
+      ]),
+    );
+    vi.spyOn(result.current.fftStore, 'clear').mockImplementationOnce(() => {
+      throw new Error('FFT store clear failed');
+    });
+
+    await act(() => result.current.stop());
+
+    expect(recorders[0]?.stop).toHaveBeenCalledOnce();
+    expect(trackStop).toHaveBeenCalledOnce();
+    expect(contextClose).toHaveBeenCalledOnce();
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to cancel the microphone analyzer animation frame.',
+      ),
+    ).toMatchObject({
+      details: { error: { message: 'animation cancellation failed' } },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to clear FFT state during microphone cleanup.',
+      ),
+    ).toMatchObject({
+      details: { error: { message: 'FFT store clear failed' } },
+    });
+  });
+
+  it('does not let a stale analyzer frame stop a replacement analyzer', async () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    let nextRafId = 1;
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        const id = nextRafId++;
+        rafCallbacks.set(id, callback);
+        return id;
+      }),
+    );
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn(() => {
+        throw new Error('animation cancellation failed');
+      }),
+    );
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const oldDisconnect = vi.fn();
+    const replacementDisconnect = vi.fn();
+    const oldGetByteFrequencyData = vi.fn();
+    const replacementGetByteFrequencyData = vi.fn();
+    const context = {
+      ...createAudioContext(),
+      createMediaStreamSource: vi
+        .fn()
+        .mockReturnValueOnce({ connect: vi.fn(), disconnect: oldDisconnect })
+        .mockReturnValueOnce({
+          connect: vi.fn(),
+          disconnect: replacementDisconnect,
+        }),
+      createAnalyser: vi
+        .fn()
+        .mockReturnValueOnce({
+          fftSize: 0,
+          frequencyBinCount: 1024,
+          getByteFrequencyData: oldGetByteFrequencyData,
+        })
+        .mockReturnValueOnce({
+          fftSize: 0,
+          frequencyBinCount: 1024,
+          getByteFrequencyData: replacementGetByteFrequencyData,
+        }),
+    } as unknown as AudioContext;
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+    }));
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream(), context);
+
+    await act(() => result.current.replace(createStream(), context));
+    expect(oldDisconnect).toHaveBeenCalledOnce();
+    expect(replacementDisconnect).not.toHaveBeenCalled();
+
+    act(() => rafCallbacks.get(2)?.(0));
+
+    expect(oldGetByteFrequencyData).toHaveBeenCalledOnce();
+    expect(replacementGetByteFrequencyData).toHaveBeenCalledOnce();
+    expect(replacementDisconnect).not.toHaveBeenCalled();
+
+    act(() => rafCallbacks.get(4)?.(0));
+    expect(replacementGetByteFrequencyData).toHaveBeenCalledTimes(2);
+    expect(replacementDisconnect).not.toHaveBeenCalled();
+
+    await act(() => result.current.stop());
+  });
+
+  it('keeps replacement audio forwarding when FFT clearing throws', async () => {
+    const forwardedBuffer = new Uint8Array([7]).buffer;
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const context = createAudioContext();
+    const { result, onAudioCaptured } = renderMicrophone({ diagnostics });
+    result.current.start(createStream(), context);
+    act(() => result.current.mute());
+    const clearFftStore = vi
+      .spyOn(result.current.fftStore, 'clear')
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error('FFT store clear failed');
+      });
+
+    await act(() => result.current.replace(createStream(), context));
+    recorders[1]?.emit('dataavailable', {
+      data: {
+        arrayBuffer: vi.fn().mockResolvedValue(forwardedBuffer),
+      } as unknown as Blob,
+    } as BlobEvent);
+    await act(() => Promise.resolve());
+
+    expect(onAudioCaptured).toHaveBeenCalledWith(forwardedBuffer);
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to clear FFT state after replacing a muted microphone.',
+      ),
+    ).toMatchObject({
+      details: { error: { message: 'FFT store clear failed' } },
+    });
+
+    clearFftStore.mockRestore();
+    await act(() => result.current.stop());
   });
 
   it('keeps mute state unchanged and reports when track enumeration fails', () => {

@@ -30,6 +30,8 @@ export class FftStore {
 
   private _rafId: number | null = null;
 
+  private _generation = 0;
+
   write(data: number[]): void {
     for (let i = 0; i < BARK_BAND_COUNT; i++) {
       this._buffer[i] = data[i] ?? 0;
@@ -43,9 +45,15 @@ export class FftStore {
   clear(): void {
     this._buffer.fill(0);
     this._dirty = false;
-    if (this._rafId !== null) {
-      cancelAnimationFrame(this._rafId);
-      this._rafId = null;
+    this._generation += 1;
+    const rafId = this._rafId;
+    this._rafId = null;
+    if (rafId !== null) {
+      try {
+        cancelAnimationFrame(rafId);
+      } catch {
+        // The invalidated callback is generation-guarded if cancellation fails.
+      }
     }
     if (this._snapshot.every((value) => value === 0)) return;
 
@@ -54,7 +62,9 @@ export class FftStore {
 
   private _scheduleFlush(): void {
     if (this._rafId !== null) return;
+    const generation = this._generation;
     this._rafId = requestAnimationFrame(() => {
+      if (generation !== this._generation) return;
       this._rafId = null;
       this._flush();
     });

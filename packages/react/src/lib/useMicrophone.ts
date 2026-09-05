@@ -119,6 +119,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const currentAnalyzer = useRef<AnalyserNode | null>(null);
   const fftAnimationId = useRef<number | null>(null);
+  const fftFrameGeneration = useRef(0);
   const analyzerSource = useRef<MediaStreamAudioSourceNode | null>(null);
   const fftDrawCallback = useRef<FrameRequestCallback | null>(null);
 
@@ -327,7 +328,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [diagnostics],
   );
 
-  const reportDataReadFailure = useCallback(
+  const reportMicrophoneResourceFailure = useCallback(
     (message: string, error: unknown) => {
       diagnostics.current.emit({
         level: 'warn',
@@ -340,41 +341,71 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [diagnostics],
   );
 
-  const stopFftAnalyzer = useCallback(() => {
-    const animationId = fftAnimationId.current;
-    fftAnimationId.current = null;
-    if (animationId !== null) {
+  const clearFftStore = useCallback(
+    (message: string) => {
       try {
-        cancelAnimationFrame(animationId);
-      } catch {
-        // A stale callback will observe the cleared analyzer refs and return.
+        fftStore.clear();
+      } catch (error) {
+        reportMicrophoneResourceFailure(message, error);
       }
-    }
-    fftDrawCallback.current = null;
+    },
+    [fftStore, reportMicrophoneResourceFailure],
+  );
 
-    const source = analyzerSource.current;
-    analyzerSource.current = null;
-    if (source) {
-      try {
-        source.disconnect();
-      } catch {
-        // The source may already have been disconnected.
+  const stopFftAnalyzer = useCallback(
+    (expectedDraw?: FrameRequestCallback) => {
+      if (
+        expectedDraw !== undefined &&
+        fftDrawCallback.current !== expectedDraw
+      ) {
+        return false;
       }
-    }
-    currentAnalyzer.current = null;
-  }, []);
+
+      fftFrameGeneration.current += 1;
+      const animationId = fftAnimationId.current;
+      fftAnimationId.current = null;
+      if (animationId !== null) {
+        try {
+          cancelAnimationFrame(animationId);
+        } catch (error) {
+          reportMicrophoneResourceFailure(
+            'Failed to cancel the microphone analyzer animation frame.',
+            error,
+          );
+        }
+      }
+      fftDrawCallback.current = null;
+
+      const source = analyzerSource.current;
+      analyzerSource.current = null;
+      if (source) {
+        try {
+          source.disconnect();
+        } catch {
+          // The source may already have been disconnected.
+        }
+      }
+      currentAnalyzer.current = null;
+      return true;
+    },
+    [reportMicrophoneResourceFailure],
+  );
 
   const pauseFftAnalyzer = useCallback(() => {
+    fftFrameGeneration.current += 1;
     const animationId = fftAnimationId.current;
     fftAnimationId.current = null;
     if (animationId !== null) {
       try {
         cancelAnimationFrame(animationId);
-      } catch {
-        // A stale callback will observe the muted state and return.
+      } catch (error) {
+        reportMicrophoneResourceFailure(
+          'Failed to pause the microphone analyzer animation frame.',
+          error,
+        );
       }
     }
-  }, []);
+  }, [reportMicrophoneResourceFailure]);
 
   const resumeFftAnalyzer = useCallback(() => {
     if (fftAnimationId.current !== null || isMutedRef.current) return;
@@ -382,8 +413,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
   }, []);
 
   const reportAnalyzerFailure = useCallback(
-    (error: unknown) => {
-      stopFftAnalyzer();
+    (error: unknown, expectedDraw?: FrameRequestCallback) => {
+      if (!stopFftAnalyzer(expectedDraw)) return;
       const message = getBrowserErrorMessage(error) ?? 'Unknown error';
       diagnostics.current.emit({
         level: 'warn',
@@ -391,9 +422,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
         name: 'microphone.analyzer_failed',
         details: { message, error },
       });
+      clearFftStore('Failed to reset FFT state after an analyzer failure.');
     },
     // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-    [diagnostics, stopFftAnalyzer],
+    [clearFftStore, diagnostics, stopFftAnalyzer],
   );
 
   const finishRecordingLifecycle = useCallback(
@@ -470,7 +502,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
           }
         })
         .catch((err: unknown) => {
-          reportDataReadFailure(
+          reportMicrophoneResourceFailure(
             'Failed to read captured microphone data.',
             err,
           );
@@ -482,43 +514,59 @@ export const useMicrophone = (props: MicrophoneProps) => {
       );
     },
     // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
-    [diagnostics, reportDataReadFailure, sendAudio],
+    [diagnostics, reportMicrophoneResourceFailure, sendAudio],
   );
 
   const startFftAnalyzer = useCallback(
     (stream: MediaStream) => {
-      if (!audioContext.current) {
+      const context = audioContext.current;
+      if (!context) {
         return;
       }
 
-      const source = audioContext.current.createMediaStreamSource(stream);
+      const source = context.createMediaStreamSource(stream);
       analyzerSource.current = source;
-      currentAnalyzer.current = audioContext.current.createAnalyser();
-      currentAnalyzer.current.fftSize = 2048;
-      const bufferLength = currentAnalyzer.current.frequencyBinCount;
+      const analyzer = context.createAnalyser();
+      currentAnalyzer.current = analyzer;
+      analyzer.fftSize = 2048;
+      const bufferLength = analyzer.frequencyBinCount;
 
       const dataArray = new Uint8Array(bufferLength);
       const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
-      source.connect(currentAnalyzer.current);
+      source.connect(analyzer);
       const draw: FrameRequestCallback = () => {
-        fftAnimationId.current = null;
+        if (
+          fftDrawCallback.current !== draw ||
+          currentAnalyzer.current !== analyzer ||
+          analyzerSource.current !== source ||
+          audioContext.current !== context
+        ) {
+          return;
+        }
+
         try {
-          if (!currentAnalyzer.current || !audioContext.current) {
-            return;
-          }
-
           if (isMutedRef.current) return;
-          currentAnalyzer.current.getByteFrequencyData(dataArray);
+          analyzer.getByteFrequencyData(dataArray);
 
-          const sampleRate = audioContext.current.sampleRate;
+          const sampleRate = context.sampleRate;
 
           convertLinearFrequenciesToBarkInto(dataArray, sampleRate, barkBuffer);
 
           fftStore.write(barkBuffer);
-          fftAnimationId.current = requestAnimationFrame(draw);
+          const frameGeneration = fftFrameGeneration.current;
+          fftAnimationId.current = requestAnimationFrame((timestamp) => {
+            if (
+              frameGeneration !== fftFrameGeneration.current ||
+              fftDrawCallback.current !== draw
+            ) {
+              return;
+            }
+            fftAnimationId.current = null;
+            draw(timestamp);
+          });
         } catch (error) {
-          reportAnalyzerFailure(error);
+          reportAnalyzerFailure(error, draw);
         }
       };
       fftDrawCallback.current = draw;
@@ -576,7 +624,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       stopFftAnalyzer();
-      fftStore.clear();
+      clearFftStore('Failed to clear FFT state during microphone cleanup.');
 
       let recorderStopped = true;
       if (recorderToStop) {
@@ -773,7 +821,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [
       dataHandler,
       diagnostics,
-      fftStore,
+      clearFftStore,
       finishRecordingLifecycle,
       retryRetiredMicrophoneStreams,
       stopFftAnalyzer,
@@ -837,7 +885,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
       try {
         if (isMutedRef.current) {
           applyMuteStateToStream(stream, true);
-          fftStore.clear();
+          clearFftStore(
+            'Failed to clear FFT state while starting a muted microphone.',
+          );
         }
         const nextRecorder = new MediaRecorder(stream, { mimeType });
         recorder.current = nextRecorder;
@@ -884,7 +934,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       diagnostics,
       disposeMicrophoneResources,
       enqueueMicrophoneOperation,
-      fftStore,
+      clearFftStore,
       onStartRecordingRef,
       reportAnalyzerFailure,
       reportClosureFailure,
@@ -971,7 +1021,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             }
           })
           .catch((error: unknown) => {
-            reportDataReadFailure(
+            reportMicrophoneResourceFailure(
               'Failed to read replacement microphone data.',
               error,
             );
@@ -1132,7 +1182,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
         reportAnalyzerFailure(error);
       }
       if (isMutedRef.current) {
-        fftStore.clear();
+        clearFftStore(
+          'Failed to clear FFT state after replacing a muted microphone.',
+        );
       }
 
       candidateMode = 'forwarding';
@@ -1149,10 +1201,10 @@ export const useMicrophone = (props: MicrophoneProps) => {
       disposeMicrophoneResources,
       diagnostics,
       finishRecordingLifecycle,
-      fftStore,
+      clearFftStore,
       reportAnalyzerFailure,
       reportClosureFailure,
-      reportDataReadFailure,
+      reportMicrophoneResourceFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
@@ -1209,11 +1261,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       isMutedRef.current = true;
       pauseFftAnalyzer();
-      try {
-        fftStore.clear();
-      } catch (error) {
-        reportAnalyzerFailure(error);
-      }
+      clearFftStore('Failed to clear FFT state while muting the microphone.');
       setIsMuted(true);
       diagnostics.current.emit({
         level: 'info',
@@ -1227,8 +1275,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       applyMuteStateToActiveStreams,
       applyMuteStateToRetiredStreams,
       diagnostics,
-      fftStore,
-      reportAnalyzerFailure,
+      clearFftStore,
       reportMuteStateFailure,
       reportRetiredStreamMuteFailure,
       pauseFftAnalyzer,
