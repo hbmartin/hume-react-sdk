@@ -12,6 +12,7 @@ import {
   throwCleanupFailures,
 } from '../utils/cleanupErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
+import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { stopMediaStreamTracks } from '../utils/stopMediaStreamTracks';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
 import {
@@ -32,11 +33,6 @@ const MICROPHONE_OPERATION_IN_PROGRESS_MESSAGE =
   'A microphone operation is still in progress. Wait for it before starting again.';
 const RECORDER_FINAL_DATA_TIMEOUT_MS = 1_000;
 const noop = () => {};
-
-const getMonotonicTime = () => {
-  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
-  return globalThis.performance?.now() ?? Date.now();
-};
 
 const settleBeforeDeadline = async (
   operation: PromiseLike<unknown>,
@@ -377,6 +373,40 @@ export const useMicrophone = (props: MicrophoneProps) => {
     fftDrawCallback.current?.(0);
   }, []);
 
+  const reportAnalyzerFailure = useCallback(
+    (error: unknown) => {
+      stopFftAnalyzer();
+      const message = getBrowserErrorMessage(error) ?? 'Unknown error';
+      diagnostics.current.emit({
+        level: 'warn',
+        category: 'microphone',
+        name: 'microphone.analyzer_failed',
+        details: { message, error },
+      });
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
+    [diagnostics, stopFftAnalyzer],
+  );
+
+  const finishRecordingLifecycle = useCallback(
+    (wasRecording = recordingStarted.current) => {
+      recordingStarted.current = false;
+      if (!wasRecording) return;
+      diagnostics.current.emit({
+        level: 'info',
+        category: 'microphone',
+        name: 'microphone.recording_stopped',
+      });
+      invokeIsolatedConsumerCallback(
+        diagnostics.current,
+        'onStopRecording',
+        () => onStopRecordingRef.current?.(),
+      );
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
+    [diagnostics, onStopRecordingRef],
+  );
+
   const retryRetiredMicrophoneStream = useCallback(
     (retiredStream: MediaStream): unknown[] => {
       const failures: unknown[] = [];
@@ -710,16 +740,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       if (wasRecording && recorderStopped && recordingLifecycle === 'stop') {
-        diagnostics.current.emit({
-          level: 'info',
-          category: 'microphone',
-          name: 'microphone.recording_stopped',
-        });
-        invokeIsolatedConsumerCallback(
-          diagnostics.current,
-          'onStopRecording',
-          () => onStopRecordingRef.current?.(),
-        );
+        finishRecordingLifecycle(true);
       }
 
       if (contextToClose && shouldCloseContext && !preserveAudioContext) {
@@ -741,7 +762,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       dataHandler,
       diagnostics,
       fftStore,
-      onStopRecordingRef,
+      finishRecordingLifecycle,
       retryRetiredMicrophoneStreams,
       stopFftAnalyzer,
     ],
@@ -798,14 +819,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       try {
         startFftAnalyzer(stream);
       } catch (e: unknown) {
-        stopFftAnalyzer();
-        const message = getBrowserErrorMessage(e) ?? 'Unknown error';
-        diagnostics.current.emit({
-          level: 'warn',
-          category: 'microphone',
-          name: 'microphone.analyzer_failed',
-          details: { message, error: e },
-        });
+        reportAnalyzerFailure(e);
       }
 
       try {
@@ -860,9 +874,9 @@ export const useMicrophone = (props: MicrophoneProps) => {
       enqueueMicrophoneOperation,
       fftStore,
       onStartRecordingRef,
+      reportAnalyzerFailure,
       reportClosureFailure,
       startFftAnalyzer,
-      stopFftAnalyzer,
     ],
   );
 
@@ -1059,6 +1073,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       if (!isCurrent()) {
         disposeCandidate();
+        finishRecordingLifecycle();
         throw createMicrophoneAbortError();
       }
 
@@ -1068,6 +1083,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
         registeredCandidate.stream !== stream
       ) {
         disposeCandidate();
+        finishRecordingLifecycle();
         throw createMicrophoneAbortError();
       }
       if (registeredCandidate.needsMuteReconciliation) {
@@ -1101,14 +1117,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       try {
         startFftAnalyzer(stream);
       } catch (error) {
-        stopFftAnalyzer();
-        const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-        diagnostics.current.emit({
-          level: 'warn',
-          category: 'microphone',
-          name: 'microphone.analyzer_failed',
-          details: { message, error },
-        });
+        reportAnalyzerFailure(error);
       }
       if (isMutedRef.current) {
         fftStore.clear();
@@ -1127,14 +1136,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
       applyMuteStateToStream,
       disposeMicrophoneResources,
       diagnostics,
+      finishRecordingLifecycle,
       fftStore,
+      reportAnalyzerFailure,
       reportClosureFailure,
       reportDataReadFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
       sendAudio,
       startFftAnalyzer,
-      stopFftAnalyzer,
     ],
   );
 
@@ -1217,7 +1227,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
         return;
       }
       isMutedRef.current = false;
-      resumeFftAnalyzer();
+      try {
+        resumeFftAnalyzer();
+      } catch (error) {
+        reportAnalyzerFailure(error);
+      }
       setIsMuted(false);
       diagnostics.current.emit({
         level: 'info',
@@ -1230,6 +1244,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
     [
       applyMuteStateToActiveStreams,
       diagnostics,
+      reportAnalyzerFailure,
       reportMuteStateFailure,
       resumeFftAnalyzer,
     ],

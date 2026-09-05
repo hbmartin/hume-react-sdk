@@ -288,7 +288,7 @@ const validateCoveragePolicy = (policy, label, errors) => {
       if (
         typeof floor !== 'number' ||
         !Number.isFinite(floor) ||
-        floor < 0 ||
+        floor <= 0 ||
         floor > 100
       ) {
         errors.push(

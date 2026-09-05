@@ -5,6 +5,7 @@ import type { AudioOutputMessage } from '../models/messages';
 import { getDataProperty } from '../utils/aggregateErrors';
 import { getBrowserErrorMessage } from '../utils/browserErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
+import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
 import type { VoiceDiagnosticsReporter } from './diagnostics';
@@ -69,11 +70,6 @@ const supportsSetSinkId = (
   setSinkId: (deviceId: string) => Promise<void>;
 } => 'setSinkId' in context && typeof context.setSinkId === 'function';
 
-const getMonotonicTime = () => {
-  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
-  return globalThis.performance?.now() ?? Date.now();
-};
-
 const releaseSafely = (
   failures: string[],
   label: string,
@@ -95,6 +91,7 @@ interface PlayerResources {
   worklet: AudioWorkletNode | null;
   source: AudioBufferSourceNode | null;
   fftRafId: number | null;
+  malformedWorkletMessageReported: boolean;
   reportedUnknownWorkletMessageTypes: Set<string>;
 }
 
@@ -474,6 +471,7 @@ const useSoundPlayerImplementation = (
           worklet: null,
           source: null,
           fftRafId: null,
+          malformedWorkletMessageReported: false,
           reportedUnknownWorkletMessageTypes: new Set(),
         };
         resourcesForInitialization = resources;
@@ -611,10 +609,13 @@ const useSoundPlayerImplementation = (
               return;
             }
             if (!isWorkletMessage(data)) {
-              onError.current(
-                'Audio worklet returned an invalid control message.',
-                'malformed_audio',
-              );
+              if (!resources.malformedWorkletMessageReported) {
+                resources.malformedWorkletMessageReported = true;
+                onError.current(
+                  'Audio worklet returned an invalid control message.',
+                  'malformed_audio',
+                );
+              }
               return;
             }
 

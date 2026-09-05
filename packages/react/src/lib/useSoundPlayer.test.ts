@@ -1185,7 +1185,7 @@ describe('useSoundPlayer', () => {
     expect(result.current.queueLength).toBe(0);
   });
 
-  it('rejects invalid worklet queue lengths without publishing them', async () => {
+  it('rejects invalid worklet queue lengths and reports the failure once', async () => {
     const onError = vi.fn();
     const { result } = renderHook(() =>
       useSoundPlayer({
@@ -1211,7 +1211,7 @@ describe('useSoundPlayer', () => {
       expect(result.current.queueLength).toBe(2);
     }
 
-    expect(onError).toHaveBeenCalledTimes(4);
+    expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenLastCalledWith(
       'Audio worklet returned an invalid control message.',
       'malformed_audio',

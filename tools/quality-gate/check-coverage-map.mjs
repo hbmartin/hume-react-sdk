@@ -184,9 +184,14 @@ export const getCoveragePolicyErrors = (
       'statements',
     ])) {
       const floor = floors[metric];
-      if (typeof floor !== 'number' || !Number.isFinite(floor) || floor <= 0) {
+      if (
+        typeof floor !== 'number' ||
+        !Number.isFinite(floor) ||
+        floor <= 0 ||
+        floor > 100
+      ) {
         errors.push(
-          `coverage threshold must be positive: ${pattern} ${metric}`,
+          `coverage threshold must be greater than 0 and at most 100: ${pattern} ${metric}`,
         );
       }
     }
