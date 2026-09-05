@@ -116,9 +116,9 @@ category of the affected subsystem: for example, `control.changed` can be
 `message`, `microphone`, or `audio_player`, while SDK errors use the category of
 the error they report.
 
-The debug-only names — `microphone.audio_chunk_captured`, `audio.chunk_received`,
-`audio.queue_changed`, `audio.worklet_message_ignored`, and `message.received` —
-only appear at `debug` level.
+These potentially high-volume names are debug-only to keep routine diagnostics
+manageable: `microphone.audio_chunk_captured`, `audio.chunk_received`,
+`audio.queue_changed`, `audio.worklet_message_ignored`, and `message.received`.
 
 ## Reference
 

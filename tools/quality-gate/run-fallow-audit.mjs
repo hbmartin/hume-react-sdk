@@ -81,7 +81,15 @@ const audit = runPnpm([
 ]);
 const reportExists = existsSync(reportPath);
 if (!reportExists) {
-  console.error(`Fallow audit failed without writing ${reportPath}.`);
+  if (audit.status === 0) {
+    console.error(
+      `Fallow audit exited successfully but did not write the required report ${reportPath}.`,
+    );
+  } else {
+    console.error(
+      `Fallow audit exited with status ${audit.status ?? 'unknown'} without writing ${reportPath}.`,
+    );
+  }
 } else if (audit.status !== 0) {
   printAuditFailure();
 }

@@ -130,21 +130,18 @@ const isStringArray = (value) =>
   Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 
 /**
- * @param {HealthBaseline | null} baseline
+ * @param {Record<string, unknown>} counts
  * @param {string} label
+ * @param {'identity' | 'legacy path'} entryKind
  * @param {string[]} errors
  */
-const validateHealthBaseline = (baseline, label, errors) => {
-  const counts = baseline?.identity_finding_counts;
-  if (!isRecord(counts)) {
-    errors.push(`${label} health baseline must use identity mode`);
-    return false;
-  }
+const validateHealthCountEntries = (counts, label, entryKind, errors) => {
   let valid = true;
-  for (const [identity, categories] of Object.entries(counts)) {
+  for (const [entry, categories] of Object.entries(counts)) {
+    const displayEntry = entry.replace('\0', ':');
     if (!isRecord(categories)) {
       errors.push(
-        `${label} health identity has invalid categories: ${identity}`,
+        `${label} health ${entryKind} has invalid categories: ${displayEntry}`,
       );
       valid = false;
       continue;
@@ -157,13 +154,41 @@ const validateHealthBaseline = (baseline, label, errors) => {
         value['count'] < 0
       ) {
         errors.push(
-          `${label} health identity has invalid count: ${identity.replace('\0', ':')} ${category}`,
+          `${label} health ${entryKind} has invalid count: ${displayEntry} ${category}`,
         );
         valid = false;
       }
     }
   }
   return valid;
+};
+
+/**
+ * @param {HealthBaseline | null} baseline
+ * @param {string} label
+ * @param {string[]} errors
+ */
+const validateHealthBaseline = (baseline, label, errors) => {
+  const counts = baseline?.identity_finding_counts;
+  if (!isRecord(counts)) {
+    errors.push(`${label} health baseline must use identity mode`);
+    return false;
+  }
+  return validateHealthCountEntries(counts, label, 'identity', errors);
+};
+
+/**
+ * @param {HealthBaseline | null} baseline
+ * @param {string} label
+ * @param {string[]} errors
+ */
+const validateLegacyHealthBaseline = (baseline, label, errors) => {
+  const counts = baseline?.finding_counts;
+  if (!isRecord(counts)) {
+    errors.push(`${label} legacy health baseline has invalid finding counts`);
+    return false;
+  }
+  return validateHealthCountEntries(counts, label, 'legacy path', errors);
 };
 
 /**
@@ -380,13 +405,15 @@ const getFindingCategoryTotals = (counts, extensions, identityMode = false) => {
  * @param {HealthBaseline | null} base
  * @param {HealthBaseline | null} current
  * @param {string[]} errors
+ * @param {boolean} currentHealthValid
  */
-const compareLegacyHealth = (base, current, errors) => {
-  if (!isRecord(base?.finding_counts)) return;
+const compareLegacyHealth = (base, current, errors, currentHealthValid) => {
   if (!isRecord(current?.identity_finding_counts)) {
     errors.push('bootstrap health baseline is missing identity finding counts');
     return;
   }
+  if (!currentHealthValid || base?.finding_counts === undefined) return;
+  if (!validateLegacyHealthBaseline(base, 'base', errors)) return;
   const extensions = new Set(Object.keys(base.finding_counts).map(extname));
   const baseTotals = getFindingCategoryTotals(base.finding_counts, extensions);
   const currentTotals = getFindingCategoryTotals(
@@ -566,7 +593,11 @@ export const compareBaselineStates = (base, current) => {
     if (current.marker.bootstrap !== 'strict-fallow-quality-gate-2026-09-04') {
       errors.push('unexpected strict-gate bootstrap marker');
     }
-    validateHealthBaseline(current.health, 'bootstrap', errors);
+    const currentHealthValid = validateHealthBaseline(
+      current.health,
+      'bootstrap',
+      errors,
+    );
     validateDupesBaseline(current.dupes, 'bootstrap', errors);
     validateCoveragePolicy(current.coverage, 'bootstrap', errors);
     compareBootstrapFallowIgnores(base.fallow, current.fallow, errors);
@@ -576,7 +607,12 @@ export const compareBaselineStates = (base, current) => {
     if (isRecord(base.health?.identity_finding_counts)) {
       compareHealth(base.health, current.health, errors);
     } else {
-      compareLegacyHealth(base.health, current.health, errors);
+      compareLegacyHealth(
+        base.health,
+        current.health,
+        errors,
+        currentHealthValid,
+      );
     }
     if (
       isStringArray(base.dupes?.normalized_clone_fingerprints) &&

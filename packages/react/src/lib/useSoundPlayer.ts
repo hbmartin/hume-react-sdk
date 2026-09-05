@@ -99,6 +99,10 @@ interface PlayerResources {
 }
 
 const BARK_BAND_COUNT = 24;
+/** Bound protocol-drift diagnostics retained during a player session. */
+const MAX_REPORTED_UNKNOWN_WORKLET_MESSAGE_TYPES = 16;
+/** Prevent an untrusted worklet payload from retaining an arbitrarily long key. */
+const MAX_WORKLET_MESSAGE_TYPE_LENGTH = 128;
 
 /** Require an idle period so the final render quantum reaches the output. */
 const DRAIN_SETTLE_MS = 50;
@@ -582,18 +586,26 @@ const useSoundPlayerImplementation = (
               // The worklet is loaded remotely and may add control messages
               // before this SDK learns how to consume them. Unknown extensions
               // must remain forward-compatible no-ops.
+              const diagnosticMessageType = messageType.slice(
+                0,
+                MAX_WORKLET_MESSAGE_TYPE_LENGTH,
+              );
               if (
+                resources.reportedUnknownWorkletMessageTypes.size <
+                  MAX_REPORTED_UNKNOWN_WORKLET_MESSAGE_TYPES &&
                 !resources.reportedUnknownWorkletMessageTypes.has(
-                  messageType,
+                  diagnosticMessageType,
                 ) &&
                 diagnostics.current?.isEnabled('debug') === true
               ) {
-                resources.reportedUnknownWorkletMessageTypes.add(messageType);
+                resources.reportedUnknownWorkletMessageTypes.add(
+                  diagnosticMessageType,
+                );
                 diagnostics.current.emit({
                   level: 'debug',
                   category: 'audio_player',
                   name: 'audio.worklet_message_ignored',
-                  details: { messageType },
+                  details: { messageType: diagnosticMessageType },
                 });
               }
               return;
