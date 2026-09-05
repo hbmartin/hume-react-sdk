@@ -11,7 +11,6 @@
     "**/.next/**",
     "**/coverage/**",
     "**/etc/*.api.md",
-    "examples/next-app/next-env.d.ts",
     ".fallow-baselines/**",
     "packages/core/**",
   ],
@@ -30,6 +29,7 @@
       "examples/vite-app/tsconfig.json",
       "examples/vite-app-embed/tsconfig.json",
       "examples/vite-app-embed/tsconfig.node.json",
+      "tools/tsconfig.json",
       "tools/quality-gate/tsconfig.json",
       "tools/lint-contract/tsconfig.json",
       "tools/vitest-config/tsconfig.json",
@@ -77,7 +77,6 @@
       "**/*.test.{js,mjs,cjs,ts,tsx}",
       "**/*.spec.{js,mjs,cjs,ts,tsx}",
       "packages/react/src/worklets/audio-worklet-20250702.js",
-      "tools/**",
     ],
   },
   "overrides": [

@@ -2,17 +2,19 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { validateCoverageMap } from './check-coverage-map.mjs';
-import { repositoryRoot, run } from './quality-gate-utils.mjs';
+import { repositoryRoot, runPnpm } from './quality-gate-utils.mjs';
 
 validateCoverageMap();
 const previewDirectory = resolve(repositoryRoot, '.fallow-preview');
 mkdirSync(previewDirectory, { recursive: true });
 
-const health = run('pnpm', [
+const health = runPnpm([
   'exec',
   'fallow',
   'health',
   '--no-cache',
+  '--complexity',
+  '--score',
   '--coverage',
   'coverage/coverage-final.json',
   '--baseline-mode',
@@ -25,7 +27,7 @@ const health = run('pnpm', [
   '--output-file',
   '.fallow-preview/health.report.json',
 ]);
-const dupes = run('pnpm', [
+const dupes = runPnpm([
   'exec',
   'fallow',
   'dupes',

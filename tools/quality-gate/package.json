@@ -1,10 +1,9 @@
 {
-  "name": "@humeai/lint-contract",
+  "name": "@humeai/quality-gate",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test config.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }

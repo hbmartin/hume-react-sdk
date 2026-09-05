@@ -82,14 +82,6 @@ type PendingMicrophoneReplacement = {
   stream: MediaStream;
 };
 
-const hasTrackThatIsNotMuted = (tracks: readonly MediaStreamTrack[]) => {
-  try {
-    return tracks.some((track) => track.enabled);
-  } catch {
-    return true;
-  }
-};
-
 /**
  * Configuration for the deprecated low-level microphone hook.
  *
@@ -161,25 +153,12 @@ export const useMicrophone = (props: MicrophoneProps) => {
       if (muted) {
         const failures: unknown[] = [];
         tracks.forEach((track) => {
-          const hadSavedState = enabledStates.has(track);
-          let enabledBeforeUpdate = false;
-          let canRollback = false;
           try {
-            enabledBeforeUpdate = track.enabled;
-            canRollback = true;
-            if (!hadSavedState) {
-              enabledStates.set(track, enabledBeforeUpdate);
+            if (!enabledStates.has(track)) {
+              enabledStates.set(track, track.enabled);
             }
             track.enabled = false;
           } catch (error) {
-            if (canRollback) {
-              try {
-                track.enabled = enabledBeforeUpdate;
-                if (!hadSavedState) enabledStates.delete(track);
-              } catch {
-                // Retain the saved state so a later unmute can retry recovery.
-              }
-            }
             // Keep successful disables in place. A microphone mute must make as
             // much fail-closed progress as possible when one nonstandard track
             // rejects its enabled-state update.
@@ -252,20 +231,19 @@ export const useMicrophone = (props: MicrophoneProps) => {
       };
 
       if (!muted) {
-        let pendingTracks: MediaStreamTrack[] | null = null;
+        let pendingReconciliationRequired = false;
         try {
           // Enumerate every active stream before enabling any track so a failed
           // enumeration cannot leave a partially unmuted microphone.
           const tracks = [...(stream?.getAudioTracks() ?? [])];
           if (pendingStream && pendingStream !== stream) {
-            pendingTracks = pendingStream.getAudioTracks();
+            pendingReconciliationRequired = true;
+            const pendingTracks = pendingStream.getAudioTracks();
             tracks.push(...pendingTracks);
           }
           applyMuteStateToTracks(tracks, false);
         } catch (error) {
-          updatePendingReconciliation(
-            pendingTracks !== null && hasTrackThatIsNotMuted(pendingTracks),
-          );
+          updatePendingReconciliation(pendingReconciliationRequired);
           throw error;
         }
         updatePendingReconciliation(false);
@@ -273,27 +251,25 @@ export const useMicrophone = (props: MicrophoneProps) => {
       }
 
       const failures: unknown[] = [];
-      let pendingTracks: MediaStreamTrack[] | null = null;
+      let pendingReconciliationRequired = false;
       const activeStreams =
         pendingStream !== null && pendingStream !== stream
           ? [stream, pendingStream]
           : [stream];
       for (const activeStream of activeStreams) {
         if (activeStream === null) continue;
+        if (activeStream === pendingStream) {
+          pendingReconciliationRequired = true;
+        }
         try {
           const tracks = activeStream.getAudioTracks();
-          if (activeStream === pendingStream) pendingTracks = tracks;
           applyMuteStateToTracks(tracks, true);
         } catch (error) {
           appendCleanupFailures(failures, error);
         }
       }
       if (failures.length > 0) {
-        const enabledStates = enabledStateBeforeMute.current;
-        updatePendingReconciliation(
-          pendingTracks?.some((track) => enabledStates?.has(track) === true) ===
-            true,
-        );
+        updatePendingReconciliation(pendingReconciliationRequired);
         throwCleanupFailures(
           failures,
           'Failed to mute one or more active microphone streams.',
@@ -1009,6 +985,8 @@ export const useMicrophone = (props: MicrophoneProps) => {
         }
         stopCandidateStream();
       };
+      const readRegisteredCandidate = (): PendingMicrophoneReplacement | null =>
+        pendingReplacement.current;
 
       try {
         if (isMutedRef.current) {
@@ -1084,11 +1062,15 @@ export const useMicrophone = (props: MicrophoneProps) => {
         throw createMicrophoneAbortError();
       }
 
-      const registeredCandidate = pendingReplacement.current;
+      const registeredCandidate = readRegisteredCandidate();
       if (
-        registeredCandidate.stream === stream &&
-        registeredCandidate.needsMuteReconciliation
+        registeredCandidate === null ||
+        registeredCandidate.stream !== stream
       ) {
+        disposeCandidate();
+        throw createMicrophoneAbortError();
+      }
+      if (registeredCandidate.needsMuteReconciliation) {
         try {
           applyMuteStateToStream(stream, isMutedRef.current);
           registeredCandidate.needsMuteReconciliation = false;

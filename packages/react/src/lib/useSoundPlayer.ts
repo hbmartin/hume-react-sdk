@@ -34,12 +34,27 @@ type WorkletMessage =
   | WorkletQueueLengthMessage
   | WorkletClosedMessage;
 
+const workletMessageTypes = new Set([
+  'ended',
+  'queueLength',
+  'start_clip',
+  'worklet_closed',
+]);
+
+const getWorkletMessageType = (value: unknown) =>
+  typeof value === 'object' && value !== null
+    ? getDataProperty(value, 'type')?.value
+    : undefined;
+
 const isWorkletMessage = (value: unknown): value is WorkletMessage => {
   if (typeof value !== 'object' || value === null) return false;
   const type = getDataProperty(value, 'type')?.value;
   if (type === 'ended' || type === 'worklet_closed') return true;
   if (type === 'queueLength') {
-    return typeof getDataProperty(value, 'length')?.value === 'number';
+    const length = getDataProperty(value, 'length')?.value;
+    return (
+      typeof length === 'number' && Number.isSafeInteger(length) && length >= 0
+    );
   }
   return (
     type === 'start_clip' &&
@@ -557,6 +572,16 @@ const useSoundPlayerImplementation = (
               return;
             }
             const data: unknown = e.data;
+            const messageType = getWorkletMessageType(data);
+            if (
+              typeof messageType === 'string' &&
+              !workletMessageTypes.has(messageType)
+            ) {
+              // The worklet is loaded remotely and may add control messages
+              // before this SDK learns how to consume them. Unknown extensions
+              // must remain forward-compatible no-ops.
+              return;
+            }
             if (!isWorkletMessage(data)) {
               onError.current(
                 'Audio worklet returned an invalid control message.',

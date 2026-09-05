@@ -31,7 +31,7 @@ const EXPECTED_COLLISIONS = ['voice-embed.languagemodeloption'];
  * than fixture files so cspell and oxfmt do not pick up a synthetic JSON blob.
  *
  * @param {string} name
- * @param {readonly object[]} members
+ * @param {ApiTestMember[]} members
  */
 function model(name, members) {
   return {
@@ -134,6 +134,7 @@ await test('small packages render flat, without kind headers', () => {
 });
 
 await test('deprecated exports move to a single trailing group', () => {
+  /** @type {ApiTestMember[]} */
   const members = [
     {
       docComment: '/**\n * @deprecated Use `useVoice`.\n */\n',
@@ -146,11 +147,13 @@ await test('deprecated exports move to a single trailing group', () => {
     members.push({ kind: 'TypeAlias', name: `Filler${index}` });
   }
 
-  const groups =
-    buildApiReferenceSidebar([model('@humeai/dep', members)])[1].items ?? [];
+  const section = buildApiReferenceSidebar([model('@humeai/dep', members)])[1];
+  assert.notEqual(section, undefined);
+  const groups = section?.items ?? [];
   const trailing = groups[groups.length - 1];
+  assert.notEqual(trailing, undefined);
 
-  assert.equal(trailing.text, 'Deprecated');
+  assert.equal(trailing?.text, 'Deprecated');
   assert.deepEqual(trailing.items, [
     { link: 'dep.uselegacy', text: 'useLegacy' },
   ]);
@@ -257,7 +260,7 @@ await test('a missing API model names the command that generates it', () => {
 const generatedOutputExists =
   existsSync(apiReferenceDirectory) && existsSync(defaultApiModelDirectory);
 const generatedOutputRequired =
-  process.env.REQUIRE_GENERATED_API_OUTPUT === 'true';
+  process.env['REQUIRE_GENERATED_API_OUTPUT'] === 'true';
 const skipWithoutGeneratedOutput = generatedOutputExists
   ? false
   : 'run `pnpm docs:api` first';
@@ -349,6 +352,8 @@ await test('the page cross-check does not filter unfamiliar top-level kinds', ()
     ['tiny', 'tiny.tools'],
   );
 });
+
+/** @typedef {{ kind: string, name?: string, docComment?: string, overloadIndex?: number, members?: ApiTestMember[] }} ApiTestMember */
 
 await test(
   'every sidebar link resolves to a generated page',

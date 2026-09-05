@@ -378,7 +378,7 @@ describe('useMicrophone', () => {
     expect(mutedTrack.enabled).toBe(true);
   });
 
-  it('restores a track whose mute setter throws after applying the value', () => {
+  it('leaves a track muted when its setter throws after applying the value', () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     let enabled = true;
     const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
@@ -395,8 +395,11 @@ describe('useMicrophone', () => {
 
     act(() => result.current.mute());
 
-    expect(track.enabled).toBe(true);
+    expect(track.enabled).toBe(false);
     expect(result.current.isMuted).toBe(false);
+
+    act(() => result.current.unmute());
+    expect(track.enabled).toBe(true);
   });
 
   it('clears a stale FFT snapshot when muted without an analyzer', () => {
@@ -1039,7 +1042,7 @@ describe('useMicrophone', () => {
     expect(candidateTrack.enabled).toBe(false);
   });
 
-  it('keeps muting the current stream when pending track enumeration fails', async () => {
+  it('rejects a replacement when pending track enumeration prevents mute reconciliation', async () => {
     const recorders = stubMediaRecorder(supports(MimeType.WEBM));
     const events: VoiceDiagnosticEvent[] = [];
     const diagnostics = createVoiceDiagnosticsReporter(() => ({
@@ -1088,11 +1091,13 @@ describe('useMicrophone', () => {
 
     await act(async () => {
       oldRecorder.emit('stop', new Event('stop'));
-      await replacement;
+      await expect(replacement).rejects.toThrow(
+        'pending track enumeration failed',
+      );
     });
 
     expect(candidateTrack.enabled).toBe(true);
-    expect(candidateTrackStop).not.toHaveBeenCalled();
+    expect(candidateTrackStop).toHaveBeenCalledOnce();
     await act(() => result.current.stop());
     expect(candidateTrackStop).toHaveBeenCalledOnce();
   });

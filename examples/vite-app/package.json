@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --port 3001 --strictPort",
     "build": "vite build",
+    "test": "vitest run",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
     "typecheck": "tsc --noEmit -p .",
     "typecheck:deps": "tsc --noEmit -p tsconfig.deps.json",
@@ -16,8 +17,10 @@
   },
   "devDependencies": {
     "@humeai/typescript-config": "workspace:*",
+    "@humeai/vitest-config": "workspace:*",
     "@types/node": "22.20.1",
     "typescript": "7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }

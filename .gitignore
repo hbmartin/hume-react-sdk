@@ -22,6 +22,7 @@ coverage
 .lint-contract-*/
 tools/quality-gate/lint-contract-node-*/
 packages/react/src/lint-contract-browser-*/
+tools/lint-contract/*-*/
 
 # Turbo
 .turbo

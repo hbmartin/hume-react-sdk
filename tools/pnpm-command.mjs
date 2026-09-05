@@ -12,7 +12,7 @@
 export function getPnpmInvocation(
   arguments_,
   platform = process.platform,
-  commandInterpreter = process.env.ComSpec,
+  commandInterpreter = process.env['ComSpec'],
 ) {
   if (platform === 'win32') {
     return {
