@@ -7,6 +7,7 @@ import type {
   ToolCall,
 } from '../models/messages';
 import { getDataProperty } from '../utils/aggregateErrors';
+import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { type AuthStrategy, getAuthStrategyError } from './auth';
 import {
   invokeIsolatedConsumerCallback,
@@ -18,11 +19,6 @@ import { useLatestRef } from './useLatestRef';
 
 const isNever = (_n: never) => {
   return;
-};
-
-const getMonotonicTime = () => {
-  // oxlint-disable-next-line typescript/no-unnecessary-condition -- older embedded browsers can omit the typed Performance global
-  return globalThis.performance?.now() ?? Date.now();
 };
 
 const assignDefinedProperty = (
@@ -183,7 +179,7 @@ export type ToolCallHandler = (
     error: (e: {
       error: string;
       code: string;
-      level?: Hume.empathicVoice.ErrorLevel | null;
+      level?: string | null;
       content: string;
     }) => Hume.empathicVoice.ToolErrorMessage;
   },
@@ -511,14 +507,14 @@ export const useVoiceClient = (props: {
                         }: {
                           error: string;
                           code: string;
-                          level?: Hume.empathicVoice.ErrorLevel | null;
+                          level?: string | null;
                           content: string;
                         }) => ({
                           type: 'tool_error',
                           toolCallId: messageWithReceivedAt.toolCallId,
                           error,
                           code,
-                          ...(level === null ? {} : { level: level ?? 'warn' }),
+                          ...(level === null ? {} : { level: 'warn' as const }),
                           content,
                         }),
                       },

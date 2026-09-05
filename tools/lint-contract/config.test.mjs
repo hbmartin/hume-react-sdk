@@ -874,6 +874,23 @@ void test('baseline policy rejects missing coverage metrics', (t) => {
   );
 });
 
+void test('baseline policy rejects zero coverage floors', (t) => {
+  const base = createFixture(t, 'policy-zero-floor-base', policyStateFiles());
+  const current = createFixture(
+    t,
+    'policy-zero-floor-current',
+    policyStateFiles({ statements: 0 }),
+  );
+
+  const result = runPolicyComparison(base, current);
+
+  assert.notEqual(result.status, 0, 'zero coverage floor unexpectedly passed');
+  assert.match(
+    `${result.stdout}${result.stderr}`,
+    /coverage floor is invalid for src\/\*\* statements/,
+  );
+});
+
 void test('bootstrap still protects compatible baseline state', (t) => {
   const baseFiles = policyStateFiles();
   delete baseFiles['.fallow-baselines/policy.json'];
@@ -1236,8 +1253,32 @@ void test('coverage policy rejects missing maps, empty globs, and zero floors', 
   assert.ok(errors.some((error) => error.includes('src/worker.ts')));
   assert.ok(errors.some((error) => error.includes('removed/**')));
   assert.equal(
-    errors.filter((error) => error.includes('threshold must be positive'))
-      .length,
+    errors.filter((error) => error.includes('must be greater than 0')).length,
+    4,
+  );
+});
+
+void test('coverage policy rejects floors above 100', () => {
+  const policy = {
+    include: ['src/**/*.ts'],
+    exclude: [],
+    thresholds: {
+      'src/**': {
+        branches: 101,
+        functions: 101,
+        lines: 101,
+        statements: 101,
+      },
+    },
+  };
+  const errors = getCoveragePolicyErrors(
+    policy,
+    ['src/index.ts'],
+    ['src/index.ts'],
+  );
+
+  assert.equal(
+    errors.filter((error) => error.includes('at most 100')).length,
     4,
   );
 });

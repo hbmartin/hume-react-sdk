@@ -240,7 +240,7 @@ export type ToolCallHandler = (message: {
     error: (e: {
         error: string;
         code: string;
-        level?: Hume.empathicVoice.ErrorLevel | null;
+        level?: string | null;
         content: string;
     }) => Hume.empathicVoice.ToolErrorMessage;
 }) => Promise<Hume.empathicVoice.ToolResponseMessage | Hume.empathicVoice.ToolErrorMessage>;

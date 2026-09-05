@@ -1358,7 +1358,7 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.details['sensitive-0']).toBe(0);
   });
 
-  it('does not reclassify sensitive error-bearing keys beyond the priority cap', () => {
+  it('defers sensitive error-bearing keys beyond the priority cap', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       includeContent: true,
@@ -1381,10 +1381,11 @@ describe('voice diagnostics reporter', () => {
     expect(events[0]?.detailsTruncated).toBe(true);
     expect(events[0]?.details['phase']).toBe('preserved');
     expect(events[0]?.details['sensitive-0']).toBeDefined();
-    expect(events[0]?.details['sensitive-500']).toBeUndefined();
+    expect(events[0]?.details['sensitive-500']).toBeDefined();
+    expect(events[0]?.details['sensitive-750']).toBeUndefined();
   });
 
-  it('prioritizes named sensitive fields and signals omitted sensitive entries', () => {
+  it('prioritizes named sensitive fields without dropping fallback entries', () => {
     const events: VoiceDiagnosticEvent[] = [];
     const reporter = createVoiceDiagnosticsReporter(() => ({
       includeContent: true,
@@ -1403,10 +1404,10 @@ describe('voice diagnostics reporter', () => {
 
     reporter.emit({ ...input, sensitiveDetails });
 
-    expect(events[0]?.detailsTruncated).toBe(true);
+    expect(events[0]?.detailsTruncated).toBeUndefined();
     expect(events[0]?.details['error']).toBe('Preserved priority error');
-    expect(events[0]?.details['sensitive-499']).toBeUndefined();
-    expect(events[0]?.details['__humeDiagnosticTruncated']).toBe(true);
+    expect(events[0]?.details['sensitive-499']).toBe(499);
+    expect(events[0]?.details['__humeDiagnosticTruncated']).toBeUndefined();
   });
 
   it('does not let nested sensitive content consume the ordinary entry reserve', () => {
