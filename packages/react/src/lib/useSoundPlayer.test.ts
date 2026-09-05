@@ -1218,7 +1218,7 @@ describe('useSoundPlayer', () => {
     );
   });
 
-  it('reports one debug event per unknown worklet protocol extension', async () => {
+  it('reports distinct worklet protocol extensions within bounded limits', async () => {
     const onError = vi.fn();
     const events: VoiceDiagnosticEvent[] = [];
     const diagnostics = createVoiceDiagnosticsReporter(() => ({
@@ -1247,6 +1247,14 @@ describe('useSoundPlayer', () => {
       fakePort.onmessage?.({
         data: { type: 'another_extension', value: true },
       } as MessageEvent);
+      fakePort.onmessage?.({
+        data: { type: 'x'.repeat(1024), value: true },
+      } as MessageEvent);
+      for (let index = 0; index < 20; index += 1) {
+        fakePort.onmessage?.({
+          data: { type: `extension_${index}`, value: true },
+        } as MessageEvent);
+      }
     });
 
     expect(onError).not.toHaveBeenCalled();
@@ -1255,10 +1263,11 @@ describe('useSoundPlayer', () => {
     const ignoredEvents = events.filter(
       (event) => event.name === 'audio.worklet_message_ignored',
     );
-    expect(ignoredEvents).toHaveLength(2);
+    expect(ignoredEvents).toHaveLength(16);
     expect(ignoredEvents[0]?.level).toBe('debug');
     expect(ignoredEvents[0]?.details['messageType']).toBe('protocol_extension');
     expect(ignoredEvents[1]?.details['messageType']).toBe('another_extension');
+    expect(ignoredEvents[2]?.details['messageType']).toBe('x'.repeat(128));
   });
 
   it('reports the first teardown failure instead of retrying a detached player', async () => {

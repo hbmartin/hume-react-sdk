@@ -51,35 +51,28 @@ const hasExpectedFields = (candidate, expectedFields) => {
 /** @param {unknown} value */
 const isNonNegativeSafeInteger = (value) => {
   const number = typeof value === 'number' ? value : Number.NaN;
-  return [Number.isSafeInteger(number), number >= 0].every(Boolean);
+  return Number.isSafeInteger(number) && number >= 0;
 };
 
 /** @param {FallowReport} candidate */
 const hasEmptyAuditHeader = (candidate) =>
-  [
-    candidate.kind === 'audit',
-    candidate.verdict === 'pass',
-    isNonNegativeSafeInteger(candidate.changed_files_count),
-  ].every(Boolean);
+  candidate.kind === 'audit' &&
+  candidate.verdict === 'pass' &&
+  isNonNegativeSafeInteger(candidate.changed_files_count);
 
 /** @param {FallowReport} candidate */
 const hasNoAuditAnalysis = (candidate) =>
-  [
-    candidate.complexity === undefined,
-    candidate.dead_code === undefined,
-    candidate.duplication === undefined,
-    hasNoFindings(candidate.findings),
-    hasNoFindings(candidate.complexity?.findings),
-  ].every(Boolean);
+  candidate.complexity === undefined &&
+  candidate.dead_code === undefined &&
+  candidate.duplication === undefined &&
+  hasNoFindings(candidate.findings);
 
 /** @param {FallowReport} candidate */
 const isExplicitEmptyAudit = (candidate) =>
-  [
-    hasEmptyAuditHeader(candidate),
-    hasExpectedFields(candidate.summary, emptyAuditSummaryFields),
-    hasNoAuditAnalysis(candidate),
-    hasExpectedFields(candidate.attribution, emptyAuditAttributionFields),
-  ].every(Boolean);
+  hasEmptyAuditHeader(candidate) &&
+  hasExpectedFields(candidate.summary, emptyAuditSummaryFields) &&
+  hasNoAuditAnalysis(candidate) &&
+  hasExpectedFields(candidate.attribution, emptyAuditAttributionFields);
 
 const coverageSummaries = [report.summary, report.complexity?.summary].filter(
   (candidate) => candidate !== undefined,

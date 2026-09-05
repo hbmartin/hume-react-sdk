@@ -7,20 +7,30 @@ import { getPnpmInvocation } from '../pnpm-command.mjs';
 
 export const repositoryRoot = resolve(import.meta.dirname, '../..');
 
+/** @param {unknown} error */
+const isMissingPathError = (error) =>
+  error instanceof Error &&
+  'code' in error &&
+  (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+
 /**
  * @param {string | undefined} executablePath
  * @param {string} moduleUrl
  */
 export const isDirectExecution = (executablePath, moduleUrl) => {
   if (executablePath === undefined || executablePath === '') return false;
+  const resolvedExecutablePath = resolve(executablePath);
+  const modulePath = fileURLToPath(moduleUrl);
+  if (resolvedExecutablePath === modulePath) return true;
+
+  let executableRealPath;
   try {
-    return (
-      realpathSync(resolve(executablePath)) ===
-      realpathSync(fileURLToPath(moduleUrl))
-    );
-  } catch {
-    return false;
+    executableRealPath = realpathSync(resolvedExecutablePath);
+  } catch (error) {
+    if (isMissingPathError(error)) return false;
+    throw error;
   }
+  return executableRealPath === realpathSync(modulePath);
 };
 
 /** @param {string} path */

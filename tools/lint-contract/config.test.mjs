@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import {
   getCoverageCounterFreeFiles,
@@ -968,6 +969,16 @@ void test('direct execution detection tolerates an absent caller path', (t) => {
   );
 });
 
+void test('direct execution detection propagates unexpected path errors', (t) => {
+  const root = createFixture(t, 'invalid-caller', {});
+  const loop = resolve(root, 'loop.mjs');
+  symlinkSync(loop, loop);
+
+  assert.throws(() => isDirectExecution(loop, import.meta.url), {
+    code: 'ELOOP',
+  });
+});
+
 void test('baseline policy executes when invoked through a symlink', (t) => {
   const root = createFixture(t, 'policy-symlink', {});
   const linkedPolicy = resolve(root, 'baseline-policy.mjs');
@@ -986,20 +997,14 @@ void test('baseline policy executes when invoked through a symlink', (t) => {
   );
 });
 
-void test('coverage-map policy executes when invoked through a symlink', (t) => {
+void test('direct execution detection resolves a symlinked coverage gate', (t) => {
   const root = createFixture(t, 'coverage-symlink', {});
   const linkedGate = resolve(root, 'coverage-map.mjs');
   symlinkSync(coverageMapGate, linkedGate);
 
-  const result = spawnSync(process.execPath, [linkedGate], {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-  });
-
-  assert.match(
-    `${result.stdout}${result.stderr}`,
-    /Coverage map/,
-    'symlinked coverage-map policy unexpectedly skipped',
+  assert.equal(
+    isDirectExecution(linkedGate, pathToFileURL(coverageMapGate).href),
+    true,
   );
 });
 
