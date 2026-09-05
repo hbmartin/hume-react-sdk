@@ -344,7 +344,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
     const animationId = fftAnimationId.current;
     fftAnimationId.current = null;
     if (animationId !== null) {
-      cancelAnimationFrame(animationId);
+      try {
+        cancelAnimationFrame(animationId);
+      } catch {
+        // A stale callback will observe the cleared analyzer refs and return.
+      }
     }
     fftDrawCallback.current = null;
 
@@ -364,7 +368,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
     const animationId = fftAnimationId.current;
     fftAnimationId.current = null;
     if (animationId !== null) {
-      cancelAnimationFrame(animationId);
+      try {
+        cancelAnimationFrame(animationId);
+      } catch {
+        // A stale callback will observe the muted state and return.
+      }
     }
   }, []);
 
@@ -495,24 +503,28 @@ export const useMicrophone = (props: MicrophoneProps) => {
       source.connect(currentAnalyzer.current);
       const draw: FrameRequestCallback = () => {
         fftAnimationId.current = null;
-        if (!currentAnalyzer.current || !audioContext.current) {
-          return;
+        try {
+          if (!currentAnalyzer.current || !audioContext.current) {
+            return;
+          }
+
+          if (isMutedRef.current) return;
+          currentAnalyzer.current.getByteFrequencyData(dataArray);
+
+          const sampleRate = audioContext.current.sampleRate;
+
+          convertLinearFrequenciesToBarkInto(dataArray, sampleRate, barkBuffer);
+
+          fftStore.write(barkBuffer);
+          fftAnimationId.current = requestAnimationFrame(draw);
+        } catch (error) {
+          reportAnalyzerFailure(error);
         }
-
-        if (isMutedRef.current) return;
-        currentAnalyzer.current.getByteFrequencyData(dataArray);
-
-        const sampleRate = audioContext.current.sampleRate;
-
-        convertLinearFrequenciesToBarkInto(dataArray, sampleRate, barkBuffer);
-
-        fftStore.write(barkBuffer);
-        fftAnimationId.current = requestAnimationFrame(draw);
       };
       fftDrawCallback.current = draw;
       if (!isMutedRef.current) draw(0);
     },
-    [fftStore],
+    [fftStore, reportAnalyzerFailure],
   );
 
   const disposeMicrophoneResources = useCallback(
@@ -1197,7 +1209,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
       isMutedRef.current = true;
       pauseFftAnalyzer();
-      fftStore.clear();
+      try {
+        fftStore.clear();
+      } catch (error) {
+        reportAnalyzerFailure(error);
+      }
       setIsMuted(true);
       diagnostics.current.emit({
         level: 'info',
@@ -1212,6 +1228,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       applyMuteStateToRetiredStreams,
       diagnostics,
       fftStore,
+      reportAnalyzerFailure,
       reportMuteStateFailure,
       reportRetiredStreamMuteFailure,
       pauseFftAnalyzer,

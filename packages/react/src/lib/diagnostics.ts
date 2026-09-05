@@ -1686,7 +1686,7 @@ const sanitizeValue = (
     // Sensitive keys beyond the priority allowance run only after every
     // ordinary class. This preserves the ordinary entry reserve without
     // discarding sensitive details when shared capacity remains.
-    if (sensitiveRootKeys !== undefined) {
+    if (sensitiveRootKeys !== undefined && sensitiveRootKeys.size > 0) {
       for (const key of enumerated.keys) {
         if (!sensitiveRootKeys.has(key)) continue;
         if (sensitivePriorityKeys?.has(key) === true) continue;

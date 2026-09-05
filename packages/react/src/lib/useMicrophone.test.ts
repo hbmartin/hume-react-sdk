@@ -552,6 +552,103 @@ describe('useMicrophone', () => {
     });
   });
 
+  it('reports analyzer failures raised by a later animation frame', () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    let nextRafId = 1;
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((callback: FrameRequestCallback) => {
+        const id = nextRafId++;
+        rafCallbacks.set(id, callback);
+        return id;
+      }),
+    );
+    stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const disconnect = vi.fn();
+    const getByteFrequencyData = vi
+      .fn()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error('animation frame analyzer failed');
+      });
+    const context = {
+      ...createAudioContext(),
+      createMediaStreamSource: vi.fn(() => ({
+        connect: vi.fn(),
+        disconnect,
+      })),
+      createAnalyser: vi.fn(() => ({
+        fftSize: 0,
+        frequencyBinCount: 1024,
+        getByteFrequencyData,
+      })),
+    } as unknown as AudioContext;
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream(), context);
+
+    expect(() => act(() => rafCallbacks.get(2)?.(0))).not.toThrow();
+
+    expect(getByteFrequencyData).toHaveBeenCalledTimes(2);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+    expect(
+      events.find((event) => event.name === 'microphone.analyzer_failed'),
+    ).toMatchObject({
+      level: 'warn',
+      category: 'microphone',
+      details: {
+        message: 'animation frame analyzer failed',
+        error: { message: 'animation frame analyzer failed' },
+      },
+    });
+  });
+
+  it('completes the mute transition when analyzer cleanup throws', () => {
+    stubMediaRecorder(supports(MimeType.WEBM));
+    vi.stubGlobal(
+      'cancelAnimationFrame',
+      vi.fn(() => {
+        throw new Error('animation cancellation failed');
+      }),
+    );
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const track = {
+      enabled: true,
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream([track]), createAudioContext());
+
+    expect(() => act(() => result.current.mute())).not.toThrow();
+
+    expect(track.enabled).toBe(false);
+    expect(result.current.isMuted).toBe(true);
+    expect(
+      events.find((event) => event.name === 'microphone.analyzer_failed'),
+    ).toMatchObject({
+      level: 'warn',
+      category: 'microphone',
+      details: { message: 'animation cancellation failed' },
+    });
+    expect(events.at(-1)).toMatchObject({
+      level: 'info',
+      category: 'microphone',
+      name: 'control.changed',
+      details: { control: 'microphone_mute', value: true },
+    });
+  });
+
   it('keeps mute state unchanged and reports when track enumeration fails', () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const events: VoiceDiagnosticEvent[] = [];

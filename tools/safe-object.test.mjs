@@ -15,3 +15,20 @@ void test('getOwnValue tolerates descriptor traps', () => {
 
   assert.equal(getOwnValue(value, 'key'), undefined);
 });
+
+void test('getOwnValue rejects non-object values', () => {
+  for (const value of [
+    null,
+    undefined,
+    1,
+    'value',
+    true,
+    Symbol('value'),
+    1n,
+  ]) {
+    assert.throws(
+      () => Reflect.apply(getOwnValue, undefined, [value, 'key']),
+      TypeError,
+    );
+  }
+});

@@ -179,7 +179,7 @@ export type ToolCallHandler = (
     error: (e: {
       error: string;
       code: string;
-      level?: string | null;
+      level?: Hume.empathicVoice.ErrorLevel | null;
       content: string;
     }) => Hume.empathicVoice.ToolErrorMessage;
   },
@@ -507,14 +507,14 @@ export const useVoiceClient = (props: {
                         }: {
                           error: string;
                           code: string;
-                          level?: string | null;
+                          level?: Hume.empathicVoice.ErrorLevel | null;
                           content: string;
                         }) => ({
                           type: 'tool_error',
                           toolCallId: messageWithReceivedAt.toolCallId,
                           error,
                           code,
-                          ...(level === null ? {} : { level: 'warn' as const }),
+                          ...(level === null ? {} : { level: level ?? 'warn' }),
                           content,
                         }),
                       },

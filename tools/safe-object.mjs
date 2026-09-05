@@ -1,11 +1,18 @@
 /**
  * Read an own data property from untrusted input without invoking an accessor.
  *
- * @param {object} value
+ * @param {unknown} value
  * @param {PropertyKey} key
  * @returns {unknown}
  */
 export function getOwnValue(value, key) {
+  if (
+    (typeof value !== 'object' || value === null) &&
+    typeof value !== 'function'
+  ) {
+    throw new TypeError('getOwnValue requires an object value');
+  }
+
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor !== undefined && 'value' in descriptor
