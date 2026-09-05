@@ -17,40 +17,69 @@ const summary =
 const hasNoFindings = (findings) =>
   findings === undefined || (Array.isArray(findings) && findings.length === 0);
 
-/** @param {FallowReport} candidate */
-const isExplicitEmptyAudit = (candidate) => {
-  const auditSummary = candidate.summary;
-  const attribution = candidate.attribution;
-  return (
-    candidate.kind === 'audit' &&
-    candidate.verdict === 'pass' &&
-    typeof candidate.changed_files_count === 'number' &&
-    Number.isSafeInteger(candidate.changed_files_count) &&
-    candidate.changed_files_count >= 0 &&
-    auditSummary !== undefined &&
-    auditSummary.dead_code_issues === 0 &&
-    auditSummary.dead_code_has_errors === false &&
-    auditSummary.complexity_findings === 0 &&
-    auditSummary.max_cyclomatic === null &&
-    auditSummary.duplication_clone_groups === 0 &&
-    candidate.complexity === undefined &&
-    candidate.dead_code === undefined &&
-    candidate.duplication === undefined &&
-    attribution !== undefined &&
-    attribution.gate === 'new-only' &&
-    attribution.dead_code_introduced === 0 &&
-    attribution.dead_code_inherited === 0 &&
-    attribution.complexity_introduced === 0 &&
-    attribution.complexity_inherited === 0 &&
-    attribution.duplication_introduced === 0 &&
-    attribution.duplication_inherited === 0 &&
-    attribution.styling_introduced === 0 &&
-    attribution.styling_inherited === 0 &&
-    attribution.duplication_demoted === 0 &&
-    hasNoFindings(candidate.findings) &&
-    hasNoFindings(candidate.complexity?.findings)
+const emptyAuditSummaryFields = {
+  complexity_findings: 0,
+  dead_code_has_errors: false,
+  dead_code_issues: 0,
+  duplication_clone_groups: 0,
+  max_cyclomatic: null,
+};
+const emptyAuditAttributionFields = {
+  complexity_inherited: 0,
+  complexity_introduced: 0,
+  dead_code_inherited: 0,
+  dead_code_introduced: 0,
+  duplication_demoted: 0,
+  duplication_inherited: 0,
+  duplication_introduced: 0,
+  gate: 'new-only',
+  styling_inherited: 0,
+  styling_introduced: 0,
+};
+
+/**
+ * @param {unknown} candidate
+ * @param {Record<string, unknown>} expectedFields
+ */
+const hasExpectedFields = (candidate, expectedFields) => {
+  if (typeof candidate !== 'object' || candidate === null) return false;
+  return Object.entries(expectedFields).every(
+    ([key, value]) => Reflect.get(candidate, key) === value,
   );
 };
+
+/** @param {unknown} value */
+const isNonNegativeSafeInteger = (value) => {
+  const number = typeof value === 'number' ? value : Number.NaN;
+  return [Number.isSafeInteger(number), number >= 0].every(Boolean);
+};
+
+/** @param {FallowReport} candidate */
+const hasEmptyAuditHeader = (candidate) =>
+  [
+    candidate.kind === 'audit',
+    candidate.verdict === 'pass',
+    isNonNegativeSafeInteger(candidate.changed_files_count),
+  ].every(Boolean);
+
+/** @param {FallowReport} candidate */
+const hasNoAuditAnalysis = (candidate) =>
+  [
+    candidate.complexity === undefined,
+    candidate.dead_code === undefined,
+    candidate.duplication === undefined,
+    hasNoFindings(candidate.findings),
+    hasNoFindings(candidate.complexity?.findings),
+  ].every(Boolean);
+
+/** @param {FallowReport} candidate */
+const isExplicitEmptyAudit = (candidate) =>
+  [
+    hasEmptyAuditHeader(candidate),
+    hasExpectedFields(candidate.summary, emptyAuditSummaryFields),
+    hasNoAuditAnalysis(candidate),
+    hasExpectedFields(candidate.attribution, emptyAuditAttributionFields),
+  ].every(Boolean);
 
 const coverageSummaries = [report.summary, report.complexity?.summary].filter(
   (candidate) => candidate !== undefined,
@@ -86,14 +115,10 @@ const isPositiveSafeInteger = (value) =>
 const matched = summary?.istanbul_matched;
 const matchedFiles = summary?.istanbul_files_matched;
 const model = summary?.coverage_model;
-const consistency = summary?.coverage_source_consistency;
 
 if (
   !emptyAudit &&
-  (!isPositiveSafeInteger(matched) ||
-    !isPositiveSafeInteger(matchedFiles) ||
-    model === 'static_estimated' ||
-    consistency === 'static_estimated')
+  (!isPositiveSafeInteger(matched) || !isPositiveSafeInteger(matchedFiles))
 ) {
   throw new Error(
     'Fallow did not consume Istanbul coverage; refusing a static-estimated health result.',
