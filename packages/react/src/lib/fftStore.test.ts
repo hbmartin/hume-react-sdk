@@ -83,3 +83,37 @@ it('retains existing subscribers across destruction', () => {
   expect(listener).toHaveBeenCalledTimes(3);
   expect(store.getSnapshot()[0]).toBe(2);
 });
+
+it('invalidates pending work and remains reusable when cancellation throws', () => {
+  const callbacks = new Map<number, FrameRequestCallback>();
+  let nextAnimationId = 0;
+  vi.stubGlobal(
+    'requestAnimationFrame',
+    vi.fn((callback: FrameRequestCallback) => {
+      nextAnimationId += 1;
+      callbacks.set(nextAnimationId, callback);
+      return nextAnimationId;
+    }),
+  );
+  vi.stubGlobal(
+    'cancelAnimationFrame',
+    vi.fn(() => {
+      throw new Error('animation cancellation failed');
+    }),
+  );
+  const store = new FftStore();
+
+  store.write([1]);
+  callbacks.get(1)?.(0);
+  expect(store.getSnapshot()[0]).toBe(1);
+  store.write([2]);
+
+  expect(() => store.clear()).not.toThrow();
+  expect(store.getSnapshot()[0]).toBe(0);
+
+  store.write([3]);
+  callbacks.get(2)?.(0);
+  expect(store.getSnapshot()[0]).toBe(0);
+  callbacks.get(3)?.(0);
+  expect(store.getSnapshot()[0]).toBe(3);
+});

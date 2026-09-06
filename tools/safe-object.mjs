@@ -4,6 +4,7 @@
  * @param {unknown} value
  * @param {PropertyKey} key
  * @returns {unknown}
+ * @throws {TypeError} When `value` is not an object or function.
  */
 export function getOwnValue(value, key) {
   if (
