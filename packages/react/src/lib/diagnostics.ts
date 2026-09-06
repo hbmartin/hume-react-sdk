@@ -52,6 +52,7 @@ export type VoiceDiagnosticEventName =
   | 'microphone.recording_started'
   | 'microphone.recording_stopped'
   | 'microphone.audio_chunk_captured'
+  | 'microphone.audio_chunk_read_failed'
   | 'microphone.flush_completed'
   | 'microphone.analyzer_failed'
   | 'audio.chunk_received'

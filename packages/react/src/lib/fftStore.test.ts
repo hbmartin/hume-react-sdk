@@ -95,13 +95,15 @@ it('invalidates pending work and remains reusable when cancellation throws', () 
       return nextAnimationId;
     }),
   );
+  const cancellationError = new Error('animation cancellation failed');
   vi.stubGlobal(
     'cancelAnimationFrame',
     vi.fn(() => {
-      throw new Error('animation cancellation failed');
+      throw cancellationError;
     }),
   );
-  const store = new FftStore();
+  const onError = vi.fn();
+  const store = new FftStore(onError);
 
   store.write([1]);
   callbacks.get(1)?.(0);
@@ -109,6 +111,7 @@ it('invalidates pending work and remains reusable when cancellation throws', () 
   store.write([2]);
 
   expect(() => store.clear()).not.toThrow();
+  expect(onError).toHaveBeenCalledWith(cancellationError);
   expect(store.getSnapshot()[0]).toBe(0);
 
   store.write([3]);

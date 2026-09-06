@@ -145,8 +145,6 @@ const useSoundPlayerImplementation = (
   const isAudioMutedRef = useRef(false);
   const volumeRef = useRef(1.0);
 
-  const [fftStore] = useState(() => new FftStore());
-
   const playerResources = useRef<PlayerResources | null>(null);
   const playerStopPromises = useRef(new WeakMap<AudioContext, Promise<void>>());
   const implicitPlayerStopPromise = useRef<Promise<void> | null>(null);
@@ -158,6 +156,39 @@ const useSoundPlayerImplementation = (
   const onStopAudio = useLatestRef(props.onStopAudio);
   const onError = useLatestRef(props.onError);
   const diagnostics = useLatestRef(props.diagnostics);
+
+  const reportPlayerResourceFailure = useCallback(
+    (message: string, error: unknown) => {
+      diagnostics.current?.emit({
+        level: 'warn',
+        category: 'audio_player',
+        name: 'resource.cleanup_failed',
+        details: { resource: 'audio_player', message, error },
+      });
+    },
+    [diagnostics],
+  );
+
+  const [fftStore] = useState(
+    () =>
+      new FftStore((error) => {
+        reportPlayerResourceFailure(
+          'Failed to cancel an FFT store animation frame.',
+          error,
+        );
+      }),
+  );
+
+  const clearPlayerFftStore = useCallback(
+    (message: string) => {
+      try {
+        fftStore.clear();
+      } catch (error) {
+        reportPlayerResourceFailure(message, error);
+      }
+    },
+    [fftStore, reportPlayerResourceFailure],
+  );
 
   // chunkBufferQueues and lastQueuedChunk are used to make sure that
   // we don't play chunks out of order. chunkBufferQueues is NOT the
@@ -231,6 +262,17 @@ const useSoundPlayerImplementation = (
       cancelAnimationFrame(rafId);
     }
   }, []);
+
+  const cancelPlayerFftSafely = useCallback(
+    (resources: PlayerResources, message: string) => {
+      try {
+        cancelPlayerFft(resources);
+      } catch (error) {
+        reportPlayerResourceFailure(message, error);
+      }
+    },
+    [cancelPlayerFft, reportPlayerResourceFailure],
+  );
 
   const disposePlayerResources = useCallback(
     async (resources: PlayerResources) => {
@@ -357,7 +399,9 @@ const useSoundPlayerImplementation = (
           );
           fftStore.write(barkBuffer);
         } catch {
-          fftStore.clear();
+          clearPlayerFftStore(
+            'Failed to reset FFT state after a player analyzer failure.',
+          );
         }
       };
 
@@ -388,8 +432,13 @@ const useSoundPlayerImplementation = (
           return;
         }
         bufferSource.onended = null;
-        cancelPlayerFft(resources);
-        fftStore.clear();
+        cancelPlayerFftSafely(
+          resources,
+          'Failed to cancel the player analyzer animation frame.',
+        );
+        clearPlayerFftStore(
+          'Failed to clear FFT state after audio playback ended.',
+        );
         bufferSource.disconnect();
         isProcessing.current = false;
         publishIsPlaying(false);
@@ -399,7 +448,8 @@ const useSoundPlayerImplementation = (
       };
     },
     [
-      cancelPlayerFft,
+      cancelPlayerFftSafely,
+      clearPlayerFftStore,
       fftStore,
       onError,
       onPlayAudio,
@@ -984,7 +1034,9 @@ const useSoundPlayerImplementation = (
       isProcessing.current = false;
       publishIsPlaying(false);
       publishQueueLength(0);
-      fftStore.clear();
+      clearPlayerFftStore(
+        'Failed to clear FFT state while stopping the player.',
+      );
 
       chunkBufferQueues.current.clear();
       lastQueuedChunk.current = null;
@@ -1054,7 +1106,7 @@ const useSoundPlayerImplementation = (
       cancelPlayerFft,
       diagnostics,
       disposePlayerResources,
-      fftStore,
+      clearPlayerFftStore,
       notifyDrainWaiters,
       publishIsPlaying,
       publishQueueLength,
@@ -1145,7 +1197,6 @@ const useSoundPlayerImplementation = (
       if (resources?.source) {
         const source = resources.source;
         const handleEnded = source.onended;
-        cancelPlayerFft(resources);
         try {
           source.stop();
         } catch {
@@ -1161,11 +1212,12 @@ const useSoundPlayerImplementation = (
     isProcessing.current = false;
     publishQueueLength(0);
     publishIsPlaying(false);
-    fftStore.clear();
+    clearPlayerFftStore(
+      'Failed to clear FFT state while interrupting audio playback.',
+    );
   }, [
-    cancelPlayerFft,
+    clearPlayerFftStore,
     props.enableAudioWorklet,
-    fftStore,
     onError,
     publishIsPlaying,
     publishQueueLength,
