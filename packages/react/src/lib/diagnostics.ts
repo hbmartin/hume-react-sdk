@@ -56,6 +56,7 @@ export type VoiceDiagnosticEventName =
   | 'microphone.flush_completed'
   | 'microphone.analyzer_failed'
   | 'audio.chunk_received'
+  | 'audio.analyzer_failed'
   | 'audio.queue_changed'
   | 'audio.worklet_message_ignored'
   | 'audio.playback_started'

@@ -137,15 +137,17 @@ const createStream = (
   }) as unknown as MediaStream;
 
 const renderMicrophone = (
-  callbacks: Pick<
-    Parameters<typeof useMicrophone>[0],
-    'diagnostics' | 'onStartRecording' | 'onStopRecording'
+  callbacks: Partial<
+    Pick<
+      Parameters<typeof useMicrophone>[0],
+      'diagnostics' | 'onAudioCaptured' | 'onStartRecording' | 'onStopRecording'
+    >
   > = {},
 ) => {
   const onError = vi.fn();
-  const onAudioCaptured = vi.fn();
+  const { onAudioCaptured = vi.fn(), ...optionalCallbacks } = callbacks;
   const { result, unmount } = renderHook(() =>
-    useMicrophone({ onAudioCaptured, onError, ...callbacks }),
+    useMicrophone({ onAudioCaptured, onError, ...optionalCallbacks }),
   );
 
   return { result, unmount, onError, onAudioCaptured };
@@ -318,6 +320,49 @@ describe('useMicrophone', () => {
           event.name === 'resource.cleanup_failed' &&
           event.details['message'] ===
             'Failed to read captured microphone data.',
+      ),
+    ).toBeUndefined();
+
+    await act(() => result.current.stop());
+  });
+
+  it('isolates captured-audio consumer failures from data-read failures', async () => {
+    const finalBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const callbackError = new Error('consumer audio callback failed');
+    const onAudioCaptured = vi.fn(() => {
+      throw callbackError;
+    });
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { result } = renderMicrophone({ diagnostics, onAudioCaptured });
+    result.current.start(createStream(), createAudioContext());
+
+    recorders[0]?.emit('dataavailable', {
+      data: {
+        arrayBuffer: vi.fn().mockResolvedValue(finalBuffer),
+      } as unknown as Blob,
+    } as BlobEvent);
+
+    await waitFor(() =>
+      expect(onAudioCaptured).toHaveBeenCalledWith(finalBuffer),
+    );
+    expect(
+      events.find((event) => event.name === 'consumer.callback_failed'),
+    ).toMatchObject({
+      level: 'warn',
+      category: 'consumer',
+      details: {
+        callback: 'onAudioCaptured',
+        error: { message: callbackError.message },
+      },
+    });
+    expect(
+      events.find(
+        (event) => event.name === 'microphone.audio_chunk_read_failed',
       ),
     ).toBeUndefined();
 

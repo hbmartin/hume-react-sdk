@@ -111,7 +111,10 @@ it('invalidates pending work and remains reusable when cancellation throws', () 
   store.write([2]);
 
   expect(() => store.clear()).not.toThrow();
-  expect(onError).toHaveBeenCalledWith(cancellationError);
+  expect(onError).toHaveBeenCalledWith(
+    cancellationError,
+    'Failed to cancel an FFT store animation frame.',
+  );
   expect(store.getSnapshot()[0]).toBe(0);
 
   store.write([3]);
@@ -119,4 +122,57 @@ it('invalidates pending work and remains reusable when cancellation throws', () 
   expect(store.getSnapshot()[0]).toBe(0);
   callbacks.get(3)?.(0);
   expect(store.getSnapshot()[0]).toBe(3);
+});
+
+it('reports scheduling failures and retries on a later write', () => {
+  const schedulingError = new Error('animation scheduling failed');
+  let flush: FrameRequestCallback | undefined;
+  const requestAnimationFrame = vi
+    .fn<(callback: FrameRequestCallback) => number>()
+    .mockImplementationOnce(() => {
+      throw schedulingError;
+    })
+    .mockImplementationOnce((callback) => {
+      flush = callback;
+      return 1;
+    });
+  vi.stubGlobal('requestAnimationFrame', requestAnimationFrame);
+  const onError = vi.fn();
+  const store = new FftStore(onError);
+
+  expect(() => store.write([1])).not.toThrow();
+  expect(onError).toHaveBeenCalledWith(
+    schedulingError,
+    'Failed to schedule an FFT store animation frame.',
+  );
+
+  store.write([2]);
+  flush?.(0);
+
+  expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+  expect(store.getSnapshot()[0]).toBe(2);
+});
+
+it('labels a cancellation failure with the context the caller supplied', () => {
+  vi.stubGlobal(
+    'requestAnimationFrame',
+    vi.fn((_callback: FrameRequestCallback) => 1),
+  );
+  const cancellationError = new Error('animation cancellation failed');
+  vi.stubGlobal(
+    'cancelAnimationFrame',
+    vi.fn(() => {
+      throw cancellationError;
+    }),
+  );
+  const onError = vi.fn();
+  const store = new FftStore(onError);
+
+  store.write([1]);
+  store.clear('Failed to clear FFT state while stopping the player.');
+
+  expect(onError).toHaveBeenCalledWith(
+    cancellationError,
+    'Failed to clear FFT state while stopping the player.',
+  );
 });

@@ -138,6 +138,18 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const sendAudio = useLatestRef(onAudioCaptured);
 
+  const deliverCapturedAudio = useCallback(
+    (buffer: ArrayBuffer) => {
+      invokeIsolatedConsumerCallback(
+        diagnostics.current,
+        'onAudioCaptured',
+        () => sendAudio.current(buffer),
+      );
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
+    [diagnostics, sendAudio],
+  );
+
   const applyMuteStateToTracks = useCallback(
     (tracks: MediaStreamTrack[], muted: boolean) => {
       const enabledStates = (enabledStateBeforeMute.current ??= new WeakMap<
@@ -354,18 +366,17 @@ export const useMicrophone = (props: MicrophoneProps) => {
 
   const [fftStore] = useState(
     () =>
-      new FftStore((error) => {
-        reportMicrophoneResourceFailure(
-          'Failed to cancel an FFT store animation frame.',
-          error,
-        );
+      new FftStore((error, context) => {
+        reportMicrophoneResourceFailure(context, error);
       }),
   );
 
   const clearFftStore = useCallback(
     (message: string) => {
+      // `message` also labels a cancellation failure the store reports through
+      // its error observer, so both paths name the same call site.
       try {
-        fftStore.clear();
+        fftStore.clear(message);
       } catch (error) {
         reportMicrophoneResourceFailure(message, error);
       }
@@ -508,7 +519,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
                 details: { byteLength: buffer.byteLength },
               });
             }
-            sendAudio.current(buffer);
+            deliverCapturedAudio(buffer);
           }
         })
         .catch((err: unknown) => {
@@ -524,7 +535,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
       );
     },
     // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs are intentionally stable callback dependencies
-    [diagnostics, reportDataReadFailure, sendAudio],
+    [deliverCapturedAudio, diagnostics, reportDataReadFailure],
   );
 
   const startFftAnalyzer = useCallback(
@@ -1003,7 +1014,7 @@ export const useMicrophone = (props: MicrophoneProps) => {
             if (candidateMode === 'buffering') {
               candidateBuffers.push(buffer);
             } else if (candidateGeneration === recordingGeneration.current) {
-              sendAudio.current(buffer);
+              deliverCapturedAudio(buffer);
             }
           })
           .catch((error: unknown) => {
@@ -1172,10 +1183,11 @@ export const useMicrophone = (props: MicrophoneProps) => {
         void task.finally(() => pendingDataTasks.current.delete(task));
       });
       const bufferedCandidateAudio = candidateBuffers.splice(0);
-      bufferedCandidateAudio.forEach((buffer) => sendAudio.current(buffer));
+      bufferedCandidateAudio.forEach(deliverCapturedAudio);
     },
     [
       applyMuteStateToStream,
+      deliverCapturedAudio,
       disposeMicrophoneResources,
       finishRecordingLifecycle,
       clearFftStore,
@@ -1185,7 +1197,6 @@ export const useMicrophone = (props: MicrophoneProps) => {
       reportMicrophoneResourceFailure,
       reportMuteStateFailure,
       retryRetiredMicrophoneStream,
-      sendAudio,
       startFftAnalyzer,
     ],
   );

@@ -13,6 +13,9 @@ const EMPTY_FFT: FftSnapshot = Object.freeze(
   Array.from({ length: BARK_BAND_COUNT }, () => 0),
 );
 
+const CANCEL_FAILURE = 'Failed to cancel an FFT store animation frame.';
+const SCHEDULE_FAILURE = 'Failed to schedule an FFT store animation frame.';
+
 /**
  * Mutable store backing the granular FFT subscription hooks.
  *
@@ -20,7 +23,9 @@ const EMPTY_FFT: FftSnapshot = Object.freeze(
  * exported only because the deprecated `useSoundPlayer` return type exposes it.
  */
 export class FftStore {
-  private readonly _onError: ((error: unknown) => void) | undefined;
+  private readonly _onError:
+    | ((error: unknown, context: string) => void)
+    | undefined;
 
   private _buffer: number[] = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
@@ -34,8 +39,12 @@ export class FftStore {
 
   private _generation = 0;
 
-  /** Receives recoverable scheduling and cleanup failures. */
-  constructor(onError?: (error: unknown) => void) {
+  /**
+   * Receives recoverable scheduling and cleanup failures. `context` describes
+   * the operation that failed, so a caller that passes its own message to
+   * {@link FftStore.clear} sees that message rather than a generic one.
+   */
+  constructor(onError?: (error: unknown, context: string) => void) {
     this._onError = onError;
   }
 
@@ -49,7 +58,8 @@ export class FftStore {
     }
   }
 
-  clear(): void {
+  /** `context` labels failures reported to the error observer. */
+  clear(context: string = CANCEL_FAILURE): void {
     this._buffer.fill(0);
     this._dirty = false;
     this._generation += 1;
@@ -60,11 +70,7 @@ export class FftStore {
         cancelAnimationFrame(rafId);
       } catch (error) {
         // The invalidated callback is generation-guarded if cancellation fails.
-        try {
-          this._onError?.(error);
-        } catch {
-          // Error observers must not make store cleanup fail.
-        }
+        this._reportError(error, context);
       }
     }
     if (this._snapshot.every((value) => value === 0)) return;
@@ -75,11 +81,26 @@ export class FftStore {
   private _scheduleFlush(): void {
     if (this._rafId !== null) return;
     const generation = this._generation;
-    this._rafId = requestAnimationFrame(() => {
-      if (generation !== this._generation) return;
-      this._rafId = null;
-      this._flush();
-    });
+    try {
+      this._rafId = requestAnimationFrame(() => {
+        if (generation !== this._generation) return;
+        this._rafId = null;
+        this._flush();
+      });
+    } catch (error) {
+      // Allow a later write to retry instead of leaving the store permanently
+      // dirty with no scheduled flush.
+      this._dirty = false;
+      this._reportError(error, SCHEDULE_FAILURE);
+    }
+  }
+
+  private _reportError(error: unknown, context: string): void {
+    try {
+      this._onError?.(error, context);
+    } catch {
+      // Error observers must not affect store operation or cleanup.
+    }
   }
 
   private _flush(): void {
