@@ -20,6 +20,8 @@ const EMPTY_FFT: FftSnapshot = Object.freeze(
  * exported only because the deprecated `useSoundPlayer` return type exposes it.
  */
 export class FftStore {
+  private readonly _onError: ((error: unknown) => void) | undefined;
+
   private _buffer: number[] = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
   private _snapshot: FftSnapshot = EMPTY_FFT;
@@ -31,6 +33,11 @@ export class FftStore {
   private _rafId: number | null = null;
 
   private _generation = 0;
+
+  /** Receives recoverable scheduling and cleanup failures. */
+  constructor(onError?: (error: unknown) => void) {
+    this._onError = onError;
+  }
 
   write(data: number[]): void {
     for (let i = 0; i < BARK_BAND_COUNT; i++) {
@@ -51,8 +58,13 @@ export class FftStore {
     if (rafId !== null) {
       try {
         cancelAnimationFrame(rafId);
-      } catch {
+      } catch (error) {
         // The invalidated callback is generation-guarded if cancellation fails.
+        try {
+          this._onError?.(error);
+        } catch {
+          // Error observers must not make store cleanup fail.
+        }
       }
     }
     if (this._snapshot.every((value) => value === 0)) return;

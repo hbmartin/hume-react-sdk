@@ -1097,11 +1097,78 @@ describe('useSoundPlayer', () => {
     expect(onStopAudio).toHaveBeenCalledWith('new-session');
   });
 
-  it('finishes non-worklet cleanup when clearQueue stops the active source', async () => {
+  it('continues non-worklet playback when animation cancellation throws', async () => {
+    let nextAnimationId = 0;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => {
+      nextAnimationId += 1;
+      return nextAnimationId;
+    });
+    const cancellationError = new Error('animation cancellation failed');
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {
+      throw cancellationError;
+    });
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const onStopAudio = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        diagnostics,
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio,
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    await act(() =>
+      result.current.addToQueue({
+        id: 'first',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+    await act(() =>
+      result.current.addToQueue({
+        id: 'second',
+        index: 0,
+        data: '\x02',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+
+    const firstSource = bufferSources[0];
+    expect(() => act(() => firstSource?.onended?.())).not.toThrow();
+
+    expect(firstSource?.disconnect).toHaveBeenCalledOnce();
+    expect(onStopAudio).toHaveBeenCalledWith('first');
+    expect(bufferSources).toHaveLength(2);
+    expect(result.current.isPlaying).toBe(true);
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to cancel the player analyzer animation frame.',
+      ),
+    ).toMatchObject({
+      category: 'audio_player',
+      details: { error: { message: cancellationError.message } },
+    });
+  });
+
+  it('finishes non-worklet cleanup when animation cancellation throws', async () => {
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
     const cancelAnimationFrame = vi
       .spyOn(globalThis, 'cancelAnimationFrame')
-      .mockImplementation(() => {});
+      .mockImplementation(() => {
+        throw new Error('animation cancellation failed');
+      });
     const onStopAudio = vi.fn();
     const { result } = renderHook(() =>
       useSoundPlayer({

@@ -281,6 +281,49 @@ describe('useMicrophone', () => {
     );
   });
 
+  it('reports captured audio read failures separately from cleanup failures', async () => {
+    const readError = new Error('captured data read failed');
+    const recorders = stubMediaRecorder(supports(MimeType.WEBM));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { result } = renderMicrophone({ diagnostics });
+    result.current.start(createStream(), createAudioContext());
+
+    recorders[0]?.emit('dataavailable', {
+      data: {
+        arrayBuffer: vi.fn().mockRejectedValue(readError),
+      } as unknown as Blob,
+    } as BlobEvent);
+
+    await waitFor(() =>
+      expect(
+        events.find(
+          (event) => event.name === 'microphone.audio_chunk_read_failed',
+        ),
+      ).toMatchObject({
+        level: 'warn',
+        category: 'microphone',
+        details: {
+          message: 'Failed to read captured microphone data.',
+          error: { message: readError.message },
+        },
+      }),
+    );
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to read captured microphone data.',
+      ),
+    ).toBeUndefined();
+
+    await act(() => result.current.stop());
+  });
+
   it('preserves a mute requested before a stream existed', () => {
     stubMediaRecorder(supports(MimeType.WEBM));
     const track = {
