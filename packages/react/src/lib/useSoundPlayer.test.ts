@@ -1363,6 +1363,50 @@ describe('useSoundPlayer', () => {
     expect(rafCallbacks.has(pollFftId)).toBe(false);
   });
 
+  it('leaves initialized resources for provider cleanup when unmount cancellation throws', async () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    let nextAnimationId = 0;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (callback) => {
+        nextAnimationId += 1;
+        rafCallbacks.set(nextAnimationId, callback);
+        return nextAnimationId;
+      },
+    );
+    const cancelAnimationFrame = vi
+      .spyOn(globalThis, 'cancelAnimationFrame')
+      .mockImplementation(() => {
+        throw new Error('animation cancellation failed');
+      });
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    const stopAllForContext = result.current.stopAllForContext;
+    const context = vi.mocked(globalThis.AudioContext).mock.results[0]
+      ?.value as AudioContext | undefined;
+    const stalePollFft = rafCallbacks.get(nextAnimationId);
+
+    unmount();
+    await act(async () => stalePollFft?.(0));
+
+    expect(closeAudioContext).not.toHaveBeenCalled();
+    expect(disconnectAnalyserNode).not.toHaveBeenCalled();
+    expect(disconnectGainNode).not.toHaveBeenCalled();
+
+    if (!context) throw new Error('Expected the initialized audio context.');
+    cancelAnimationFrame.mockRestore();
+    await act(() => stopAllForContext(context));
+    expect(closeAudioContext).toHaveBeenCalledOnce();
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+  });
+
   it('preserves volume and mute state across stop and reinitialization', async () => {
     const { result } = renderHook(() =>
       useSoundPlayer({
