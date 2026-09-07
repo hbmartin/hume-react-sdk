@@ -200,7 +200,7 @@ describe('useSoundPlayer', () => {
     expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
-  it('reports initialization failure before an owned context close times out', async () => {
+  it('bounds rollback before reporting an initialization failure', async () => {
     vi.useFakeTimers();
     audioContextState = 'suspended';
     resumeAudioContext.mockRejectedValueOnce(new Error('autoplay blocked'));
@@ -225,15 +225,16 @@ describe('useSoundPlayer', () => {
     });
     await act(() => vi.advanceTimersByTimeAsync(0));
 
-    expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining('autoplay policy'),
-      'audio_player_initialization_failure',
-    );
+    expect(onError).not.toHaveBeenCalled();
     expect(closeAudioContext).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
 
     await act(() => vi.advanceTimersByTimeAsync(1_000));
     await expect(initialization).resolves.toBe(false);
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('autoplay policy'),
+      'audio_player_initialization_failure',
+    );
   });
 
   it('returns false when resume resolves but the context stays suspended', async () => {
@@ -313,7 +314,7 @@ describe('useSoundPlayer', () => {
     );
   });
 
-  it('reports the initialization failure once when rollback cleanup also fails', async () => {
+  it('combines initialization and rollback cleanup failures', async () => {
     vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
     const cleanupError = new Error('context close failed');
     closeAudioContext.mockRejectedValueOnce(cleanupError);
@@ -337,7 +338,9 @@ describe('useSoundPlayer', () => {
 
     expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
-      'Failed to load audio worklet',
+      expect.stringMatching(
+        /Failed to load audio worklet.*context close failed/,
+      ),
       'audio_worklet_load_failure',
     );
     expect(
@@ -357,7 +360,7 @@ describe('useSoundPlayer', () => {
     });
   });
 
-  it('reports replacement disposal failures and resolves false', async () => {
+  it('retains and retries a context whose replacement disposal failed', async () => {
     const replacementError = new Error('old context close failed');
     const onError = vi.fn();
     const { result } = renderHook(() =>
@@ -379,6 +382,33 @@ describe('useSoundPlayer', () => {
       'audio_player_closure_failure',
     );
     expect(globalThis.AudioContext).toHaveBeenCalledOnce();
+
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+
+    expect(closeAudioContext).toHaveBeenCalledTimes(2);
+    expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('cleans up initialization when the consumer error handler throws', async () => {
+    vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
+    const onError = vi.fn(() => {
+      throw new Error('consumer callback failed');
+    });
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
   it('preserves browser error details when initialization throws', async () => {
@@ -835,6 +865,35 @@ describe('useSoundPlayer', () => {
     expect(secondSettled).toBe(true);
   });
 
+  it('does not let an older implicit stop hide a reinitialized player on unmount', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 1);
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+
+    let firstStop = Promise.resolve();
+    act(() => {
+      firstStop = result.current.stopAll();
+    });
+    await act(() => result.current.initPlayer());
+    act(() => unmount());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+      await firstStop;
+    });
+
+    expect(closeAudioContext).toHaveBeenCalledTimes(2);
+  });
+
   it('plays chunks in correct order when received in order', async () => {
     const onError = vi.fn();
     const onPlayAudio = vi.fn();
@@ -1210,9 +1269,14 @@ describe('useSoundPlayer', () => {
         return nextAnimationId;
       });
     const cancellationError = new Error('animation cancellation failed');
-    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {
-      throw cancellationError;
-    });
+    const cancelAnimationFrame = vi
+      .spyOn(globalThis, 'cancelAnimationFrame')
+      .mockImplementationOnce(() => {
+        throw cancellationError;
+      })
+      .mockImplementation((id) => {
+        rafCallbacks.delete(id);
+      });
     const events: VoiceDiagnosticEvent[] = [];
     const diagnostics = createVoiceDiagnosticsReporter(() => ({
       logger: false,
@@ -1266,10 +1330,11 @@ describe('useSoundPlayer', () => {
     act(() => stalePollFft?.(0));
     expect(framesArmedFor(stalePollFft)).toHaveLength(1);
 
-    // The clip that replaced it still polls.
-    const livePollFft = rafCallbacks.get(2);
-    act(() => livePollFft?.(0));
-    expect(framesArmedFor(livePollFft)).toHaveLength(2);
+    // The stale frame must not erase the replacement frame's id; interruption
+    // still needs to cancel the live loop.
+    act(() => result.current.clearQueue());
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+    expect(rafCallbacks.has(2)).toBe(false);
     expect(
       events.find(
         (event) =>
@@ -1283,22 +1348,10 @@ describe('useSoundPlayer', () => {
     });
   });
 
-  it('does not let a stale worklet frame hide a live non-worklet frame', async () => {
+  it('keeps the initialized playback mode until the player is reinitialized', async () => {
     vi.useFakeTimers();
-    const rafCallbacks = new Map<number, FrameRequestCallback>();
-    let nextAnimationId = 0;
-    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
-      (callback) => {
-        nextAnimationId += 1;
-        rafCallbacks.set(nextAnimationId, callback);
-        return nextAnimationId;
-      },
-    );
-    const cancelAnimationFrame = vi
-      .spyOn(globalThis, 'cancelAnimationFrame')
-      .mockImplementation((id) => {
-        rafCallbacks.delete(id);
-      });
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 1);
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
     const { result, rerender } = renderHook(
       ({ enableAudioWorklet }) =>
         useSoundPlayer({
@@ -1310,10 +1363,6 @@ describe('useSoundPlayer', () => {
       { initialProps: { enableAudioWorklet: true } },
     );
     await act(() => result.current.initPlayer());
-    const staleWorkletFrame = rafCallbacks.get(1);
-    if (!staleWorkletFrame) {
-      throw new Error('Expected the worklet FFT polling callback.');
-    }
 
     rerender({ enableAudioWorklet: false });
     await act(() =>
@@ -1325,13 +1374,12 @@ describe('useSoundPlayer', () => {
         receivedAt: new Date(0),
       }),
     );
-    expect(rafCallbacks.has(2)).toBe(true);
-
-    act(() => staleWorkletFrame(0));
+    expect(fakePort.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'audio', id: 'mode-change' }),
+    );
+    expect(createBufferSource).not.toHaveBeenCalled();
     act(() => result.current.clearQueue());
-
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
-    expect(rafCallbacks.has(2)).toBe(false);
+    expect(fakePort.postMessage).toHaveBeenCalledWith({ type: 'fadeAndClear' });
 
     let stopping = Promise.resolve();
     act(() => {
@@ -1344,6 +1392,21 @@ describe('useSoundPlayer', () => {
       await vi.advanceTimersByTimeAsync(100);
       await stopping;
     });
+
+    fakePort.postMessage.mockClear();
+    await act(() => result.current.initPlayer());
+    await act(() =>
+      result.current.addToQueue({
+        id: 'reinitialized-mode',
+        index: 0,
+        data: '\x02',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+
+    expect(createBufferSource).toHaveBeenCalledOnce();
+    expect(fakePort.postMessage).not.toHaveBeenCalled();
   });
 
   it('finishes non-worklet cleanup when animation cancellation throws', async () => {
@@ -1617,6 +1680,74 @@ describe('useSoundPlayer', () => {
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
     expect(closeAudioContext).toHaveBeenCalledOnce();
+  });
+
+  it('reports one failure when unmount joins a public stop', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    const onError = vi.fn();
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    fakePort.close.mockImplementationOnce(() => {
+      throw new Error('joined stop failed');
+    });
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAll();
+    });
+    act(() => unmount());
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+      await stopping;
+    });
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('joined stop failed'),
+      'audio_player_closure_failure',
+    );
+  });
+
+  it('does not emit stop lifecycle events when an unused player unmounts', () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { unmount } = renderHook(() =>
+      useSoundPlayer({
+        diagnostics,
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    unmount();
+
+    expect(
+      events.filter(
+        (event) =>
+          event.name === 'resource.stop_started' ||
+          event.name === 'resource.stopped',
+      ),
+    ).toHaveLength(0);
   });
 
   it('abandons standalone initialization that finishes after unmount', async () => {
