@@ -754,7 +754,9 @@ const useSoundPlayerImplementation = (
               playerResources.current !== resources ||
               resources.fftGeneration !== fftGeneration
             ) {
-              void cleanupInitialization();
+              if (resourcesForInitialization === resources) {
+                void cleanupInitialization();
+              }
               return;
             }
             resources.fftRafId = null;
@@ -771,7 +773,9 @@ const useSoundPlayerImplementation = (
                 playerResources.current !== resources ||
                 resources.fftGeneration !== fftGeneration
               ) {
-                void cleanupInitialization();
+                if (resourcesForInitialization === resources) {
+                  void cleanupInitialization();
+                }
                 return;
               }
               resources.fftRafId = requestAnimationFrame(pollFft);
@@ -789,6 +793,10 @@ const useSoundPlayerImplementation = (
         } else {
           isInitialized.current = true;
         }
+        // Initialization has transferred ownership to `playerResources`.
+        // Stale FFT callbacks must no longer invoke initialization rollback;
+        // provider-level teardown remains responsible for these live resources.
+        resourcesForInitialization = null;
         return true;
       } catch (_error) {
         return failInitialization(
