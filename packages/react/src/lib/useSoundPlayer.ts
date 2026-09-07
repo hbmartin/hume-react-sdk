@@ -131,14 +131,14 @@ export interface UseSoundPlayerProps {
 }
 
 /**
- * The audio player itself. `propagateContextStopFailures` selects between the
- * lenient teardown used in isolation and the strict aggregation the provider
- * relies on to report cleanup failures.
+ * The audio player itself. `managedByVoiceProvider` selects strict cleanup
+ * failure propagation and leaves unmount disposal to the provider's ordered
+ * resource teardown.
  *
  */
 const useSoundPlayerImplementation = (
   props: UseSoundPlayerProps,
-  propagateContextStopFailures: boolean,
+  managedByVoiceProvider: boolean,
 ) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
@@ -277,11 +277,9 @@ const useSoundPlayerImplementation = (
   const cancelPlayerFft = useCallback((resources: PlayerResources) => {
     resources.fftGeneration += 1;
     const rafId = resources.fftRafId;
+    resources.fftRafId = null;
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
-      if (resources.fftRafId === rafId) {
-        resources.fftRafId = null;
-      }
     }
   }, []);
 
@@ -297,7 +295,10 @@ const useSoundPlayerImplementation = (
   );
 
   const disposePlayerResources = useCallback(
-    async (resources: PlayerResources) => {
+    async (
+      resources: PlayerResources,
+      fftAlreadyInvalidated: boolean = false,
+    ) => {
       if (playerResources.current === resources) {
         playerResources.current = null;
       }
@@ -306,7 +307,9 @@ const useSoundPlayerImplementation = (
       const release = (label: string, action: () => void) =>
         releaseSafely(failures, label, action);
 
-      release('FFT cleanup failed', () => cancelPlayerFft(resources));
+      if (!fftAlreadyInvalidated) {
+        release('FFT cleanup failed', () => cancelPlayerFft(resources));
+      }
 
       const source = resources.source;
       resources.source = null;
@@ -749,17 +752,16 @@ const useSoundPlayerImplementation = (
 
           // Use requestAnimationFrame instead of setInterval(5ms) for display-rate updates
           const pollFft = () => {
+            // The browser consumes this id before invoking the callback. Clear
+            // it even when the loop has since been invalidated.
+            resources.fftRafId = null;
             if (
               generation !== playerGeneration.current ||
               playerResources.current !== resources ||
               resources.fftGeneration !== fftGeneration
             ) {
-              if (resourcesForInitialization === resources) {
-                void cleanupInitialization();
-              }
               return;
             }
-            resources.fftRafId = null;
             try {
               analyser.getByteFrequencyData(frequencyDataBuffer);
               convertLinearFrequenciesToBarkInto(
@@ -773,9 +775,6 @@ const useSoundPlayerImplementation = (
                 playerResources.current !== resources ||
                 resources.fftGeneration !== fftGeneration
               ) {
-                if (resourcesForInitialization === resources) {
-                  void cleanupInitialization();
-                }
                 return;
               }
               resources.fftRafId = requestAnimationFrame(pollFft);
@@ -788,19 +787,18 @@ const useSoundPlayerImplementation = (
           } catch (error) {
             stopPollingAfterFailure(error);
           }
-
-          isInitialized.current = true;
-        } else {
-          isInitialized.current = true;
         }
-        // Initialization has transferred ownership to `playerResources`.
-        // Stale FFT callbacks must no longer invoke initialization rollback;
-        // provider-level teardown remains responsible for these live resources.
+        isInitialized.current = true;
+        // Initialization is complete. Release rollback ownership while
+        // `playerResources` retains ownership of the live audio graph.
         resourcesForInitialization = null;
         return true;
-      } catch (_error) {
+      } catch (error) {
+        const detail = getBrowserErrorMessage(error);
         return failInitialization(
-          'Failed to initialize audio player',
+          detail !== null
+            ? `Failed to initialize audio player: ${detail}`
+            : 'Failed to initialize audio player',
           'audio_player_initialization_failure',
         );
       }
@@ -1152,7 +1150,7 @@ const useSoundPlayerImplementation = (
 
       if (resourcesToStop) {
         try {
-          await disposePlayerResources(resourcesToStop);
+          await disposePlayerResources(resourcesToStop, true);
         } catch (error) {
           failures.push(
             getBrowserErrorMessage(error) ?? 'Unknown cleanup error',
@@ -1242,10 +1240,10 @@ const useSoundPlayerImplementation = (
 
   const stopAllForContext = useCallback(
     (context: AudioContext) =>
-      propagateContextStopFailures
+      managedByVoiceProvider
         ? stopAllTracked(context)
         : stopAllAndReport(context),
-    [propagateContextStopFailures, stopAllAndReport, stopAllTracked],
+    [managedByVoiceProvider, stopAllAndReport, stopAllTracked],
   );
 
   const clearQueue = useCallback(() => {
@@ -1388,26 +1386,44 @@ const useSoundPlayerImplementation = (
     // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
   }, [diagnostics]);
 
-  // The hook has no other unmount path. Without this, the FFT polling loop
-  // keeps re-arming itself through requestAnimationFrame for the lifetime of
-  // the page once the player is gone. Cancelling the pending frame also bumps
-  // `fftGeneration`, which invalidates the loop even if the cancellation
-  // throws. `playerResources` is deliberately left in place so a provider that
-  // calls `stopAll` after unmount still tears the audio graph down.
+  // VoiceProvider owns ordered teardown of its shared resources. The standalone
+  // hook has no parent owner, so unmount must dispose its audio graph directly.
   useEffect(
     () => () => {
+      playerGeneration.current += 1;
       const resources = playerResources.current;
       if (resources) {
-        cancelPlayerFftSafely(
-          resources,
-          'Failed to cancel the player analyzer animation frame while unmounting.',
-        );
+        if (managedByVoiceProvider) {
+          cancelPlayerFftSafely(
+            resources,
+            'Failed to cancel the player analyzer animation frame while unmounting.',
+          );
+        } else {
+          void disposePlayerResources(resources).catch((error: unknown) => {
+            const message = getBrowserErrorMessage(error) ?? 'Unknown error';
+            try {
+              onError.current(
+                `Failed to dispose audio player while unmounting: ${message}`,
+                'audio_player_closure_failure',
+              );
+            } catch {
+              // Consumer error handlers must not create an unhandled rejection
+              // from fire-and-forget unmount disposal.
+            }
+          });
+        }
       }
       clearPlayerFftStore(
         'Failed to clear FFT state while unmounting the player.',
       );
     },
-    [cancelPlayerFftSafely, clearPlayerFftStore],
+    [
+      cancelPlayerFftSafely,
+      clearPlayerFftStore,
+      disposePlayerResources,
+      managedByVoiceProvider,
+      onError,
+    ],
   );
 
   return useMemo(
