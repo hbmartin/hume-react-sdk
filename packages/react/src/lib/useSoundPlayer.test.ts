@@ -89,6 +89,7 @@ describe('useSoundPlayer', () => {
   let closeAudioContext: Mock;
   let disconnectAnalyserNode: Mock;
   let disconnectGainNode: Mock;
+  let defaultGetByteFrequencyData: Mock;
   let gainSetters: Mock[];
 
   beforeEach(() => {
@@ -99,6 +100,7 @@ describe('useSoundPlayer', () => {
     closeAudioContext = vi.fn().mockResolvedValue(undefined);
     disconnectAnalyserNode = vi.fn();
     disconnectGainNode = vi.fn();
+    defaultGetByteFrequencyData = vi.fn();
     gainSetters = [];
     decodeAudioData = vi.fn((buffer: ArrayBuffer) =>
       // oxlint-disable-next-line typescript/no-non-null-assertion -- assertion follows the queue population above
@@ -126,7 +128,7 @@ describe('useSoundPlayer', () => {
             frequencyBinCount: 1024,
             connect: vi.fn(),
             disconnect: disconnectAnalyserNode,
-            getByteFrequencyData: vi.fn(),
+            getByteFrequencyData: defaultGetByteFrequencyData,
           }),
           createGain: () => {
             const setValueAtTime = vi.fn();
@@ -1098,11 +1100,15 @@ describe('useSoundPlayer', () => {
   });
 
   it('continues non-worklet playback when animation cancellation throws', async () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
     let nextAnimationId = 0;
-    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => {
-      nextAnimationId += 1;
-      return nextAnimationId;
-    });
+    const requestAnimationFrame = vi
+      .spyOn(globalThis, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        nextAnimationId += 1;
+        rafCallbacks.set(nextAnimationId, callback);
+        return nextAnimationId;
+      });
     const cancellationError = new Error('animation cancellation failed');
     vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {
       throw cancellationError;
@@ -1149,6 +1155,21 @@ describe('useSoundPlayer', () => {
     expect(onStopAudio).toHaveBeenCalledWith('first');
     expect(bufferSources).toHaveLength(2);
     expect(result.current.isPlaying).toBe(true);
+    // Count only the frames each loop armed for itself. A global call count
+    // also sees frames scheduled by the FFT store and by any other live loop.
+    const framesArmedFor = (callback: FrameRequestCallback | undefined) =>
+      requestAnimationFrame.mock.calls.filter(([armed]) => armed === callback);
+
+    // The first clip's cancellation threw, so its loop survives only if the
+    // generation guard misses it. Replaying its frame must not re-arm it.
+    const stalePollFft = rafCallbacks.get(1);
+    act(() => stalePollFft?.(0));
+    expect(framesArmedFor(stalePollFft)).toHaveLength(1);
+
+    // The clip that replaced it still polls.
+    const livePollFft = rafCallbacks.get(2);
+    act(() => livePollFft?.(0));
+    expect(framesArmedFor(livePollFft)).toHaveLength(2);
     expect(
       events.find(
         (event) =>
@@ -1197,6 +1218,149 @@ describe('useSoundPlayer', () => {
 
     act(() => source?.onended?.());
     expect(onStopAudio).toHaveBeenCalledOnce();
+  });
+
+  it('cancels FFT polling when clearQueue runs before onended is installed', async () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (callback) => {
+        rafCallbacks.set(41, callback);
+        return 41;
+      },
+    );
+    const cancelAnimationFrame = vi
+      .spyOn(globalThis, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        rafCallbacks.delete(id);
+      });
+    let clearQueue = () => {};
+    const onPlayAudio = vi.fn(() => clearQueue());
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio,
+        onStopAudio: vi.fn(),
+      }),
+    );
+    clearQueue = result.current.clearQueue;
+    await act(() => result.current.initPlayer());
+
+    await act(() =>
+      result.current.addToQueue({
+        id: 'interrupted-before-onended',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+
+    expect(onPlayAudio).toHaveBeenCalledWith('interrupted-before-onended');
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
+    expect(rafCallbacks.has(41)).toBe(false);
+  });
+
+  it.each([
+    { enableAudioWorklet: false, label: 'non-worklet' },
+    { enableAudioWorklet: true, label: 'worklet' },
+  ])(
+    'reports a $label analyzer failure and does not re-arm its FFT loop',
+    async ({ enableAudioWorklet }) => {
+      const rafCallbacks = new Map<number, FrameRequestCallback>();
+      let nextAnimationId = 0;
+      const requestAnimationFrame = vi
+        .spyOn(globalThis, 'requestAnimationFrame')
+        .mockImplementation((callback) => {
+          nextAnimationId += 1;
+          rafCallbacks.set(nextAnimationId, callback);
+          return nextAnimationId;
+        });
+      const analyzerError = new Error('player analyzer failed');
+      defaultGetByteFrequencyData.mockImplementationOnce(() => {
+        throw analyzerError;
+      });
+      const events: VoiceDiagnosticEvent[] = [];
+      const diagnostics = createVoiceDiagnosticsReporter(() => ({
+        logger: false,
+        onEvent: (event) => events.push(event),
+      }));
+      const { result } = renderHook(() =>
+        useSoundPlayer({
+          diagnostics,
+          enableAudioWorklet,
+          onError: vi.fn(),
+          onPlayAudio: vi.fn(),
+          onStopAudio: vi.fn(),
+        }),
+      );
+      await act(() => result.current.initPlayer());
+      if (!enableAudioWorklet) {
+        await act(() =>
+          result.current.addToQueue({
+            id: 'analyzer-failure',
+            index: 0,
+            data: '\x01',
+            type: 'audio_output',
+            receivedAt: new Date(0),
+          }),
+        );
+      }
+      const pollFft = rafCallbacks.get(nextAnimationId);
+      rafCallbacks.delete(nextAnimationId);
+
+      expect(() => act(() => pollFft?.(0))).not.toThrow();
+
+      // The loop armed itself exactly once, at startup, and the failing frame
+      // did not re-arm it.
+      expect(
+        requestAnimationFrame.mock.calls.filter(
+          ([callback]) => callback === pollFft,
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.find((event) => event.name === 'audio.analyzer_failed'),
+      ).toMatchObject({
+        level: 'warn',
+        category: 'audio_player',
+        details: {
+          message: analyzerError.message,
+          error: { message: analyzerError.message },
+        },
+      });
+    },
+  );
+
+  it('stops the FFT polling loop when the player unmounts', async () => {
+    const rafCallbacks = new Map<number, FrameRequestCallback>();
+    let nextAnimationId = 0;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (callback) => {
+        nextAnimationId += 1;
+        rafCallbacks.set(nextAnimationId, callback);
+        return nextAnimationId;
+      },
+    );
+    const cancelAnimationFrame = vi
+      .spyOn(globalThis, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        rafCallbacks.delete(id);
+      });
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    const pollFftId = nextAnimationId;
+
+    unmount();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(pollFftId);
+    expect(rafCallbacks.has(pollFftId)).toBe(false);
   });
 
   it('preserves volume and mute state across stop and reinitialization', async () => {

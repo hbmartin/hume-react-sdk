@@ -1,5 +1,5 @@
 import { convertBase64ToBlob } from 'hume';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AudioOutputMessage } from '../models/messages';
 import { getDataProperty } from '../utils/aggregateErrors';
@@ -91,6 +91,7 @@ interface PlayerResources {
   worklet: AudioWorkletNode | null;
   source: AudioBufferSourceNode | null;
   fftRafId: number | null;
+  fftGeneration: number;
   malformedWorkletMessageReported: boolean;
   reportedUnknownWorkletMessageTypes: Set<string>;
 }
@@ -166,28 +167,45 @@ const useSoundPlayerImplementation = (
         details: { resource: 'audio_player', message, error },
       });
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics],
   );
 
   const [fftStore] = useState(
     () =>
-      new FftStore((error) => {
-        reportPlayerResourceFailure(
-          'Failed to cancel an FFT store animation frame.',
-          error,
-        );
+      new FftStore((error, context) => {
+        reportPlayerResourceFailure(context, error);
       }),
   );
 
   const clearPlayerFftStore = useCallback(
     (message: string) => {
+      // `message` also labels a cancellation failure the store reports through
+      // its error observer, so both paths name the same call site.
       try {
-        fftStore.clear();
+        fftStore.clear(message);
       } catch (error) {
         reportPlayerResourceFailure(message, error);
       }
     },
     [fftStore, reportPlayerResourceFailure],
+  );
+
+  const reportPlayerAnalyzerFailure = useCallback(
+    (error: unknown) => {
+      const message = getBrowserErrorMessage(error) ?? 'Unknown error';
+      diagnostics.current?.emit({
+        level: 'warn',
+        category: 'audio_player',
+        name: 'audio.analyzer_failed',
+        details: { message, error },
+      });
+      clearPlayerFftStore(
+        'Failed to reset FFT state after a player analyzer failure.',
+      );
+    },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
+    [clearPlayerFftStore, diagnostics],
   );
 
   // chunkBufferQueues and lastQueuedChunk are used to make sure that
@@ -243,6 +261,7 @@ const useSoundPlayerImplementation = (
         });
       }
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics, notifyDrainWaiters],
   );
 
@@ -256,10 +275,13 @@ const useSoundPlayerImplementation = (
   );
 
   const cancelPlayerFft = useCallback((resources: PlayerResources) => {
+    resources.fftGeneration += 1;
     const rafId = resources.fftRafId;
-    resources.fftRafId = null;
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
+      if (resources.fftRafId === rafId) {
+        resources.fftRafId = null;
+      }
     }
   }, []);
 
@@ -385,10 +407,26 @@ const useSoundPlayerImplementation = (
       const frequencyDataBuffer = new Uint8Array(analyser.frequencyBinCount);
       const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
 
-      const updateFrequencyData = () => {
+      const fftGeneration = ++resources.fftGeneration;
+      const stopPollingAfterFailure = (error: unknown) => {
+        if (resources.fftGeneration !== fftGeneration) return;
+        resources.fftGeneration += 1;
+        resources.fftRafId = null;
+        reportPlayerAnalyzerFailure(error);
+      };
+
+      const pollFft = () => {
+        if (
+          generation !== playerGeneration.current ||
+          playerResources.current !== resources ||
+          resources.source !== bufferSource ||
+          resources.fftGeneration !== fftGeneration
+        ) {
+          return;
+        }
+        resources.fftRafId = null;
         try {
           const bufferSampleRate = bufferSource.buffer?.sampleRate;
-
           if (typeof bufferSampleRate === 'undefined') return;
 
           analyser.getByteFrequencyData(frequencyDataBuffer);
@@ -398,24 +436,24 @@ const useSoundPlayerImplementation = (
             barkBuffer,
           );
           fftStore.write(barkBuffer);
-        } catch {
-          clearPlayerFftStore(
-            'Failed to reset FFT state after a player analyzer failure.',
-          );
+          if (
+            generation !== playerGeneration.current ||
+            playerResources.current !== resources ||
+            resources.source !== bufferSource ||
+            resources.fftGeneration !== fftGeneration
+          ) {
+            return;
+          }
+          resources.fftRafId = requestAnimationFrame(pollFft);
+        } catch (error) {
+          stopPollingAfterFailure(error);
         }
       };
-
-      const pollFft = () => {
-        if (
-          generation !== playerGeneration.current ||
-          playerResources.current !== resources
-        ) {
-          return;
-        }
-        updateFrequencyData();
+      try {
         resources.fftRafId = requestAnimationFrame(pollFft);
-      };
-      resources.fftRafId = requestAnimationFrame(pollFft);
+      } catch (error) {
+        stopPollingAfterFailure(error);
+      }
 
       bufferSource.start(0);
       if (nextClip.index === 0) {
@@ -456,6 +494,7 @@ const useSoundPlayerImplementation = (
       onStopAudio,
       publishIsPlaying,
       publishQueueLength,
+      reportPlayerAnalyzerFailure,
     ],
   );
 
@@ -521,6 +560,7 @@ const useSoundPlayerImplementation = (
           worklet: null,
           source: null,
           fftRafId: null,
+          fftGeneration: 0,
           malformedWorkletMessageReported: false,
           reportedUnknownWorkletMessageTypes: new Set(),
         };
@@ -699,33 +739,51 @@ const useSoundPlayerImplementation = (
             analyser.frequencyBinCount,
           );
           const barkBuffer = Array.from({ length: BARK_BAND_COUNT }, () => 0);
+          const fftGeneration = ++resources.fftGeneration;
+          const stopPollingAfterFailure = (error: unknown) => {
+            if (resources.fftGeneration !== fftGeneration) return;
+            resources.fftGeneration += 1;
+            resources.fftRafId = null;
+            reportPlayerAnalyzerFailure(error);
+          };
 
           // Use requestAnimationFrame instead of setInterval(5ms) for display-rate updates
           const pollFft = () => {
             if (
               generation !== playerGeneration.current ||
-              playerResources.current !== resources
+              playerResources.current !== resources ||
+              resources.fftGeneration !== fftGeneration
             ) {
               void cleanupInitialization();
               return;
             }
-            analyser.getByteFrequencyData(frequencyDataBuffer);
-            convertLinearFrequenciesToBarkInto(
-              frequencyDataBuffer,
-              initAudioContext.sampleRate,
-              barkBuffer,
-            );
-            fftStore.write(barkBuffer);
-            if (
-              generation !== playerGeneration.current ||
-              playerResources.current !== resources
-            ) {
-              void cleanupInitialization();
-              return;
+            resources.fftRafId = null;
+            try {
+              analyser.getByteFrequencyData(frequencyDataBuffer);
+              convertLinearFrequenciesToBarkInto(
+                frequencyDataBuffer,
+                initAudioContext.sampleRate,
+                barkBuffer,
+              );
+              fftStore.write(barkBuffer);
+              if (
+                generation !== playerGeneration.current ||
+                playerResources.current !== resources ||
+                resources.fftGeneration !== fftGeneration
+              ) {
+                void cleanupInitialization();
+                return;
+              }
+              resources.fftRafId = requestAnimationFrame(pollFft);
+            } catch (error) {
+              stopPollingAfterFailure(error);
             }
-            resources.fftRafId = requestAnimationFrame(pollFft);
           };
-          resources.fftRafId = requestAnimationFrame(pollFft);
+          try {
+            resources.fftRafId = requestAnimationFrame(pollFft);
+          } catch (error) {
+            stopPollingAfterFailure(error);
+          }
 
           isInitialized.current = true;
         } else {
@@ -739,6 +797,7 @@ const useSoundPlayerImplementation = (
         );
       }
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [
       diagnostics,
       disposePlayerResources,
@@ -751,6 +810,7 @@ const useSoundPlayerImplementation = (
       onStopAudio,
       publishIsPlaying,
       publishQueueLength,
+      reportPlayerAnalyzerFailure,
       volumeRef,
     ],
   );
@@ -1006,6 +1066,7 @@ const useSoundPlayerImplementation = (
       // than leaving the socket teardown hanging on stuck audio.
       return finish(false);
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics],
   );
 
@@ -1102,6 +1163,7 @@ const useSoundPlayerImplementation = (
         details: { resource: 'audio_player' },
       });
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [
       cancelPlayerFft,
       diagnostics,
@@ -1197,6 +1259,10 @@ const useSoundPlayerImplementation = (
       if (resources?.source) {
         const source = resources.source;
         const handleEnded = source.onended;
+        cancelPlayerFftSafely(
+          resources,
+          'Failed to cancel the player analyzer animation frame while interrupting playback.',
+        );
         try {
           source.stop();
         } catch {
@@ -1216,6 +1282,7 @@ const useSoundPlayerImplementation = (
       'Failed to clear FFT state while interrupting audio playback.',
     );
   }, [
+    cancelPlayerFftSafely,
     clearPlayerFftStore,
     props.enableAudioWorklet,
     onError,
@@ -1242,6 +1309,7 @@ const useSoundPlayerImplementation = (
         details: { control: 'volume', value: clampedLevel },
       });
     },
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics],
   );
 
@@ -1290,6 +1358,7 @@ const useSoundPlayerImplementation = (
       name: 'control.changed',
       details: { control: 'audio_mute', value: true },
     });
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
   }, [diagnostics]);
 
   const unmuteAudio = useCallback(() => {
@@ -1308,7 +1377,30 @@ const useSoundPlayerImplementation = (
       name: 'control.changed',
       details: { control: 'audio_mute', value: false },
     });
+    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
   }, [diagnostics]);
+
+  // The hook has no other unmount path. Without this, the FFT polling loop
+  // keeps re-arming itself through requestAnimationFrame for the lifetime of
+  // the page once the player is gone. Cancelling the pending frame also bumps
+  // `fftGeneration`, which invalidates the loop even if the cancellation
+  // throws. `playerResources` is deliberately left in place so a provider that
+  // calls `stopAll` after unmount still tears the audio graph down.
+  useEffect(
+    () => () => {
+      const resources = playerResources.current;
+      if (resources) {
+        cancelPlayerFftSafely(
+          resources,
+          'Failed to cancel the player analyzer animation frame while unmounting.',
+        );
+      }
+      clearPlayerFftStore(
+        'Failed to clear FFT state while unmounting the player.',
+      );
+    },
+    [cancelPlayerFftSafely, clearPlayerFftStore],
+  );
 
   return useMemo(
     () => ({
