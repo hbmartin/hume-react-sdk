@@ -61,14 +61,14 @@ const createDeferred = <T>() => {
   return { promise, resolve };
 };
 
-const fakePort: MessagePort & { postMessage: Mock } = {
+const fakePort: MessagePort & { close: Mock; postMessage: Mock } = {
   postMessage: vi.fn(),
   close: vi.fn(),
   onmessage: null,
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
   dispatchEvent: vi.fn(),
-} as unknown as MessagePort & { postMessage: Mock };
+} as unknown as MessagePort & { close: Mock; postMessage: Mock };
 
 type FakeBufferSource = {
   connect: Mock;
@@ -306,6 +306,34 @@ describe('useSoundPlayer', () => {
     expect(onError).toHaveBeenCalledWith(
       'Failed to load audio worklet',
       'audio_worklet_load_failure',
+    );
+  });
+
+  it('preserves browser error details when initialization throws', async () => {
+    const initializationError = new DOMException(
+      'audio graph is unavailable',
+      'NotSupportedError',
+    );
+    globalThis.AudioContext = vi
+      .fn()
+      .mockImplementation(function AudioContextMock() {
+        throw initializationError;
+      });
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+
+    expect(onError).toHaveBeenCalledWith(
+      'Failed to initialize audio player: audio graph is unavailable',
+      'audio_player_initialization_failure',
     );
   });
 
@@ -1331,7 +1359,7 @@ describe('useSoundPlayer', () => {
     },
   );
 
-  it('stops the FFT polling loop when the player unmounts', async () => {
+  it('disposes standalone player resources when unmounting', async () => {
     const rafCallbacks = new Map<number, FrameRequestCallback>();
     let nextAnimationId = 0;
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
@@ -1357,13 +1385,54 @@ describe('useSoundPlayer', () => {
     await act(() => result.current.initPlayer());
     const pollFftId = nextAnimationId;
 
-    unmount();
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+    });
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(pollFftId);
     expect(rafCallbacks.has(pollFftId)).toBe(false);
+    expect(fakePort.close.mock.calls).toHaveLength(1);
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
+  });
+
+  it('abandons standalone initialization that finishes after unmount', async () => {
+    const workletLoad = createDeferred<boolean>();
+    vi.mocked(loadAudioWorklet).mockImplementationOnce(
+      () => workletLoad.promise,
+    );
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    let initialization = Promise.resolve(true);
+    act(() => {
+      initialization = result.current.initPlayer();
+    });
+
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      workletLoad.resolve(true);
+      await expect(initialization).resolves.toBe(false);
+    });
+
+    expect(globalThis.AudioWorkletNode).not.toHaveBeenCalled();
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
   it('leaves initialized resources for provider cleanup when unmount cancellation throws', async () => {
+    vi.useFakeTimers();
     const rafCallbacks = new Map<number, FrameRequestCallback>();
     let nextAnimationId = 0;
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
@@ -1391,17 +1460,30 @@ describe('useSoundPlayer', () => {
     const context = vi.mocked(globalThis.AudioContext).mock.results[0]
       ?.value as AudioContext | undefined;
     const stalePollFft = rafCallbacks.get(nextAnimationId);
+    if (!context) throw new Error('Expected the initialized audio context.');
+    if (!stalePollFft) throw new Error('Expected the FFT polling callback.');
 
     unmount();
-    await act(async () => stalePollFft?.(0));
+    act(() => stalePollFft(0));
 
     expect(closeAudioContext).not.toHaveBeenCalled();
     expect(disconnectAnalyserNode).not.toHaveBeenCalled();
     expect(disconnectGainNode).not.toHaveBeenCalled();
+    expect(cancelAnimationFrame).toHaveBeenCalledOnce();
 
-    if (!context) throw new Error('Expected the initialized audio context.');
-    cancelAnimationFrame.mockRestore();
-    await act(() => stopAllForContext(context));
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = stopAllForContext(context);
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+      await stopping;
+    });
+
+    expect(cancelAnimationFrame).toHaveBeenCalledOnce();
     expect(closeAudioContext).toHaveBeenCalledOnce();
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
