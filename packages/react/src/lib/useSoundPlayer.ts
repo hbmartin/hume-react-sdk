@@ -77,8 +77,15 @@ const supportsSetSinkId = (
   setSinkId: (deviceId: string) => Promise<void>;
 } => 'setSinkId' in context && typeof context.setSinkId === 'function';
 
-const isAudioContextClosed = (context: AudioContext): boolean =>
-  context.state === 'closed';
+const isAudioContextClosed = (context: AudioContext): boolean => {
+  try {
+    return context.state === 'closed';
+  } catch {
+    // Treat an unreadable state as still open so cleanup attempts close the
+    // context and conservatively retains ownership if that attempt fails.
+    return false;
+  }
+};
 
 const releaseSafely = (
   failures: unknown[],
@@ -99,15 +106,18 @@ const trackWeakMapPromise = <K extends object, V extends object>(
   promise: Promise<void>,
   createValue: (trackedPromise: Promise<void>) => V,
 ): Promise<void> => {
-  let trackedValue: V | null = null;
-  const trackedPromise = promise.finally(() => {
-    if (trackedValue !== null && map.get(key) === trackedValue) {
+  const trackedValue = createValue(promise);
+  map.set(key, trackedValue);
+  const clearTrackedValue = () => {
+    if (map.get(key) === trackedValue) {
       map.delete(key);
     }
-  });
-  trackedValue = createValue(trackedPromise);
-  map.set(key, trackedValue);
-  return trackedPromise;
+  };
+  // Attach both settlement handlers directly to the promise returned to
+  // callers. Besides clearing the entry, this prevents an ignored scoped stop
+  // from becoming an unhandled rejection.
+  void promise.then(clearTrackedValue, clearTrackedValue);
+  return promise;
 };
 
 interface PlayerResources {
@@ -182,14 +192,6 @@ export interface UseSoundPlayerProps {
   onStopAudio: (id: string) => void;
 }
 
-const usePlayerCallbackRefs = (props: UseSoundPlayerProps) => {
-  const onPlayAudio = useLatestRef(props.onPlayAudio);
-  const onStopAudio = useLatestRef(props.onStopAudio);
-  const onError = useLatestRef(props.onError);
-  const diagnostics = useLatestRef(props.diagnostics);
-  return { diagnostics, onError, onPlayAudio, onStopAudio };
-};
-
 interface PlayerLifecyclePolicy {
   contextStopFailureMode: 'propagate' | 'report';
   errorCallbackOwner: 'consumer' | 'voice-provider';
@@ -245,8 +247,10 @@ const useSoundPlayerImplementation = (
 
   const isProcessing = useRef(false);
 
-  const { diagnostics, onError, onPlayAudio, onStopAudio } =
-    usePlayerCallbackRefs(props);
+  const onPlayAudio = useLatestRef(props.onPlayAudio);
+  const onStopAudio = useLatestRef(props.onStopAudio);
+  const onError = useLatestRef(props.onError);
+  const diagnostics = useLatestRef(props.diagnostics);
 
   const emitPlayerDiagnostic = useCallback(
     (input: Parameters<VoiceDiagnosticsReporter['emit']>[0]) => {
@@ -365,6 +369,7 @@ const useSoundPlayerImplementation = (
   const isPlayingRef = useRef(false);
   const drainWaiters = useRef(new Set<() => void>());
   const playerGeneration = useRef(0);
+  const playerInitializationSequence = useRef(0);
   const pendingAudioTasks = useRef(new Map<number, number>());
   const playbackActivitySequence = useRef(0);
 
@@ -603,14 +608,40 @@ const useSoundPlayerImplementation = (
           );
           retry.pendingResources.clear();
           if (resourcesToRetry.length === 0) break;
-          resourcesToRetry.forEach((resources) =>
+          const resourcesJoiningDisposal = resourcesToRetry.filter(
+            (resources) => playerResourceDisposals.current.has(resources),
+          );
+          const resourcesStartingRetry = resourcesToRetry.filter(
+            (resources) => !playerResourceDisposals.current.has(resources),
+          );
+          // A resource only counts as attempted when this pass starts a fresh
+          // disposal for it. Joining a disposal that originally retained the
+          // context must be followed by a real close attempt after it settles.
+          resourcesStartingRetry.forEach((resources) =>
             retry.attemptedResources.add(resources),
           );
-          try {
-            await disposePlayerResourceBatch(resourcesToRetry);
-          } catch (error) {
-            appendCleanupFailures(failures, error);
-          }
+          await Promise.all([
+            resourcesJoiningDisposal.length > 0
+              ? disposePlayerResourceBatch(resourcesJoiningDisposal).catch(
+                  () => undefined,
+                )
+              : Promise.resolve(),
+            resourcesStartingRetry.length > 0
+              ? disposePlayerResourceBatch(resourcesStartingRetry).catch(
+                  (error: unknown) => {
+                    appendCleanupFailures(failures, error);
+                  },
+                )
+              : Promise.resolve(),
+          ]);
+          resourcesJoiningDisposal.forEach((resources) => {
+            if (
+              failedPlayerContextResources.current.has(resources) &&
+              !retry.attemptedResources.has(resources)
+            ) {
+              retry.pendingResources.add(resources);
+            }
+          });
         }
         throwCleanupFailures(
           failures,
@@ -785,6 +816,30 @@ const useSoundPlayerImplementation = (
       speakerDeviceId?: string,
       sharedAudioContext?: AudioContext,
     ): Promise<boolean> => {
+      const initializationSequence = ++playerInitializationSequence.current;
+      const preflightGeneration = playerGeneration.current;
+      const requiresRetainedContextPreflight =
+        sharedAudioContext === undefined &&
+        failedPlayerContextResources.current.size >=
+          MAX_RETAINED_PLAYER_CONTEXTS;
+      if (requiresRetainedContextPreflight) {
+        await retryFailedPlayerContextClosuresBestEffort();
+        if (
+          initializationSequence !== playerInitializationSequence.current ||
+          preflightGeneration !== playerGeneration.current
+        ) {
+          return false;
+        }
+        const retainedContextCount = failedPlayerContextResources.current.size;
+        if (retainedContextCount >= MAX_RETAINED_PLAYER_CONTEXTS) {
+          reportPlayerError(
+            `Failed to initialize audio player because ${retainedContextCount} previous audio contexts could not be closed.`,
+            'audio_player_closure_failure',
+          );
+          return false;
+        }
+      }
+
       const generation = ++playerGeneration.current;
       notifyDrainWaiters();
       playbackActivitySequence.current = 0;
@@ -812,26 +867,8 @@ const useSoundPlayerImplementation = (
         }
       }
 
-      const retainedContextRetry = retryFailedPlayerContextClosuresBestEffort();
-      if (
-        sharedAudioContext === undefined &&
-        failedPlayerContextResources.current.size >=
-          MAX_RETAINED_PLAYER_CONTEXTS
-      ) {
-        await retainedContextRetry;
-        if (generation !== playerGeneration.current) {
-          return false;
-        }
-        const retainedContextCount = failedPlayerContextResources.current.size;
-        if (retainedContextCount >= MAX_RETAINED_PLAYER_CONTEXTS) {
-          reportPlayerError(
-            `Failed to initialize audio player because ${retainedContextCount} previous audio contexts could not be closed.`,
-            'audio_player_closure_failure',
-          );
-          return false;
-        }
-      } else {
-        void retainedContextRetry;
+      if (!requiresRetainedContextPreflight) {
+        void retryFailedPlayerContextClosuresBestEffort();
       }
 
       let resourcesForInitialization: PlayerResources | null = null;
@@ -879,7 +916,7 @@ const useSoundPlayerImplementation = (
         ) {
           reportPlayerError(
             `${message}; cleanup also failed: ${cleanupFailure}`,
-            reason,
+            'audio_player_closure_failure',
           );
         }
         if (callbackFailureCaptured) {
@@ -1823,10 +1860,18 @@ const useSoundPlayerImplementation = (
         pendingImplicitStop.generation === playerGeneration.current;
       if (joiningPendingImplicitStop) {
         playerGeneration.current += 1;
+        pendingImplicitStop.generation = playerGeneration.current;
         notifyDrainWaiters();
-        if (failedPlayerContextResources.current.size === 0) {
-          return;
-        }
+        const retryRetainedContextsAfterStop = () => {
+          if (failedPlayerContextResources.current.size > 0) {
+            void stopAllAndReportOnUnmount();
+          }
+        };
+        void pendingImplicitStop.promise.then(
+          retryRetainedContextsAfterStop,
+          retryRetainedContextsAfterStop,
+        );
+        return;
       }
       if (
         playerResources.current !== null ||
