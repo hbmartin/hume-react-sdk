@@ -1405,8 +1405,7 @@ const useSoundPlayerImplementation = (
         const existingStop = playerStopPromises.current.get(context);
         if (
           existingStop &&
-          (expectedContext !== undefined ||
-            existingStop.generation === currentGeneration)
+          existingStop.generation === currentGeneration
         ) {
           return existingStop.promise;
         }

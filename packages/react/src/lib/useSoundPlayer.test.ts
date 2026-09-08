@@ -930,6 +930,73 @@ describe('useSoundPlayer', () => {
     expect(secondSettled).toBe(true);
   });
 
+  it('does not reuse a stale stop after reinitializing the same context', async () => {
+    vi.useFakeTimers();
+    const firstPort = createFakePort();
+    const secondPort = createFakePort();
+    const firstWorkletDisconnect = vi.fn();
+    const secondWorkletDisconnect = vi.fn();
+    globalThis.AudioWorkletNode = vi
+      .fn()
+      .mockImplementationOnce(function FirstAudioWorkletNodeMock() {
+        return {
+          port: firstPort,
+          connect: vi.fn(),
+          disconnect: firstWorkletDisconnect,
+        };
+      })
+      .mockImplementationOnce(function SecondAudioWorkletNodeMock() {
+        return {
+          port: secondPort,
+          connect: vi.fn(),
+          disconnect: secondWorkletDisconnect,
+        };
+      });
+    const context = new AudioContext();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+
+    let firstStop = Promise.resolve();
+    act(() => {
+      firstStop = result.current.stopAllForContext(context);
+    });
+    await act(() => result.current.initPlayer(undefined, context));
+
+    let secondStop = Promise.resolve();
+    act(() => {
+      secondStop = result.current.stopAllForContext(context);
+    });
+
+    expect(firstPort.postMessage).toHaveBeenCalledTimes(2);
+    expect(secondPort.postMessage).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      firstPort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+      secondPort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.all([firstStop, secondStop]);
+    });
+
+    expect(firstPort.close).toHaveBeenCalledOnce();
+    expect(secondPort.close).toHaveBeenCalledOnce();
+    expect(firstWorkletDisconnect).toHaveBeenCalledOnce();
+    expect(secondWorkletDisconnect).toHaveBeenCalledOnce();
+    expect(closeAudioContext).not.toHaveBeenCalled();
+  });
+
   it('joins concurrent cleanup requests without an explicit context', async () => {
     const { result } = renderHook(() =>
       useSoundPlayer({
