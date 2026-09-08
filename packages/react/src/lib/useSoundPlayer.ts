@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AudioOutputMessage } from '../models/messages';
 import { getDataProperty } from '../utils/aggregateErrors';
 import { getBrowserErrorMessage } from '../utils/browserErrors';
+import {
+  appendCleanupFailures,
+  throwCleanupFailures,
+} from '../utils/cleanupErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
@@ -74,7 +78,7 @@ const supportsSetSinkId = (
 } => 'setSinkId' in context && typeof context.setSinkId === 'function';
 
 const releaseSafely = (
-  failures: string[],
+  failures: unknown[],
   label: string,
   action: () => void,
 ) => {
@@ -82,7 +86,7 @@ const releaseSafely = (
     action();
   } catch (error) {
     const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-    failures.push(`${label}: ${detail}`);
+    failures.push(new Error(`${label}: ${detail}`, { cause: error }));
   }
 };
 
@@ -100,15 +104,26 @@ interface PlayerResources {
   reportedUnknownWorkletMessageTypes: Set<string>;
 }
 
-interface ImplicitPlayerStop {
-  context: AudioContext | null;
+interface TrackedPlayerStop {
   generation: number;
   promise: Promise<void>;
 }
 
-interface ContextPlayerStop {
-  generation: number;
+interface FailedPlayerContextRetry {
+  attemptedResources: Set<PlayerResources>;
+  pendingResources: Set<PlayerResources>;
   promise: Promise<void>;
+  settled: boolean;
+}
+
+class PlayerInitializationFailure extends Error {
+  readonly reason: AudioPlayerErrorReason;
+
+  constructor(message: string, reason: AudioPlayerErrorReason) {
+    super(message);
+    this.name = 'PlayerInitializationFailure';
+    this.reason = reason;
+  }
 }
 
 const BARK_BAND_COUNT = 24;
@@ -126,6 +141,8 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
  * settles, so the attempt must be bounded rather than awaited directly.
  */
 const RESUME_TIMEOUT_MS = 1_000;
+/** Prevent repeated standalone initialization from retaining contexts forever. */
+const MAX_RETAINED_PLAYER_CONTEXTS = 2;
 
 /**
  * Options accepted by the deprecated standalone sound player.
@@ -147,29 +164,34 @@ export interface UseSoundPlayerProps {
 
 interface PlayerLifecyclePolicy {
   contextStopFailureMode: 'propagate' | 'report';
+  errorCallbackOwner: 'consumer' | 'voice-provider';
   unmountCleanupOwner: 'player' | 'voice-provider';
 }
 
 const standalonePlayerLifecyclePolicy: PlayerLifecyclePolicy = {
   contextStopFailureMode: 'report',
+  errorCallbackOwner: 'consumer',
   unmountCleanupOwner: 'player',
 };
 
 const voiceProviderPlayerLifecyclePolicy: PlayerLifecyclePolicy = {
   contextStopFailureMode: 'propagate',
+  errorCallbackOwner: 'voice-provider',
   unmountCleanupOwner: 'voice-provider',
 };
 
 /**
  * The audio player itself. Its lifecycle policy independently selects cleanup
- * failure propagation and the owner responsible for unmount disposal.
+ * failure propagation, error callback ownership, and the owner responsible for
+ * unmount disposal.
  *
  */
 const useSoundPlayerImplementation = (
   props: UseSoundPlayerProps,
   lifecyclePolicy: PlayerLifecyclePolicy,
 ) => {
-  const { contextStopFailureMode, unmountCleanupOwner } = lifecyclePolicy;
+  const { contextStopFailureMode, errorCallbackOwner, unmountCleanupOwner } =
+    lifecyclePolicy;
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [volume, setVolumeState] = useState<number>(1.0);
@@ -178,10 +200,16 @@ const useSoundPlayerImplementation = (
 
   const playerResources = useRef<PlayerResources | null>(null);
   const failedPlayerContextResources = useRef(new Set<PlayerResources>());
-  const playerStopPromises = useRef(
-    new WeakMap<AudioContext, ContextPlayerStop>(),
+  const playerResourceDisposals = useRef(
+    new WeakMap<PlayerResources, Promise<void>>(),
   );
-  const implicitPlayerStop = useRef<ImplicitPlayerStop | null>(null);
+  const failedPlayerContextRetry = useRef<FailedPlayerContextRetry | null>(
+    null,
+  );
+  const playerStopPromises = useRef(
+    new WeakMap<AudioContext, TrackedPlayerStop>(),
+  );
+  const implicitPlayerStop = useRef<TrackedPlayerStop | null>(null);
   const reportedPlayerStopPromises = useRef(
     new WeakMap<Promise<void>, Promise<void>>(),
   );
@@ -194,31 +222,55 @@ const useSoundPlayerImplementation = (
   const onError = useLatestRef(props.onError);
   const diagnostics = useLatestRef(props.diagnostics);
 
-  const reportPlayerResourceFailure = useCallback(
-    (message: string, error: unknown) => {
+  const emitPlayerDiagnostic = useCallback(
+    (input: Parameters<VoiceDiagnosticsReporter['emit']>[0]) => {
       try {
-        diagnostics.current?.emit({
-          level: 'warn',
-          category: 'audio_player',
-          name: 'resource.cleanup_failed',
-          details: { resource: 'audio_player', message, error },
-        });
+        diagnostics.current?.emit(input);
       } catch {
-        // A custom diagnostics reporter must not interfere with cleanup.
+        // Custom diagnostics reporters must never affect player control flow.
       }
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [diagnostics],
   );
 
-  const reportPlayerError = useCallback(
-    (message: string, reason: AudioPlayerErrorReason) => {
-      invokeIsolatedConsumerCallback(diagnostics.current, 'onError', () =>
-        onError.current(message, reason),
-      );
+  const isPlayerDiagnosticEnabled = useCallback(
+    (level: Parameters<VoiceDiagnosticsReporter['isEnabled']>[0]) => {
+      try {
+        return diagnostics.current?.isEnabled(level) === true;
+      } catch {
+        return false;
+      }
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- latest-value refs remain stable while their current callbacks change
-    [diagnostics, onError],
+    [diagnostics],
+  );
+
+  const reportPlayerResourceFailure = useCallback(
+    (message: string, error: unknown) => {
+      emitPlayerDiagnostic({
+        level: 'warn',
+        category: 'audio_player',
+        name: 'resource.cleanup_failed',
+        details: { resource: 'audio_player', message, error },
+      });
+    },
+    [emitPlayerDiagnostic],
+  );
+
+  const reportPlayerError = useCallback(
+    (
+      message: string,
+      reason: AudioPlayerErrorReason,
+      propagateProviderFailure = false,
+    ) => {
+      if (errorCallbackOwner === 'voice-provider' && propagateProviderFailure) {
+        onError.current(message, reason);
+        return;
+      }
+      invokeIsolatedConsumerCallback(diagnostics.current, 'onError', () => {
+        onError.current(message, reason);
+      });
+    },
+    [diagnostics, errorCallbackOwner, onError],
   );
 
   const [fftStore] = useState(
@@ -244,7 +296,7 @@ const useSoundPlayerImplementation = (
   const reportPlayerAnalyzerFailure = useCallback(
     (error: unknown) => {
       const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-      diagnostics.current?.emit({
+      emitPlayerDiagnostic({
         level: 'warn',
         category: 'audio_player',
         name: 'audio.analyzer_failed',
@@ -254,8 +306,7 @@ const useSoundPlayerImplementation = (
         'Failed to reset FFT state after a player analyzer failure.',
       );
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-    [clearPlayerFftStore, diagnostics],
+    [clearPlayerFftStore, emitPlayerDiagnostic],
   );
 
   // chunkBufferQueues and lastQueuedChunk are used to make sure that
@@ -302,8 +353,8 @@ const useSoundPlayerImplementation = (
       queueLengthRef.current = length;
       setQueueLength(length);
       notifyDrainWaiters();
-      if (diagnostics.current?.isEnabled('debug') === true) {
-        diagnostics.current.emit({
+      if (isPlayerDiagnosticEnabled('debug')) {
+        emitPlayerDiagnostic({
           level: 'debug',
           category: 'audio_player',
           name: 'audio.queue_changed',
@@ -311,8 +362,7 @@ const useSoundPlayerImplementation = (
         });
       }
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-    [diagnostics, notifyDrainWaiters],
+    [emitPlayerDiagnostic, isPlayerDiagnosticEnabled, notifyDrainWaiters],
   );
 
   const publishIsPlaying = useCallback(
@@ -322,6 +372,20 @@ const useSoundPlayerImplementation = (
       notifyDrainWaiters();
     },
     [notifyDrainWaiters],
+  );
+
+  const resetPlayerState = useCallback(
+    (fftFailureMessage: string) => {
+      isInitialized.current = false;
+      isProcessing.current = false;
+      publishIsPlaying(false);
+      publishQueueLength(0);
+      clearPlayerFftStore(fftFailureMessage);
+      chunkBufferQueues.current.clear();
+      lastQueuedChunk.current = null;
+      clipQueue.current = [];
+    },
+    [clearPlayerFftStore, publishIsPlaying, publishQueueLength],
   );
 
   const cancelPlayerFft = useCallback((resources: PlayerResources) => {
@@ -345,94 +409,203 @@ const useSoundPlayerImplementation = (
   );
 
   const disposePlayerResources = useCallback(
-    async (resources: PlayerResources) => {
-      if (playerResources.current === resources) {
-        playerResources.current = null;
+    (resources: PlayerResources): Promise<void> => {
+      const existingDisposal = playerResourceDisposals.current.get(resources);
+      if (existingDisposal) {
+        return existingDisposal;
       }
 
-      const failures: string[] = [];
-      const release = (label: string, action: () => void) =>
-        releaseSafely(failures, label, action);
+      const performDisposal = async () => {
+        if (playerResources.current === resources) {
+          playerResources.current = null;
+        }
 
-      release('FFT cleanup failed', () => cancelPlayerFft(resources));
+        const failures: unknown[] = [];
+        const release = (label: string, action: () => void) =>
+          releaseSafely(failures, label, action);
 
-      const source = resources.source;
-      resources.source = null;
-      if (source) {
-        release('Audio source listener cleanup failed', () => {
-          source.onended = null;
-        });
-        release('Audio source stop failed', () => source.stop());
-        release('Audio source disconnect failed', () => source.disconnect());
-        isProcessing.current = false;
-      }
+        release('FFT cleanup failed', () => cancelPlayerFft(resources));
 
-      const worklet = resources.worklet;
-      resources.worklet = null;
-      if (worklet) {
-        release('Audio worklet listener cleanup failed', () => {
-          worklet.port.onmessage = null;
-        });
-        release('Audio worklet port cleanup failed', () =>
-          worklet.port.close(),
-        );
-        release('Audio worklet disconnect failed', () => worklet.disconnect());
-      }
+        const source = resources.source;
+        resources.source = null;
+        if (source) {
+          release('Audio source listener cleanup failed', () => {
+            source.onended = null;
+          });
+          release('Audio source stop failed', () => source.stop());
+          release('Audio source disconnect failed', () => source.disconnect());
+          isProcessing.current = false;
+        }
 
-      const analyser = resources.analyser;
-      resources.analyser = null;
-      if (analyser) {
-        release('Analyser disconnect failed', () => analyser.disconnect());
-      }
-
-      const gain = resources.gain;
-      resources.gain = null;
-      if (gain) {
-        release('Gain disconnect failed', () => gain.disconnect());
-      }
-
-      const context = resources.context;
-      const shouldCloseContext = resources.ownsContext;
-      if (context && shouldCloseContext) {
-        const closeResult = await closeAudioContextWithTimeout(context);
-        if (!closeResult.success) {
-          // Retain the failed owned context so a later initialization or stop
-          // can retry it instead of accumulating unreachable live contexts.
-          failedPlayerContextResources.current.add(resources);
-          failures.push(
-            `Audio context cleanup failed: ${closeResult.error.message}`,
+        const worklet = resources.worklet;
+        resources.worklet = null;
+        if (worklet) {
+          release('Audio worklet listener cleanup failed', () => {
+            worklet.port.onmessage = null;
+          });
+          release('Audio worklet port cleanup failed', () =>
+            worklet.port.close(),
           );
+          release('Audio worklet disconnect failed', () =>
+            worklet.disconnect(),
+          );
+        }
+
+        const analyser = resources.analyser;
+        resources.analyser = null;
+        if (analyser) {
+          release('Analyser disconnect failed', () => analyser.disconnect());
+        }
+
+        const gain = resources.gain;
+        resources.gain = null;
+        if (gain) {
+          release('Gain disconnect failed', () => gain.disconnect());
+        }
+
+        const context = resources.context;
+        const shouldCloseContext = resources.ownsContext;
+        if (context && shouldCloseContext) {
+          const closeResult = await closeAudioContextWithTimeout(context);
+          if (!closeResult.success) {
+            // Preserve ownership for a later best-effort retry. Concurrent
+            // callers join the disposal promise registered before this work
+            // starts, so only one close attempt can mutate this record.
+            failedPlayerContextResources.current.add(resources);
+            const activeRetry = failedPlayerContextRetry.current;
+            if (
+              activeRetry !== null &&
+              !activeRetry.settled &&
+              !activeRetry.attemptedResources.has(resources)
+            ) {
+              activeRetry.pendingResources.add(resources);
+            }
+            failures.push(
+              new Error(
+                `Audio context cleanup failed: ${closeResult.error.message}`,
+                { cause: closeResult.error },
+              ),
+            );
+          } else {
+            resources.context = null;
+            resources.ownsContext = false;
+            failedPlayerContextResources.current.delete(resources);
+          }
         } else {
           resources.context = null;
           resources.ownsContext = false;
           failedPlayerContextResources.current.delete(resources);
         }
-      } else {
-        resources.context = null;
-        resources.ownsContext = false;
-        failedPlayerContextResources.current.delete(resources);
-      }
 
-      if (failures.length > 0) {
-        throw new Error(failures.join('; '));
-      }
+        throwCleanupFailures(failures, 'Audio player resource cleanup failed.');
+      };
+
+      const disposal = Promise.resolve().then(performDisposal);
+      playerResourceDisposals.current.set(resources, disposal);
+      const clearDisposal = () => {
+        if (playerResourceDisposals.current.get(resources) === disposal) {
+          playerResourceDisposals.current.delete(resources);
+        }
+      };
+      void disposal.then(clearDisposal, clearDisposal);
+      return disposal;
     },
     [cancelPlayerFft],
   );
 
-  const retryFailedPlayerContextClosures = useCallback(async () => {
-    const failures: string[] = [];
-    for (const resources of failedPlayerContextResources.current) {
-      try {
-        await disposePlayerResources(resources);
-      } catch (error) {
-        failures.push(getBrowserErrorMessage(error) ?? 'Unknown cleanup error');
+  const disposePlayerResourceBatch = useCallback(
+    async (resources: readonly PlayerResources[]) => {
+      const failureGroups = await Promise.all(
+        [...new Set(resources)].map(async (resource) => {
+          const failures: unknown[] = [];
+          try {
+            await disposePlayerResources(resource);
+          } catch (error) {
+            appendCleanupFailures(failures, error);
+          }
+          return failures;
+        }),
+      );
+      const failures = failureGroups.flat();
+      throwCleanupFailures(
+        failures,
+        'One or more audio player resources could not be cleaned up.',
+      );
+    },
+    [disposePlayerResources],
+  );
+
+  const retryFailedPlayerContextClosures = useCallback(() => {
+    const existingRetry = failedPlayerContextRetry.current;
+    if (existingRetry !== null && !existingRetry.settled) {
+      for (const resources of failedPlayerContextResources.current) {
+        if (!existingRetry.attemptedResources.has(resources)) {
+          existingRetry.pendingResources.add(resources);
+        }
       }
+      return existingRetry.promise;
     }
-    if (failures.length > 0) {
-      throw new Error(failures.join('; '));
+    const failedResources = [...failedPlayerContextResources.current];
+    if (failedResources.length === 0) {
+      return Promise.resolve();
     }
-  }, [disposePlayerResources]);
+
+    const retry: FailedPlayerContextRetry = {
+      attemptedResources: new Set(),
+      pendingResources: new Set(failedResources),
+      promise: Promise.resolve(),
+      settled: false,
+    };
+    const retrying = Promise.resolve().then(async () => {
+      const failures: unknown[] = [];
+      try {
+        while (retry.pendingResources.size > 0) {
+          const resourcesToRetry = [...retry.pendingResources].filter(
+            (resources) => !retry.attemptedResources.has(resources),
+          );
+          retry.pendingResources.clear();
+          if (resourcesToRetry.length === 0) break;
+          resourcesToRetry.forEach((resources) =>
+            retry.attemptedResources.add(resources),
+          );
+          try {
+            await disposePlayerResourceBatch(resourcesToRetry);
+          } catch (error) {
+            appendCleanupFailures(failures, error);
+          }
+          // Let concurrent disposal promises clear their per-resource entries
+          // before processing contexts that joined this retry while it awaited.
+          await Promise.resolve();
+        }
+        throwCleanupFailures(
+          failures,
+          'One or more detached audio player contexts could not be closed.',
+        );
+      } finally {
+        retry.settled = true;
+      }
+    });
+    retry.promise = retrying;
+    failedPlayerContextRetry.current = retry;
+    const clearRetry = () => {
+      if (failedPlayerContextRetry.current === retry) {
+        failedPlayerContextRetry.current = null;
+      }
+    };
+    void retrying.then(clearRetry, clearRetry);
+    return retrying;
+    // oxlint-disable-next-line react/memo-dependencies -- the explicit callback dependency preserves retry ownership if disposal behavior changes
+  }, [disposePlayerResourceBatch]);
+
+  const retryFailedPlayerContextClosuresBestEffort = useCallback(() => {
+    if (failedPlayerContextResources.current.size === 0) return;
+    void retryFailedPlayerContextClosures().catch((error: unknown) => {
+      reportPlayerResourceFailure(
+        'Failed to close a previously detached audio player.',
+        error,
+      );
+    });
+  }, [reportPlayerResourceFailure, retryFailedPlayerContextClosures]);
 
   /**
    * Only for non-AudioWorklet mode.
@@ -575,34 +748,25 @@ const useSoundPlayerImplementation = (
       speakerDeviceId?: string,
       sharedAudioContext?: AudioContext,
     ): Promise<boolean> => {
+      const retainedContextCount = failedPlayerContextResources.current.size;
+      retryFailedPlayerContextClosuresBestEffort();
+      if (
+        sharedAudioContext === undefined &&
+        retainedContextCount >= MAX_RETAINED_PLAYER_CONTEXTS
+      ) {
+        reportPlayerError(
+          `Failed to initialize audio player because ${retainedContextCount} previous audio contexts could not be closed.`,
+          'audio_player_closure_failure',
+        );
+        return false;
+      }
+
       const generation = ++playerGeneration.current;
       notifyDrainWaiters();
       playbackActivitySequence.current = 0;
-      isInitialized.current = false;
-      isProcessing.current = false;
-      publishIsPlaying(false);
-      publishQueueLength(0);
-      chunkBufferQueues.current.clear();
-      lastQueuedChunk.current = null;
-      clipQueue.current = [];
-
-      if (failedPlayerContextResources.current.size > 0) {
-        try {
-          await retryFailedPlayerContextClosures();
-        } catch (error) {
-          if (generation === playerGeneration.current) {
-            const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
-            reportPlayerError(
-              `Failed to close a previously detached audio player: ${detail}`,
-              'audio_player_closure_failure',
-            );
-          }
-          return false;
-        }
-        if (generation !== playerGeneration.current) {
-          return false;
-        }
-      }
+      resetPlayerState(
+        'Failed to clear FFT state while initializing the player.',
+      );
 
       const resourcesToReplace = playerResources.current;
       if (resourcesToReplace) {
@@ -614,6 +778,7 @@ const useSoundPlayerImplementation = (
             reportPlayerError(
               `Failed to replace audio player: ${detail}`,
               'audio_player_closure_failure',
+              true,
             );
           }
           return false;
@@ -624,7 +789,6 @@ const useSoundPlayerImplementation = (
       }
 
       let resourcesForInitialization: PlayerResources | null = null;
-
       const cleanupInitialization = async (): Promise<string | null> => {
         const resources = resourcesForInitialization;
         resourcesForInitialization = null;
@@ -642,26 +806,39 @@ const useSoundPlayerImplementation = (
         return null;
       };
 
-      const abandonInitialization = async () => {
-        await cleanupInitialization();
-        return false;
-      };
-
       const failInitialization = async (
         message: string,
         reason: AudioPlayerErrorReason,
       ) => {
-        const cleanupFailure = await cleanupInitialization();
-        if (generation === playerGeneration.current) {
-          isInitialized.current = false;
+        let callbackFailure: unknown;
+        let callbackFailureCaptured = false;
+        let cleanupFailure: string | null = null;
+        try {
+          if (generation === playerGeneration.current) {
+            isInitialized.current = false;
+            try {
+              reportPlayerError(message, reason, true);
+            } catch (error) {
+              callbackFailure = error;
+              callbackFailureCaptured = true;
+            }
+          }
+        } finally {
+          cleanupFailure = await cleanupInitialization();
+        }
+        if (
+          cleanupFailure !== null &&
+          generation === playerGeneration.current &&
+          !callbackFailureCaptured
+        ) {
           reportPlayerError(
-            cleanupFailure === null
-              ? message
-              : `${message} Cleanup also failed: ${cleanupFailure}`,
-            reason,
+            `Failed to clean up an incomplete audio player initialization: ${cleanupFailure}`,
+            'audio_player_closure_failure',
           );
         }
-        return false;
+        if (callbackFailureCaptured) {
+          throw callbackFailure;
+        }
       };
 
       try {
@@ -704,16 +881,15 @@ const useSoundPlayerImplementation = (
             clearTimeout(resumeTimeoutId);
           }
           if (generation !== playerGeneration.current) {
-            await abandonInitialization();
+            await cleanupInitialization();
             return false;
           }
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- some browsers resolve resume() while leaving the context suspended
           if (!resumed || initAudioContext.state === 'suspended') {
-            await failInitialization(
+            throw new PlayerInitializationFailure(
               'The browser blocked audio playback (autoplay policy). Connect from a user gesture, such as a click handler.',
               'audio_player_initialization_failure',
             );
-            return false;
           }
         }
 
@@ -727,7 +903,7 @@ const useSoundPlayerImplementation = (
             await initAudioContext.setSinkId(speakerDeviceId);
           } catch (e) {
             if (generation !== playerGeneration.current) {
-              await abandonInitialization();
+              await cleanupInitialization();
               return false;
             }
             reportPlayerError(
@@ -738,7 +914,7 @@ const useSoundPlayerImplementation = (
           }
         }
         if (generation !== playerGeneration.current) {
-          await abandonInitialization();
+          await cleanupInitialization();
           return false;
         }
 
@@ -760,15 +936,14 @@ const useSoundPlayerImplementation = (
         if (resources.playbackMode === 'worklet') {
           const isWorkletLoaded = await loadAudioWorklet(initAudioContext);
           if (generation !== playerGeneration.current) {
-            await abandonInitialization();
+            await cleanupInitialization();
             return false;
           }
           if (!isWorkletLoaded) {
-            await failInitialization(
+            throw new PlayerInitializationFailure(
               'Failed to load audio worklet',
               'audio_worklet_load_failure',
             );
-            return false;
           }
 
           const worklet = new AudioWorkletNode(
@@ -805,12 +980,12 @@ const useSoundPlayerImplementation = (
                 !resources.reportedUnknownWorkletMessageTypes.has(
                   diagnosticMessageType,
                 ) &&
-                diagnostics.current?.isEnabled('debug') === true
+                isPlayerDiagnosticEnabled('debug')
               ) {
                 resources.reportedUnknownWorkletMessageTypes.add(
                   diagnosticMessageType,
                 );
-                diagnostics.current.emit({
+                emitPlayerDiagnostic({
                   level: 'debug',
                   category: 'audio_player',
                   name: 'audio.worklet_message_ignored',
@@ -910,6 +1085,10 @@ const useSoundPlayerImplementation = (
         resourcesForInitialization = null;
         return true;
       } catch (error) {
+        if (error instanceof PlayerInitializationFailure) {
+          await failInitialization(error.message, error.reason);
+          return false;
+        }
         const detail = getBrowserErrorMessage(error);
         await failInitialization(
           detail !== null
@@ -920,13 +1099,13 @@ const useSoundPlayerImplementation = (
         return false;
       }
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [
-      diagnostics,
       disposePlayerResources,
+      emitPlayerDiagnostic,
       props.enableAudioWorklet,
       fftStore,
       isAudioMutedRef,
+      isPlayerDiagnosticEnabled,
       notifyDrainWaiters,
       onPlayAudio,
       onStopAudio,
@@ -935,7 +1114,8 @@ const useSoundPlayerImplementation = (
       reportPlayerAnalyzerFailure,
       reportPlayerError,
       reportPlayerResourceFailure,
-      retryFailedPlayerContextClosures,
+      resetPlayerState,
+      retryFailedPlayerContextClosuresBestEffort,
       volumeRef,
     ],
   );
@@ -1112,7 +1292,7 @@ const useSoundPlayerImplementation = (
     async (timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS): Promise<boolean> => {
       const startedAt = getMonotonicTime();
       const finish = (drained: boolean) => {
-        diagnostics.current?.emit({
+        emitPlayerDiagnostic({
           level: drained ? 'info' : 'warn',
           category: 'audio_player',
           name: 'audio.drain_completed',
@@ -1190,53 +1370,69 @@ const useSoundPlayerImplementation = (
       // than leaving the socket teardown hanging on stuck audio.
       return finish(false);
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-    [diagnostics],
+    [emitPlayerDiagnostic],
   );
 
   const stopAll = useCallback(
     // fallow-ignore-next-line complexity -- shutdown aggregates independent Web Audio cleanup failures without abandoning later resources
     async (expectedContext?: AudioContext) => {
-      const resourcesToStop = playerResources.current;
-      if (expectedContext && resourcesToStop?.context !== expectedContext) {
-        return;
-      }
-      playerGeneration.current += 1;
-      notifyDrainWaiters();
+      const currentResources = playerResources.current;
+      const resourcesToStop =
+        expectedContext === undefined ||
+        currentResources?.context === expectedContext
+          ? currentResources
+          : null;
       const failedResourcesToRetry = [
         ...failedPlayerContextResources.current,
-      ].filter((resources) => resources !== resourcesToStop);
-      if (!resourcesToStop && failedResourcesToRetry.length === 0) {
-        isInitialized.current = false;
-        isProcessing.current = false;
-        chunkBufferQueues.current.clear();
-        lastQueuedChunk.current = null;
-        clipQueue.current = [];
+      ].filter(
+        (resources) =>
+          resources !== resourcesToStop &&
+          (expectedContext === undefined ||
+            resources.context === expectedContext),
+      );
+
+      if (
+        expectedContext !== undefined &&
+        resourcesToStop === null &&
+        failedResourcesToRetry.length === 0
+      ) {
         return;
       }
 
+      // An implicit stop owns the overall player state. A context-scoped stop
+      // only resets it when that context is still the active player; retrying a
+      // detached context must not invalidate a newer player.
+      if (expectedContext === undefined || resourcesToStop !== null) {
+        playerGeneration.current += 1;
+        notifyDrainWaiters();
+        if (resourcesToStop && playerResources.current === resourcesToStop) {
+          playerResources.current = null;
+        }
+        resetPlayerState(
+          'Failed to clear FFT state while stopping the player.',
+        );
+      }
+
+      if (!resourcesToStop && failedResourcesToRetry.length === 0) {
+        return;
+      }
+
+      let stopScope = 'active_player';
+      if (resourcesToStop === null) {
+        stopScope = 'detached_context_retry';
+      } else if (failedResourcesToRetry.length > 0) {
+        stopScope = 'active_player_with_detached_retry';
+      }
       const stopStartedAt = getMonotonicTime();
-      diagnostics.current?.emit({
+      emitPlayerDiagnostic({
         level: 'info',
         category: 'audio_player',
         name: 'resource.stop_started',
-        details: { resource: 'audio_player' },
+        details: { resource: 'audio_player', scope: stopScope },
       });
-      playerResources.current = null;
       const workletToStop = resourcesToStop?.worklet ?? null;
-      isInitialized.current = false;
-      isProcessing.current = false;
-      publishIsPlaying(false);
-      publishQueueLength(0);
-      clearPlayerFftStore(
-        'Failed to clear FFT state while stopping the player.',
-      );
 
-      chunkBufferQueues.current.clear();
-      lastQueuedChunk.current = null;
-      clipQueue.current = [];
-
-      const failures: string[] = [];
+      const failures: unknown[] = [];
       const release = (label: string, action: () => void) =>
         releaseSafely(failures, label, action);
 
@@ -1275,45 +1471,44 @@ const useSoundPlayerImplementation = (
         }
       }
 
-      if (resourcesToStop) {
-        try {
-          await disposePlayerResources(resourcesToStop);
-        } catch (error) {
-          failures.push(
-            getBrowserErrorMessage(error) ?? 'Unknown cleanup error',
-          );
-        }
-      }
-      for (const failedResources of failedResourcesToRetry) {
-        try {
-          await disposePlayerResources(failedResources);
-        } catch (error) {
-          failures.push(
-            getBrowserErrorMessage(error) ?? 'Unknown cleanup error',
-          );
-        }
+      try {
+        await disposePlayerResourceBatch([
+          ...(resourcesToStop ? [resourcesToStop] : []),
+          ...failedResourcesToRetry,
+        ]);
+      } catch (error) {
+        appendCleanupFailures(failures, error);
       }
 
       if (failures.length > 0) {
-        throw new Error(failures.join('; '));
+        emitPlayerDiagnostic({
+          level: 'warn',
+          category: 'audio_player',
+          name: 'resource.cleanup_failed',
+          durationMs: getMonotonicTime() - stopStartedAt,
+          details: {
+            operation: 'stop',
+            resource: 'audio_player',
+            scope: stopScope,
+            failureCount: failures.length,
+          },
+        });
+        throwCleanupFailures(failures, 'Audio player cleanup failed.');
       }
-      diagnostics.current?.emit({
+      emitPlayerDiagnostic({
         level: 'info',
         category: 'audio_player',
         name: 'resource.stopped',
         durationMs: getMonotonicTime() - stopStartedAt,
-        details: { resource: 'audio_player' },
+        details: { resource: 'audio_player', scope: stopScope },
       });
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
     [
       cancelPlayerFft,
-      diagnostics,
-      disposePlayerResources,
-      clearPlayerFftStore,
+      disposePlayerResourceBatch,
+      emitPlayerDiagnostic,
       notifyDrainWaiters,
-      publishIsPlaying,
-      publishQueueLength,
+      resetPlayerState,
     ],
   );
 
@@ -1325,9 +1520,7 @@ const useSoundPlayerImplementation = (
       if (
         expectedContext === undefined &&
         existingImplicitStop &&
-        existingImplicitStop.generation === currentGeneration &&
-        (currentContext === null ||
-          existingImplicitStop.context === currentContext)
+        existingImplicitStop.generation === currentGeneration
       ) {
         return existingImplicitStop.promise;
       }
@@ -1335,11 +1528,7 @@ const useSoundPlayerImplementation = (
       const context = expectedContext ?? currentContext ?? undefined;
       if (context) {
         const existingStop = playerStopPromises.current.get(context);
-        if (
-          existingStop &&
-          (expectedContext !== undefined ||
-            existingStop.generation === currentGeneration)
-        ) {
+        if (existingStop && existingStop.generation === currentGeneration) {
           return existingStop.promise;
         }
       }
@@ -1348,8 +1537,7 @@ const useSoundPlayerImplementation = (
       const stopGeneration = playerGeneration.current;
 
       if (expectedContext === undefined) {
-        const trackedStop: ImplicitPlayerStop = {
-          context: context ?? null,
+        const trackedStop: TrackedPlayerStop = {
           generation: stopGeneration,
           promise: stopping,
         };
@@ -1363,7 +1551,7 @@ const useSoundPlayerImplementation = (
       }
 
       if (context) {
-        const trackedStop: ContextPlayerStop = {
+        const trackedStop: TrackedPlayerStop = {
           generation: stopGeneration,
           promise: stopping,
         };
@@ -1380,8 +1568,8 @@ const useSoundPlayerImplementation = (
     [stopAll],
   );
 
-  const stopAllAndReport = useCallback(
-    (expectedContext?: AudioContext) => {
+  const stopAllAndReportWithPrefix = useCallback(
+    (failurePrefix: string, expectedContext?: AudioContext) => {
       // This hook is publicly exported, so callers outside VoiceProvider can
       // request deduplicated cleanup without handling resource-level failures.
       const stopping = stopAllTracked(expectedContext);
@@ -1392,7 +1580,7 @@ const useSoundPlayerImplementation = (
       const reporting = stopping.catch((e: unknown) => {
         const message = getBrowserErrorMessage(e) ?? 'Unknown error';
         reportPlayerError(
-          `Failed to stop audio player: ${message}`,
+          `${failurePrefix}: ${message}`,
           'audio_player_closure_failure',
         );
       });
@@ -1400,6 +1588,23 @@ const useSoundPlayerImplementation = (
       return reporting;
     },
     [reportPlayerError, stopAllTracked],
+  );
+
+  const stopAllAndReport = useCallback(
+    (expectedContext?: AudioContext) =>
+      stopAllAndReportWithPrefix(
+        'Failed to stop audio player',
+        expectedContext,
+      ),
+    [stopAllAndReportWithPrefix],
+  );
+
+  const stopAllAndReportOnUnmount = useCallback(
+    () =>
+      stopAllAndReportWithPrefix(
+        'Failed to dispose audio player while unmounting',
+      ),
+    [stopAllAndReportWithPrefix],
   );
 
   const stopAllForContext = useCallback(
@@ -1471,15 +1676,14 @@ const useSoundPlayerImplementation = (
           resources.context.currentTime,
         );
       }
-      diagnostics.current?.emit({
+      emitPlayerDiagnostic({
         level: 'info',
         category: 'audio_player',
         name: 'control.changed',
         details: { control: 'volume', value: clampedLevel },
       });
     },
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-    [diagnostics],
+    [emitPlayerDiagnostic],
   );
 
   const setOutputDevice = useCallback(async (deviceId: string | null) => {
@@ -1521,14 +1725,13 @@ const useSoundPlayerImplementation = (
     if (resources?.gain && resources.context) {
       resources.gain.gain.setValueAtTime(0, resources.context.currentTime);
     }
-    diagnostics.current?.emit({
+    emitPlayerDiagnostic({
       level: 'info',
       category: 'audio_player',
       name: 'control.changed',
       details: { control: 'audio_mute', value: true },
     });
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-  }, [diagnostics]);
+  }, [emitPlayerDiagnostic]);
 
   const unmuteAudio = useCallback(() => {
     isAudioMutedRef.current = false;
@@ -1540,14 +1743,13 @@ const useSoundPlayerImplementation = (
         resources.context.currentTime,
       );
     }
-    diagnostics.current?.emit({
+    emitPlayerDiagnostic({
       level: 'info',
       category: 'audio_player',
       name: 'control.changed',
       details: { control: 'audio_mute', value: false },
     });
-    // oxlint-disable-next-line react/preserve-manual-memoization -- diagnostics is a stable latest-value ref whose current value must not trigger callback recreation
-  }, [diagnostics]);
+  }, [emitPlayerDiagnostic]);
 
   // VoiceProvider owns ordered teardown of its shared resources. The standalone
   // hook has no parent owner, so unmount starts the same tracked shutdown used
@@ -1570,22 +1772,22 @@ const useSoundPlayerImplementation = (
         return;
       }
 
+      const pendingImplicitStop = implicitPlayerStop.current;
+      const joiningPendingImplicitStop =
+        playerResources.current === null &&
+        failedPlayerContextResources.current.size === 0 &&
+        pendingImplicitStop !== null &&
+        pendingImplicitStop.generation === playerGeneration.current;
       if (
         playerResources.current !== null ||
-        failedPlayerContextResources.current.size > 0
+        failedPlayerContextResources.current.size > 0 ||
+        joiningPendingImplicitStop
       ) {
-        void stopAllAndReport();
-        return;
-      }
-
-      const pendingImplicitStop = implicitPlayerStop.current;
-      if (
-        pendingImplicitStop &&
-        pendingImplicitStop.generation === playerGeneration.current
-      ) {
-        const stopping = stopAllAndReport();
-        playerGeneration.current += 1;
-        notifyDrainWaiters();
+        const stopping = stopAllAndReportOnUnmount();
+        if (joiningPendingImplicitStop) {
+          playerGeneration.current += 1;
+          notifyDrainWaiters();
+        }
         void stopping;
         return;
       }
@@ -1603,7 +1805,7 @@ const useSoundPlayerImplementation = (
       cancelPlayerFftSafely,
       clearPlayerFftStore,
       notifyDrainWaiters,
-      stopAllAndReport,
+      stopAllAndReportOnUnmount,
       unmountCleanupOwner,
     ],
   );
