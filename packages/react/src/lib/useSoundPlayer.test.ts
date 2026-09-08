@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import {
   afterEach,
   beforeEach,
@@ -167,7 +167,17 @@ describe('useSoundPlayer', () => {
       });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // React effect cleanup cannot return the asynchronous standalone-player
+    // stop. Run unmount under fake timers, acknowledge the worklet handshake,
+    // and flush its bounded wait so no teardown continuation reaches the next
+    // test's timer queue.
+    vi.useFakeTimers();
+    cleanup();
+    fakePort.onmessage?.({
+      data: { type: 'worklet_closed' },
+    } as MessageEvent);
+    await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
     globalThis.AudioContext = originalAudioContext;
     globalThis.AudioWorkletNode = originalAudioWorkletNode;
