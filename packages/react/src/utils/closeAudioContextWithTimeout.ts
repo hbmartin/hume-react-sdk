@@ -11,6 +11,15 @@ export type AudioContextCloseResult =
       reason: 'rejected' | 'timeout';
     };
 
+/** Read the terminal AudioContext state without letting host accessors abort cleanup. */
+export const isAudioContextClosed = (context: AudioContext): boolean => {
+  try {
+    return context.state === 'closed';
+  } catch {
+    return false;
+  }
+};
+
 const toError = (error: unknown): Error =>
   normalizeBrowserError(error, 'Unknown audio context error');
 
