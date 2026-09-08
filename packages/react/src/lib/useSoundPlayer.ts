@@ -8,10 +8,7 @@ import {
   appendCleanupFailures,
   throwCleanupFailures,
 } from '../utils/cleanupErrors';
-import {
-  closeAudioContextWithTimeout,
-  isAudioContextClosed,
-} from '../utils/closeAudioContextWithTimeout';
+import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
 import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
@@ -268,12 +265,21 @@ const useSoundPlayerImplementation = (
   );
 
   const reportPlayerResourceFailure = useCallback(
-    (message: string, error: unknown) => {
+    (
+      message: string,
+      error: unknown,
+      additionalDetails?: Record<string, unknown>,
+    ) => {
       emitPlayerDiagnostic({
         level: 'warn',
         category: 'audio_player',
         name: 'resource.cleanup_failed',
-        details: { resource: 'audio_player', message, error },
+        details: {
+          resource: 'audio_player',
+          message,
+          error,
+          ...additionalDetails,
+        },
       });
     },
     [emitPlayerDiagnostic],
@@ -442,16 +448,8 @@ const useSoundPlayerImplementation = (
         return null;
       }
 
-      let closeFailure: Error | null = null;
-      if (!isAudioContextClosed(context)) {
-        const closeResult = await closeAudioContextWithTimeout(context);
-        // A close may finish immediately after the timeout wins its race.
-        // Treat the context's terminal state as authoritative so a later
-        // retry can release ownership without calling close() again.
-        if (!closeResult.success && !isAudioContextClosed(context)) {
-          closeFailure = closeResult.error;
-        }
-      }
+      const closeResult = await closeAudioContextWithTimeout(context);
+      const closeFailure = closeResult.success ? null : closeResult.error;
       if (closeFailure === null) {
         resources.context = null;
         resources.ownsContext = false;
@@ -656,38 +654,71 @@ const useSoundPlayerImplementation = (
     // oxlint-disable-next-line react/memo-dependencies -- the explicit callback dependency preserves retry ownership if disposal behavior changes
   }, [disposePlayerResourceBatch]);
 
-  const retryFailedPlayerContextClosuresBestEffort = useCallback(async () => {
-    if (failedPlayerContextResources.current.size === 0) return;
-    try {
-      await retryFailedPlayerContextClosures();
-    } catch (error) {
-      reportPlayerResourceFailure(
-        'Failed to close a previously detached audio player.',
-        error,
-      );
-    }
-  }, [reportPlayerResourceFailure, retryFailedPlayerContextClosures]);
-
-  const retryFailedPlayerContextClosuresOnUnmount = useCallback(async () => {
-    if (failedPlayerContextResources.current.size === 0) return;
-    try {
-      await retryFailedPlayerContextClosures();
-    } catch (error) {
-      const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-      reportPlayerResourceFailure(
-        'Failed to dispose retained audio player contexts while unmounting.',
-        error,
-      );
-      reportPlayerError(
-        `Failed to dispose audio player while unmounting: ${message}`,
-        'audio_player_closure_failure',
-      );
-    }
-  }, [
-    reportPlayerError,
-    reportPlayerResourceFailure,
-    retryFailedPlayerContextClosures,
-  ]);
+  const retryFailedPlayerContextClosuresBestEffort = useCallback(
+    async (mode: 'background' | 'unmount' = 'background') => {
+      if (failedPlayerContextResources.current.size === 0) return;
+      const reportStopLifecycle = mode === 'unmount';
+      const retryStartedAt = getMonotonicTime();
+      if (reportStopLifecycle) {
+        emitPlayerDiagnostic({
+          level: 'info',
+          category: 'audio_player',
+          name: 'resource.stop_started',
+          details: {
+            resource: 'audio_player',
+            scope: 'detached_context_retry',
+          },
+        });
+      }
+      try {
+        await retryFailedPlayerContextClosures();
+      } catch (error) {
+        const failureMessage =
+          mode === 'unmount'
+            ? 'Failed to dispose retained audio player contexts while unmounting.'
+            : 'Failed to close a previously detached audio player.';
+        const failures: unknown[] = [];
+        appendCleanupFailures(failures, error);
+        reportPlayerResourceFailure(
+          failureMessage,
+          error,
+          reportStopLifecycle
+            ? {
+                failureCount: failures.length,
+                operation: 'stop',
+                scope: 'detached_context_retry',
+              }
+            : undefined,
+        );
+        if (mode === 'unmount') {
+          const message = getBrowserErrorMessage(error) ?? 'Unknown error';
+          reportPlayerError(
+            `Failed to dispose audio player while unmounting: ${message}`,
+            'audio_player_closure_failure',
+          );
+        }
+        return;
+      }
+      if (reportStopLifecycle) {
+        emitPlayerDiagnostic({
+          level: 'info',
+          category: 'audio_player',
+          name: 'resource.stopped',
+          durationMs: getMonotonicTime() - retryStartedAt,
+          details: {
+            resource: 'audio_player',
+            scope: 'detached_context_retry',
+          },
+        });
+      }
+    },
+    [
+      emitPlayerDiagnostic,
+      reportPlayerError,
+      reportPlayerResourceFailure,
+      retryFailedPlayerContextClosures,
+    ],
+  );
 
   /**
    * Only for non-AudioWorklet mode.
@@ -927,6 +958,9 @@ const useSoundPlayerImplementation = (
           cleanupFailure !== null &&
           generation === playerGeneration.current &&
           !callbackFailureCaptured &&
+          // VoiceProvider has one primary error slot. Rollback failure was
+          // already emitted as resource.cleanup_failed; do not overwrite the
+          // initialization reason that caused the rollback.
           errorCallbackOwner === 'consumer'
         ) {
           reportPlayerError(
@@ -1879,9 +1913,7 @@ const useSoundPlayerImplementation = (
         pendingImplicitStop.generation = playerGeneration.current;
         notifyDrainWaiters();
         const retryRetainedContextsAfterStop = () => {
-          if (failedPlayerContextResources.current.size > 0) {
-            void retryFailedPlayerContextClosuresOnUnmount();
-          }
+          void retryFailedPlayerContextClosuresBestEffort('unmount');
         };
         void pendingImplicitStop.promise.then(
           retryRetainedContextsAfterStop,
@@ -1893,16 +1925,13 @@ const useSoundPlayerImplementation = (
         void stopAllAndReportOnUnmount();
         return;
       }
-      if (failedPlayerContextResources.current.size > 0) {
-        void retryFailedPlayerContextClosuresOnUnmount();
-        return;
-      }
 
-      // Even an uninitialized player may have an async initialization call
-      // about to publish resources. Invalidate it without emitting a fake stop
-      // lifecycle or publishing state for an unmounted hook.
+      // Even without published resources, initPlayer may be awaiting a retained-
+      // context preflight. Invalidate it before retrying those contexts so it
+      // cannot resume into an unmounted hook.
       playerGeneration.current += 1;
       notifyDrainWaiters();
+      void retryFailedPlayerContextClosuresBestEffort('unmount');
       clearPlayerFftStore(
         'Failed to clear FFT state while unmounting the player.',
       );
@@ -1911,7 +1940,7 @@ const useSoundPlayerImplementation = (
       cancelPlayerFftSafely,
       clearPlayerFftStore,
       notifyDrainWaiters,
-      retryFailedPlayerContextClosuresOnUnmount,
+      retryFailedPlayerContextClosuresBestEffort,
       stopAllAndReportOnUnmount,
       unmountCleanupOwner,
     ],
