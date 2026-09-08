@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   closeAudioContextWithTimeout,
-  isAudioContextClosed,
+  reconcileAudioContextCloseResult,
 } from './closeAudioContextWithTimeout';
 
 const createContext = (close: () => Promise<void>) =>
@@ -13,14 +13,58 @@ describe('closeAudioContextWithTimeout', () => {
     vi.useRealTimers();
   });
 
-  it('treats an unreadable context state as not closed', () => {
-    const context = Object.defineProperty({}, 'state', {
+  it('attempts close when the context state is unreadable', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const context = Object.defineProperty({ close }, 'state', {
       get: () => {
         throw new Error('context state unavailable');
       },
-    }) as AudioContext;
+    }) as unknown as AudioContext;
 
-    expect(isAudioContextClosed(context)).toBe(false);
+    await expect(closeAudioContextWithTimeout(context)).resolves.toEqual({
+      success: true,
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('does not close a context that is already closed', async () => {
+    const close = vi.fn().mockRejectedValue(new Error('must not be called'));
+    const context = { close, state: 'closed' } as unknown as AudioContext;
+
+    await expect(closeAudioContextWithTimeout(context)).resolves.toEqual({
+      success: true,
+    });
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a cached failure after the context reaches closed', () => {
+    const context = { state: 'closed' } as AudioContext;
+
+    expect(
+      reconcileAudioContextCloseResult(context, {
+        success: false,
+        error: new Error('close timed out'),
+        reason: 'timeout',
+      }),
+    ).toEqual({ success: true });
+  });
+
+  it('treats a synchronous close failure as success when close reached its terminal state', async () => {
+    let state: AudioContextState = 'running';
+    const close = vi.fn(() => {
+      state = 'closed';
+      throw new DOMException('Already closed', 'InvalidStateError');
+    });
+    const context = {
+      close,
+      get state() {
+        return state;
+      },
+    } as unknown as AudioContext;
+
+    await expect(closeAudioContextWithTimeout(context)).resolves.toEqual({
+      success: true,
+    });
   });
 
   it('resolves when the context closes', async () => {

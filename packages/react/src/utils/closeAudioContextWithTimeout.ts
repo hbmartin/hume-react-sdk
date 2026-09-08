@@ -12,13 +12,22 @@ export type AudioContextCloseResult =
     };
 
 /** Read the terminal AudioContext state without letting host accessors abort cleanup. */
-export const isAudioContextClosed = (context: AudioContext): boolean => {
+const isAudioContextClosed = (context: AudioContext): boolean => {
   try {
     return context.state === 'closed';
   } catch {
+    // An unreadable state is not evidence that cleanup finished. Treat it as
+    // open so callers still attempt close and retain ownership if that fails.
     return false;
   }
 };
+
+/** Treat the context's observable terminal state as authoritative. */
+export const reconcileAudioContextCloseResult = (
+  context: AudioContext,
+  result: AudioContextCloseResult,
+): AudioContextCloseResult =>
+  result.success || !isAudioContextClosed(context) ? result : { success: true };
 
 const toError = (error: unknown): Error =>
   normalizeBrowserError(error, 'Unknown audio context error');
@@ -26,6 +35,10 @@ const toError = (error: unknown): Error =>
 export const closeAudioContextWithTimeout = async (
   context: AudioContext,
 ): Promise<AudioContextCloseResult> => {
+  if (isAudioContextClosed(context)) {
+    return { success: true };
+  }
+
   let closePromise: Promise<AudioContextCloseResult>;
   try {
     closePromise = Promise.resolve(context.close()).then(
@@ -37,11 +50,11 @@ export const closeAudioContextWithTimeout = async (
       }),
     );
   } catch (error) {
-    return {
+    return reconcileAudioContextCloseResult(context, {
       success: false,
       error: toError(error),
       reason: 'rejected',
-    };
+    });
   }
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -62,5 +75,5 @@ export const closeAudioContextWithTimeout = async (
   if (timeoutId !== undefined) {
     clearTimeout(timeoutId);
   }
-  return result;
+  return reconcileAudioContextCloseResult(context, result);
 };

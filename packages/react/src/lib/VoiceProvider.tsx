@@ -38,7 +38,7 @@ import {
 import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
-  isAudioContextClosed,
+  reconcileAudioContextCloseResult,
 } from '../utils/closeAudioContextWithTimeout';
 import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { getAuthStrategyError } from './auth';
@@ -777,12 +777,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         closePromise = closeAudioContextWithTimeout(context);
         sharedAudioContextClosePromisesRef.current.set(context, closePromise);
       }
-      const closeResult = await closePromise;
-      const contextIsClosed = isAudioContextClosed(context);
-      if (
-        (closeResult.success || contextIsClosed) &&
-        sharedAudioContextRef.current === context
-      ) {
+      // Reconcile again when reusing a cached timeout so a context that reached
+      // its terminal state later can release provider ownership.
+      const closeResult = reconcileAudioContextCloseResult(
+        context,
+        await closePromise,
+      );
+      if (closeResult.success && sharedAudioContextRef.current === context) {
         sharedAudioContextRef.current = null;
       } else if (!closeResult.success && closeResult.reason === 'rejected') {
         // A genuine rejection can be transient. Let a later teardown retry it;
@@ -792,7 +793,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       // AudioContext.close() changes the control state to closed before its
       // promise settles, so a second close cannot recover from a timeout. Keep
       // timed-out work cached and observe a later public `closed` state.
-      return contextIsClosed ? { success: true } : closeResult;
+      return closeResult;
     },
     [],
   );
