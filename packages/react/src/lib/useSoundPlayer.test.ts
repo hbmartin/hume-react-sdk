@@ -200,7 +200,7 @@ describe('useSoundPlayer', () => {
     expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
-  it('bounds rollback before reporting an initialization failure', async () => {
+  it('reports an initialization failure before bounded rollback finishes', async () => {
     vi.useFakeTimers();
     audioContextState = 'suspended';
     resumeAudioContext.mockRejectedValueOnce(new Error('autoplay blocked'));
@@ -225,7 +225,10 @@ describe('useSoundPlayer', () => {
     });
     await act(() => vi.advanceTimersByTimeAsync(0));
 
-    expect(onError).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('autoplay policy'),
+      'audio_player_initialization_failure',
+    );
     expect(closeAudioContext).toHaveBeenCalledOnce();
     expect(settled).toBe(false);
 
@@ -314,7 +317,7 @@ describe('useSoundPlayer', () => {
     );
   });
 
-  it('combines initialization and rollback cleanup failures', async () => {
+  it('reports initialization and rollback cleanup failures separately', async () => {
     vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
     const cleanupError = new Error('context close failed');
     closeAudioContext.mockRejectedValueOnce(cleanupError);
@@ -338,9 +341,7 @@ describe('useSoundPlayer', () => {
 
     expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /Failed to load audio worklet.*context close failed/,
-      ),
+      'Failed to load audio worklet',
       'audio_worklet_load_failure',
     );
     expect(
@@ -389,6 +390,73 @@ describe('useSoundPlayer', () => {
     expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
   });
 
+  it('does not block initialization on a permanently uncloseable detached context', async () => {
+    const closeError = new Error('context remains uncloseable');
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    closeAudioContext.mockRejectedValue(closeError);
+
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining(closeError.message),
+      'audio_player_closure_failure',
+    );
+    expect(closeAudioContext).toHaveBeenCalledTimes(2);
+    expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('joins a detached-context retry without stopping the newer player', async () => {
+    const closeRetry = createDeferred<void>();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    const detachedContext = vi.mocked(globalThis.AudioContext).mock.results[0]
+      ?.value as AudioContext | undefined;
+    if (!detachedContext) throw new Error('Expected the first audio context.');
+    closeAudioContext
+      .mockRejectedValueOnce(new Error('first close failed'))
+      .mockReturnValueOnce(closeRetry.promise);
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAllForContext(detachedContext);
+    });
+    await act(() =>
+      result.current.addToQueue({
+        id: 'newer-player',
+        index: 0,
+        data: '\x01',
+        type: 'audio_output',
+        receivedAt: new Date(0),
+      }),
+    );
+
+    expect(closeAudioContext).toHaveBeenCalledTimes(2);
+    expect(createBufferSource).toHaveBeenCalledOnce();
+    closeRetry.resolve();
+    await expect(stopping).resolves.toBeUndefined();
+    expect(closeAudioContext).toHaveBeenCalledTimes(2);
+  });
+
   it('cleans up initialization when the consumer error handler throws', async () => {
     vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
     const onError = vi.fn(() => {
@@ -409,6 +477,36 @@ describe('useSoundPlayer', () => {
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
     expect(closeAudioContext).toHaveBeenCalledOnce();
+  });
+
+  it('propagates VoiceProvider error-handler failures after cleanup', async () => {
+    vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
+    const handlerError = new Error('provider error handler failed');
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { result } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
+        diagnostics,
+        enableAudioWorklet: true,
+        onError: () => {
+          throw handlerError;
+        },
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+
+    await expect(result.current.initPlayer()).rejects.toBe(handlerError);
+
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
+    expect(
+      events.filter((event) => event.name === 'consumer.callback_failed'),
+    ).toHaveLength(0);
   });
 
   it('preserves browser error details when initialization throws', async () => {
@@ -863,6 +961,62 @@ describe('useSoundPlayer', () => {
     });
     await act(() => Promise.all([firstStop, secondStop]));
     expect(secondSettled).toBe(true);
+  });
+
+  it('clears FFT state when stopping an uninitialized player', async () => {
+    let flushFftStore: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
+      (callback) => {
+        flushFftStore = callback;
+        return 41;
+      },
+    );
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    act(() => {
+      result.current.fftStore.write(Array.from({ length: 24 }, () => 7));
+      flushFftStore?.(0);
+    });
+    expect(result.current.fftStore.getSnapshot()[0]).toBe(7);
+
+    await act(() => result.current.stopAll());
+
+    expect(
+      result.current.fftStore.getSnapshot().every((value) => value === 0),
+    ).toBe(true);
+  });
+
+  it('finishes teardown when stop lifecycle diagnostics throw', async () => {
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      logger: false,
+    }));
+    vi.spyOn(diagnostics, 'emit').mockImplementation((input) => {
+      if (input.name === 'resource.stop_started') {
+        throw new Error('diagnostics reporter failed');
+      }
+    });
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        diagnostics,
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+
+    await expect(result.current.stopAll()).resolves.toBeUndefined();
+
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+    expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
   it('does not let an older implicit stop hide a reinitialized player on unmount', async () => {
@@ -1674,9 +1828,12 @@ describe('useSoundPlayer', () => {
 
     expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining('port close failed'),
+      expect.stringContaining(
+        'Failed to dispose audio player while unmounting:',
+      ),
       'audio_player_closure_failure',
     );
+    expect(onError.mock.calls[0]?.[0]).toContain('port close failed');
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
     expect(closeAudioContext).toHaveBeenCalledOnce();
@@ -1717,9 +1874,10 @@ describe('useSoundPlayer', () => {
 
     expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining('joined stop failed'),
+      expect.stringContaining('Failed to stop audio player:'),
       'audio_player_closure_failure',
     );
+    expect(onError.mock.calls[0]?.[0]).toContain('joined stop failed');
   });
 
   it('does not emit stop lifecycle events when an unused player unmounts', () => {
