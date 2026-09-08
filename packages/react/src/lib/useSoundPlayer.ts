@@ -77,6 +77,9 @@ const supportsSetSinkId = (
   setSinkId: (deviceId: string) => Promise<void>;
 } => 'setSinkId' in context && typeof context.setSinkId === 'function';
 
+const isAudioContextClosed = (context: AudioContext): boolean =>
+  context.state === 'closed';
+
 const releaseSafely = (
   failures: unknown[],
   label: string,
@@ -88,6 +91,23 @@ const releaseSafely = (
     const detail = getBrowserErrorMessage(error) ?? 'Unknown error';
     failures.push(new Error(`${label}: ${detail}`, { cause: error }));
   }
+};
+
+const trackWeakMapPromise = <K extends object, V extends object>(
+  map: WeakMap<K, V>,
+  key: K,
+  promise: Promise<void>,
+  createValue: (trackedPromise: Promise<void>) => V,
+): Promise<void> => {
+  let trackedValue: V | null = null;
+  const trackedPromise = promise.finally(() => {
+    if (trackedValue !== null && map.get(key) === trackedValue) {
+      map.delete(key);
+    }
+  });
+  trackedValue = createValue(trackedPromise);
+  map.set(key, trackedValue);
+  return trackedPromise;
 };
 
 interface PlayerResources {
@@ -162,6 +182,14 @@ export interface UseSoundPlayerProps {
   onStopAudio: (id: string) => void;
 }
 
+const usePlayerCallbackRefs = (props: UseSoundPlayerProps) => {
+  const onPlayAudio = useLatestRef(props.onPlayAudio);
+  const onStopAudio = useLatestRef(props.onStopAudio);
+  const onError = useLatestRef(props.onError);
+  const diagnostics = useLatestRef(props.diagnostics);
+  return { diagnostics, onError, onPlayAudio, onStopAudio };
+};
+
 interface PlayerLifecyclePolicy {
   contextStopFailureMode: 'propagate' | 'report';
   errorCallbackOwner: 'consumer' | 'voice-provider';
@@ -217,10 +245,8 @@ const useSoundPlayerImplementation = (
 
   const isProcessing = useRef(false);
 
-  const onPlayAudio = useLatestRef(props.onPlayAudio);
-  const onStopAudio = useLatestRef(props.onStopAudio);
-  const onError = useLatestRef(props.onError);
-  const diagnostics = useLatestRef(props.diagnostics);
+  const { diagnostics, onError, onPlayAudio, onStopAudio } =
+    usePlayerCallbackRefs(props);
 
   const emitPlayerDiagnostic = useCallback(
     (input: Parameters<VoiceDiagnosticsReporter['emit']>[0]) => {
@@ -408,6 +434,50 @@ const useSoundPlayerImplementation = (
     [cancelPlayerFft, reportPlayerResourceFailure],
   );
 
+  const closeOwnedPlayerContext = useCallback(
+    async (resources: PlayerResources): Promise<Error | null> => {
+      const context = resources.context;
+      if (!context || !resources.ownsContext) {
+        resources.context = null;
+        resources.ownsContext = false;
+        failedPlayerContextResources.current.delete(resources);
+        return null;
+      }
+
+      let closeFailure: Error | null = null;
+      if (!isAudioContextClosed(context)) {
+        const closeResult = await closeAudioContextWithTimeout(context);
+        // A close may finish immediately after the timeout wins its race.
+        // Treat the context's terminal state as authoritative so a later
+        // retry can release ownership without calling close() again.
+        if (!closeResult.success && !isAudioContextClosed(context)) {
+          closeFailure = closeResult.error;
+        }
+      }
+      if (closeFailure === null) {
+        resources.context = null;
+        resources.ownsContext = false;
+        failedPlayerContextResources.current.delete(resources);
+        return null;
+      }
+
+      failedPlayerContextResources.current.add(resources);
+      const activeRetry = failedPlayerContextRetry.current;
+      if (
+        activeRetry !== null &&
+        !activeRetry.settled &&
+        !activeRetry.attemptedResources.has(resources)
+      ) {
+        activeRetry.pendingResources.add(resources);
+      }
+      return new Error(
+        `Audio context cleanup failed: ${closeFailure.message}`,
+        { cause: closeFailure },
+      );
+    },
+    [],
+  );
+
   const disposePlayerResources = useCallback(
     (resources: PlayerResources): Promise<void> => {
       const existingDisposal = playerResourceDisposals.current.get(resources);
@@ -463,54 +533,22 @@ const useSoundPlayerImplementation = (
           release('Gain disconnect failed', () => gain.disconnect());
         }
 
-        const context = resources.context;
-        const shouldCloseContext = resources.ownsContext;
-        if (context && shouldCloseContext) {
-          const closeResult = await closeAudioContextWithTimeout(context);
-          if (!closeResult.success) {
-            // Preserve ownership for a later best-effort retry. Concurrent
-            // callers join the disposal promise registered before this work
-            // starts, so only one close attempt can mutate this record.
-            failedPlayerContextResources.current.add(resources);
-            const activeRetry = failedPlayerContextRetry.current;
-            if (
-              activeRetry !== null &&
-              !activeRetry.settled &&
-              !activeRetry.attemptedResources.has(resources)
-            ) {
-              activeRetry.pendingResources.add(resources);
-            }
-            failures.push(
-              new Error(
-                `Audio context cleanup failed: ${closeResult.error.message}`,
-                { cause: closeResult.error },
-              ),
-            );
-          } else {
-            resources.context = null;
-            resources.ownsContext = false;
-            failedPlayerContextResources.current.delete(resources);
-          }
-        } else {
-          resources.context = null;
-          resources.ownsContext = false;
-          failedPlayerContextResources.current.delete(resources);
+        const contextFailure = await closeOwnedPlayerContext(resources);
+        if (contextFailure !== null) {
+          failures.push(contextFailure);
         }
 
         throwCleanupFailures(failures, 'Audio player resource cleanup failed.');
       };
 
-      const disposal = Promise.resolve().then(performDisposal);
-      playerResourceDisposals.current.set(resources, disposal);
-      const clearDisposal = () => {
-        if (playerResourceDisposals.current.get(resources) === disposal) {
-          playerResourceDisposals.current.delete(resources);
-        }
-      };
-      void disposal.then(clearDisposal, clearDisposal);
-      return disposal;
+      return trackWeakMapPromise(
+        playerResourceDisposals.current,
+        resources,
+        Promise.resolve().then(performDisposal),
+        (trackedPromise) => trackedPromise,
+      );
     },
-    [cancelPlayerFft],
+    [cancelPlayerFft, closeOwnedPlayerContext],
   );
 
   const disposePlayerResourceBatch = useCallback(
@@ -573,9 +611,6 @@ const useSoundPlayerImplementation = (
           } catch (error) {
             appendCleanupFailures(failures, error);
           }
-          // Let concurrent disposal promises clear their per-resource entries
-          // before processing contexts that joined this retry while it awaited.
-          await Promise.resolve();
         }
         throwCleanupFailures(
           failures,
@@ -597,14 +632,16 @@ const useSoundPlayerImplementation = (
     // oxlint-disable-next-line react/memo-dependencies -- the explicit callback dependency preserves retry ownership if disposal behavior changes
   }, [disposePlayerResourceBatch]);
 
-  const retryFailedPlayerContextClosuresBestEffort = useCallback(() => {
+  const retryFailedPlayerContextClosuresBestEffort = useCallback(async () => {
     if (failedPlayerContextResources.current.size === 0) return;
-    void retryFailedPlayerContextClosures().catch((error: unknown) => {
+    try {
+      await retryFailedPlayerContextClosures();
+    } catch (error) {
       reportPlayerResourceFailure(
         'Failed to close a previously detached audio player.',
         error,
       );
-    });
+    }
   }, [reportPlayerResourceFailure, retryFailedPlayerContextClosures]);
 
   /**
@@ -748,19 +785,6 @@ const useSoundPlayerImplementation = (
       speakerDeviceId?: string,
       sharedAudioContext?: AudioContext,
     ): Promise<boolean> => {
-      const retainedContextCount = failedPlayerContextResources.current.size;
-      retryFailedPlayerContextClosuresBestEffort();
-      if (
-        sharedAudioContext === undefined &&
-        retainedContextCount >= MAX_RETAINED_PLAYER_CONTEXTS
-      ) {
-        reportPlayerError(
-          `Failed to initialize audio player because ${retainedContextCount} previous audio contexts could not be closed.`,
-          'audio_player_closure_failure',
-        );
-        return false;
-      }
-
       const generation = ++playerGeneration.current;
       notifyDrainWaiters();
       playbackActivitySequence.current = 0;
@@ -786,6 +810,28 @@ const useSoundPlayerImplementation = (
         if (generation !== playerGeneration.current) {
           return false;
         }
+      }
+
+      const retainedContextRetry = retryFailedPlayerContextClosuresBestEffort();
+      if (
+        sharedAudioContext === undefined &&
+        failedPlayerContextResources.current.size >=
+          MAX_RETAINED_PLAYER_CONTEXTS
+      ) {
+        await retainedContextRetry;
+        if (generation !== playerGeneration.current) {
+          return false;
+        }
+        const retainedContextCount = failedPlayerContextResources.current.size;
+        if (retainedContextCount >= MAX_RETAINED_PLAYER_CONTEXTS) {
+          reportPlayerError(
+            `Failed to initialize audio player because ${retainedContextCount} previous audio contexts could not be closed.`,
+            'audio_player_closure_failure',
+          );
+          return false;
+        }
+      } else {
+        void retainedContextRetry;
       }
 
       let resourcesForInitialization: PlayerResources | null = null;
@@ -832,8 +878,8 @@ const useSoundPlayerImplementation = (
           !callbackFailureCaptured
         ) {
           reportPlayerError(
-            `Failed to clean up an incomplete audio player initialization: ${cleanupFailure}`,
-            'audio_player_closure_failure',
+            `${message}; cleanup also failed: ${cleanupFailure}`,
+            reason,
           );
         }
         if (callbackFailureCaptured) {
@@ -1533,8 +1579,20 @@ const useSoundPlayerImplementation = (
         }
       }
 
-      const stopping = stopAll(expectedContext);
+      let stopping = stopAll(expectedContext);
       const stopGeneration = playerGeneration.current;
+
+      if (context) {
+        stopping = trackWeakMapPromise(
+          playerStopPromises.current,
+          context,
+          stopping,
+          (trackedPromise) => ({
+            generation: stopGeneration,
+            promise: trackedPromise,
+          }),
+        );
+      }
 
       if (expectedContext === undefined) {
         const trackedStop: TrackedPlayerStop = {
@@ -1548,20 +1606,6 @@ const useSoundPlayerImplementation = (
           }
         };
         void stopping.then(clearImplicitStop, clearImplicitStop);
-      }
-
-      if (context) {
-        const trackedStop: TrackedPlayerStop = {
-          generation: stopGeneration,
-          promise: stopping,
-        };
-        playerStopPromises.current.set(context, trackedStop);
-        const clearStop = () => {
-          if (playerStopPromises.current.get(context) === trackedStop) {
-            playerStopPromises.current.delete(context);
-          }
-        };
-        void stopping.then(clearStop, clearStop);
       }
       return stopping;
     },
@@ -1775,20 +1819,20 @@ const useSoundPlayerImplementation = (
       const pendingImplicitStop = implicitPlayerStop.current;
       const joiningPendingImplicitStop =
         playerResources.current === null &&
-        failedPlayerContextResources.current.size === 0 &&
         pendingImplicitStop !== null &&
         pendingImplicitStop.generation === playerGeneration.current;
+      if (joiningPendingImplicitStop) {
+        playerGeneration.current += 1;
+        notifyDrainWaiters();
+        if (failedPlayerContextResources.current.size === 0) {
+          return;
+        }
+      }
       if (
         playerResources.current !== null ||
-        failedPlayerContextResources.current.size > 0 ||
-        joiningPendingImplicitStop
+        failedPlayerContextResources.current.size > 0
       ) {
-        const stopping = stopAllAndReportOnUnmount();
-        if (joiningPendingImplicitStop) {
-          playerGeneration.current += 1;
-          notifyDrainWaiters();
-        }
-        void stopping;
+        void stopAllAndReportOnUnmount();
         return;
       }
 

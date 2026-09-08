@@ -327,7 +327,7 @@ describe('useSoundPlayer', () => {
     );
   });
 
-  it('reports initialization and rollback cleanup failures separately', async () => {
+  it('preserves the initialization reason when rollback cleanup fails', async () => {
     vi.mocked(loadAudioWorklet).mockResolvedValueOnce(false);
     const cleanupError = new Error('context close failed');
     closeAudioContext.mockRejectedValueOnce(cleanupError);
@@ -358,7 +358,10 @@ describe('useSoundPlayer', () => {
     expect(onError).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining(cleanupError.message),
-      'audio_player_closure_failure',
+      'audio_worklet_load_failure',
+    );
+    expect(onError.mock.calls[1]?.[0]).toContain(
+      'Failed to load audio worklet; cleanup also failed:',
     );
     expect(
       events.find(
@@ -406,8 +409,8 @@ describe('useSoundPlayer', () => {
     expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
   });
 
-  it('does not block initialization on a permanently uncloseable detached context', async () => {
-    const closeError = new Error('context remains uncloseable');
+  it('does not block initialization on a detached context that cannot close', async () => {
+    const closeError = new Error('context still cannot be closed');
     const onError = vi.fn();
     const { result } = renderHook(() =>
       useSoundPlayer({
@@ -520,16 +523,90 @@ describe('useSoundPlayer', () => {
     await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
 
     await expect(result.current.initPlayer()).resolves.toBe(false);
-    await waitFor(() =>
-      expect(closeAudioContext.mock.calls.length).toBeGreaterThan(3),
-    );
+    expect(closeAudioContext).toHaveBeenCalledTimes(3);
     await expect(result.current.initPlayer()).resolves.toBe(false);
 
     expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
+    expect(closeAudioContext).toHaveBeenCalledTimes(5);
     expect(onError).toHaveBeenLastCalledWith(
       expect.stringContaining('2 previous audio contexts could not be closed'),
       'audio_player_closure_failure',
     );
+  });
+
+  it('rechecks the retained-context limit after successful retries', async () => {
+    closeAudioContext.mockRejectedValue(new Error('context cannot close yet'));
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+    expect(closeAudioContext).toHaveBeenCalledTimes(3);
+
+    closeAudioContext.mockResolvedValue(undefined);
+    onError.mockClear();
+
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+
+    expect(globalThis.AudioContext).toHaveBeenCalledTimes(3);
+    expect(closeAudioContext).toHaveBeenCalledTimes(5);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('releases a retained context that closes after the timeout', async () => {
+    vi.useFakeTimers();
+    const lateClose = createDeferred<void>();
+    const firstContext = new AudioContext();
+    const secondContext = new AudioContext();
+    let firstContextState: AudioContextState = 'running';
+    Object.defineProperty(firstContext, 'state', {
+      configurable: true,
+      get: () => firstContextState,
+    });
+    globalThis.AudioContext = vi
+      .fn()
+      .mockImplementationOnce(function FirstAudioContextMock() {
+        return firstContext;
+      })
+      .mockImplementationOnce(function SecondAudioContextMock() {
+        return secondContext;
+      });
+    closeAudioContext.mockReturnValueOnce(lateClose.promise);
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+
+    let replacement = Promise.resolve(true);
+    act(() => {
+      replacement = result.current.initPlayer();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    await expect(replacement).resolves.toBe(false);
+
+    firstContextState = 'closed';
+    lateClose.resolve();
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
   it('cleans up initialization when the consumer error handler throws', async () => {
@@ -2915,10 +2992,21 @@ describe('useSoundPlayer', () => {
       });
     });
 
-    it('wakes a drain when unmount joins a pending implicit stop', async () => {
+    it('wakes a drain and retries retained contexts while an implicit stop is pending', async () => {
       vi.useFakeTimers();
+      closeAudioContext
+        .mockRejectedValueOnce(new Error('detached context close failed'))
+        .mockRejectedValueOnce(new Error('detached context retry failed'))
+        .mockResolvedValue(undefined);
       const { result, unmount } = renderPlayer(true);
       await act(() => result.current.initPlayer());
+      await expect(result.current.initPlayer()).resolves.toBe(false);
+      await expect(result.current.initPlayer()).resolves.toBe(true);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(closeAudioContext).toHaveBeenCalledTimes(2);
       await act(() =>
         result.current.addToQueue({
           id: 'pending-stop',
@@ -2946,6 +3034,7 @@ describe('useSoundPlayer', () => {
         await Promise.resolve();
       });
       expect(drainResult).toBe(false);
+      expect(closeAudioContext).toHaveBeenCalledTimes(3);
 
       act(() => {
         fakePort.onmessage?.({
@@ -2956,6 +3045,7 @@ describe('useSoundPlayer', () => {
         await vi.advanceTimersByTimeAsync(100);
         await Promise.all([pendingDrain, stopping]);
       });
+      expect(closeAudioContext).toHaveBeenCalledTimes(4);
     });
 
     it.each([true, false])(
