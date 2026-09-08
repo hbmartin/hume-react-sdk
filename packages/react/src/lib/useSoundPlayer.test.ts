@@ -733,21 +733,24 @@ describe('useSoundPlayer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('abandons a retained-context preflight superseded by another initialization', async () => {
+  const beginRetainedContextPreflight = async (
+    diagnostics?: Parameters<typeof useSoundPlayer>[0]['diagnostics'],
+  ) => {
     closeAudioContext.mockRejectedValue(new Error('context cannot close yet'));
-    const { result } = renderHook(() =>
+    const rendered = renderHook(() =>
       useSoundPlayer({
+        ...(diagnostics === undefined ? undefined : { diagnostics }),
         enableAudioWorklet: false,
         onError: vi.fn(),
         onPlayAudio: vi.fn(),
         onStopAudio: vi.fn(),
       }),
     );
-    await expect(result.current.initPlayer()).resolves.toBe(true);
-    await expect(result.current.initPlayer()).resolves.toBe(false);
-    await expect(result.current.initPlayer()).resolves.toBe(true);
+    await expect(rendered.result.current.initPlayer()).resolves.toBe(true);
+    await expect(rendered.result.current.initPlayer()).resolves.toBe(false);
+    await expect(rendered.result.current.initPlayer()).resolves.toBe(true);
     await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
-    await expect(result.current.initPlayer()).resolves.toBe(false);
+    await expect(rendered.result.current.initPlayer()).resolves.toBe(false);
     expect(closeAudioContext).toHaveBeenCalledTimes(3);
     await act(async () => {
       await Promise.resolve();
@@ -758,9 +761,15 @@ describe('useSoundPlayer', () => {
     closeAudioContext.mockReturnValue(preflightClose.promise);
     let staleInitialization = Promise.resolve(true);
     act(() => {
-      staleInitialization = result.current.initPlayer();
+      staleInitialization = rendered.result.current.initPlayer();
     });
     await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(5));
+    return { ...rendered, preflightClose, staleInitialization };
+  };
+
+  it('abandons a retained-context preflight superseded by another initialization', async () => {
+    const { result, preflightClose, staleInitialization } =
+      await beginRetainedContextPreflight();
 
     const sharedContext = new AudioContext();
     await expect(
@@ -786,33 +795,14 @@ describe('useSoundPlayer', () => {
   });
 
   it('abandons a retained-context preflight when the player unmounts', async () => {
-    closeAudioContext.mockRejectedValue(new Error('context cannot close yet'));
-    const { result, unmount } = renderHook(() =>
-      useSoundPlayer({
-        enableAudioWorklet: false,
-        onError: vi.fn(),
-        onPlayAudio: vi.fn(),
-        onStopAudio: vi.fn(),
-      }),
-    );
-    await expect(result.current.initPlayer()).resolves.toBe(true);
-    await expect(result.current.initPlayer()).resolves.toBe(false);
-    await expect(result.current.initPlayer()).resolves.toBe(true);
-    await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
-    await expect(result.current.initPlayer()).resolves.toBe(false);
-    expect(closeAudioContext).toHaveBeenCalledTimes(3);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    const preflightClose = createDeferred<void>();
-    closeAudioContext.mockReturnValue(preflightClose.promise);
-    let staleInitialization = Promise.resolve(true);
-    act(() => {
-      staleInitialization = result.current.initPlayer();
-    });
-    await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(5));
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { unmount, preflightClose, staleInitialization } =
+      await beginRetainedContextPreflight(diagnostics);
 
     act(() => unmount());
     await act(async () => {
@@ -821,6 +811,13 @@ describe('useSoundPlayer', () => {
     });
 
     expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
+    expect(
+      events.filter(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['scope'] === 'detached_context_retry',
+      ),
+    ).toHaveLength(0);
   });
 
   it('refuses at the retained-context cap without resetting an active shared player', async () => {
@@ -901,7 +898,10 @@ describe('useSoundPlayer', () => {
       .mockImplementationOnce(function SecondAudioContextMock() {
         return secondContext;
       });
-    closeAudioContext.mockReturnValueOnce(lateClose.promise);
+    closeAudioContext.mockImplementationOnce(() => {
+      firstContextState = 'closed';
+      return lateClose.promise;
+    });
     const { result } = renderHook(() =>
       useSoundPlayer({
         enableAudioWorklet: false,
@@ -919,7 +919,6 @@ describe('useSoundPlayer', () => {
     await act(() => vi.advanceTimersByTimeAsync(1_000));
     await expect(replacement).resolves.toBe(false);
 
-    firstContextState = 'closed';
     lateClose.resolve();
     await expect(result.current.initPlayer()).resolves.toBe(true);
     await act(async () => {
@@ -2422,6 +2421,70 @@ describe('useSoundPlayer', () => {
     expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
+  it('reports an owned, timed lifecycle for an unmount context retry', async () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const closeError = new Error('retained context still cannot close');
+    const onError = vi.fn();
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        diagnostics,
+        enableAudioWorklet: false,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    closeAudioContext.mockRejectedValue(closeError);
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+
+    act(() => unmount());
+    await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
+
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toMatchObject({
+      details: {
+        resource: 'audio_player',
+        scope: 'detached_context_retry',
+        trigger: 'unmount',
+      },
+    });
+    const cleanupFailure = events.find(
+      (event) =>
+        event.name === 'resource.cleanup_failed' &&
+        event.details['trigger'] === 'unmount',
+    );
+    expect(cleanupFailure).toMatchObject({
+      details: {
+        error: {
+          message: `Audio context cleanup failed: ${closeError.message}`,
+        },
+        failureCount: 1,
+        message:
+          'Failed to dispose retained audio player contexts while unmounting.',
+        operation: 'stop',
+        resource: 'audio_player',
+        scope: 'detached_context_retry',
+        trigger: 'unmount',
+      },
+    });
+    expect(typeof cleanupFailure?.durationMs).toBe('number');
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining(closeError.message),
+      'audio_player_closure_failure',
+    );
+  });
+
   it('reports one failure when unmount joins a public stop', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
@@ -3395,14 +3458,16 @@ describe('useSoundPlayer', () => {
           events.find(
             (event) =>
               event.name === 'resource.stop_started' &&
-              event.details['scope'] === 'detached_context_retry',
+              event.details['scope'] === 'detached_context_retry' &&
+              event.details['trigger'] === 'unmount',
           ),
         ).toBeDefined();
         expect(
           events.find(
             (event) =>
               event.name === 'resource.stopped' &&
-              event.details['scope'] === 'detached_context_retry',
+              event.details['scope'] === 'detached_context_retry' &&
+              event.details['trigger'] === 'unmount',
           ),
         ).toBeDefined();
       },

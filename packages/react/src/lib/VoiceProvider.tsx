@@ -38,7 +38,6 @@ import {
 import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
-  reconcileAudioContextCloseResult,
 } from '../utils/closeAudioContextWithTimeout';
 import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { getAuthStrategyError } from './auth';
@@ -717,9 +716,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const [audioDeviceState, setAudioDeviceState] =
     useState<VoiceAudioDeviceState>(DISCONNECTED_AUDIO_DEVICE_STATE);
   const sharedAudioContextRef = useRef<AudioContext | null>(null);
-  const sharedAudioContextClosePromisesRef = useRef(
-    new WeakMap<AudioContext, Promise<AudioContextCloseResult>>(),
-  );
   const isCurrentLifecycleGeneration = useCallback(
     (generation: number) => lifecycleGenerationRef.current === generation,
     [],
@@ -771,28 +767,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       if (!context) {
         return null;
       }
-      let closePromise =
-        sharedAudioContextClosePromisesRef.current.get(context);
-      if (!closePromise) {
-        closePromise = closeAudioContextWithTimeout(context);
-        sharedAudioContextClosePromisesRef.current.set(context, closePromise);
-      }
-      // Reconcile again when reusing a cached timeout so a context that reached
-      // its terminal state later can release provider ownership.
-      const closeResult = reconcileAudioContextCloseResult(
-        context,
-        await closePromise,
-      );
+      const closeResult = await closeAudioContextWithTimeout(context);
       if (closeResult.success && sharedAudioContextRef.current === context) {
         sharedAudioContextRef.current = null;
-      } else if (!closeResult.success && closeResult.reason === 'rejected') {
-        // A genuine rejection can be transient. Let a later teardown retry it;
-        // unlike a timeout, no still-pending close operation can recover it.
-        sharedAudioContextClosePromisesRef.current.delete(context);
       }
-      // AudioContext.close() changes the control state to closed before its
-      // promise settles, so a second close cannot recover from a timeout. Keep
-      // timed-out work cached and observe a later public `closed` state.
+      // A timeout leaves provider ownership intact. A later cleanup call joins
+      // the original close operation and can release ownership once its promise
+      // confirms that system resources were released.
       return closeResult;
     },
     [],

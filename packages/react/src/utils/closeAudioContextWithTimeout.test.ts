@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  closeAudioContextWithTimeout,
-  reconcileAudioContextCloseResult,
-} from './closeAudioContextWithTimeout';
+import { closeAudioContextWithTimeout } from './closeAudioContextWithTimeout';
 
 const createContext = (close: () => Promise<void>) =>
   ({ close }) as unknown as AudioContext;
@@ -27,6 +24,22 @@ describe('closeAudioContextWithTimeout', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('reports a close failure when the context state is unreadable', async () => {
+    const closeError = new Error('context close failed');
+    const close = vi.fn().mockRejectedValue(closeError);
+    const context = Object.defineProperty({ close }, 'state', {
+      get: () => {
+        throw new Error('context state unavailable');
+      },
+    }) as unknown as AudioContext;
+
+    await expect(closeAudioContextWithTimeout(context)).resolves.toMatchObject({
+      success: false,
+      error: { message: closeError.message, name: closeError.name },
+      reason: 'rejected',
+    });
+  });
+
   it('does not close a context that is already closed', async () => {
     const close = vi.fn().mockRejectedValue(new Error('must not be called'));
     const context = { close, state: 'closed' } as unknown as AudioContext;
@@ -37,23 +50,12 @@ describe('closeAudioContextWithTimeout', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('reconciles a cached failure after the context reaches closed', () => {
-    const context = { state: 'closed' } as AudioContext;
-
-    expect(
-      reconcileAudioContextCloseResult(context, {
-        success: false,
-        error: new Error('close timed out'),
-        reason: 'timeout',
-      }),
-    ).toEqual({ success: true });
-  });
-
-  it('treats a synchronous close failure as success when close reached its terminal state', async () => {
+  it('reports a synchronous close failure even when close changed the public state', async () => {
     let state: AudioContextState = 'running';
+    const closeError = new DOMException('Already closed', 'InvalidStateError');
     const close = vi.fn(() => {
       state = 'closed';
-      throw new DOMException('Already closed', 'InvalidStateError');
+      throw closeError;
     });
     const context = {
       close,
@@ -62,8 +64,10 @@ describe('closeAudioContextWithTimeout', () => {
       },
     } as unknown as AudioContext;
 
-    await expect(closeAudioContextWithTimeout(context)).resolves.toEqual({
-      success: true,
+    await expect(closeAudioContextWithTimeout(context)).resolves.toMatchObject({
+      success: false,
+      error: { message: closeError.message, name: closeError.name },
+      reason: 'rejected',
     });
   });
 
@@ -149,5 +153,38 @@ describe('closeAudioContextWithTimeout', () => {
     expect(result.error.message).toBe('Audio context close timed out.');
     expect(result.reason).toBe('timeout');
     expect(settled).toBe(true);
+  });
+
+  it('reports a timeout after close changes state and later joins its completion', async () => {
+    vi.useFakeTimers();
+    let state: AudioContextState = 'running';
+    let resolveClose: () => void = () => {
+      throw new Error('Close promise was not initialized.');
+    };
+    const closeCompletion = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    const close = vi.fn(() => {
+      state = 'closed';
+      return closeCompletion;
+    });
+    const context = {
+      close,
+      get state() {
+        return state;
+      },
+    } as unknown as AudioContext;
+
+    const firstClose = closeAudioContextWithTimeout(context);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(firstClose).resolves.toMatchObject({
+      success: false,
+      reason: 'timeout',
+    });
+
+    const joinedClose = closeAudioContextWithTimeout(context);
+    resolveClose();
+    await expect(joinedClose).resolves.toEqual({ success: true });
+    expect(close).toHaveBeenCalledOnce();
   });
 });

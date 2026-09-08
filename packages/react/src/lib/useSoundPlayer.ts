@@ -136,6 +136,17 @@ interface FailedPlayerContextRetry {
   settled: boolean;
 }
 
+type PlayerStopScope =
+  | 'active_player'
+  | 'active_player_with_detached_retry'
+  | 'detached_context_retry';
+
+interface PlayerStopLifecycle {
+  scope: PlayerStopScope;
+  startedAt: number;
+  trigger?: 'unmount';
+}
+
 class PlayerInitializationFailure extends Error {
   readonly reason: AudioPlayerErrorReason;
 
@@ -275,10 +286,77 @@ const useSoundPlayerImplementation = (
         category: 'audio_player',
         name: 'resource.cleanup_failed',
         details: {
+          ...additionalDetails,
           resource: 'audio_player',
           message,
           error,
-          ...additionalDetails,
+        },
+      });
+    },
+    [emitPlayerDiagnostic],
+  );
+
+  const startPlayerStopLifecycle = useCallback(
+    (scope: PlayerStopScope, trigger?: 'unmount'): PlayerStopLifecycle => {
+      const lifecycle: PlayerStopLifecycle = {
+        scope,
+        startedAt: getMonotonicTime(),
+        ...(trigger === undefined ? undefined : { trigger }),
+      };
+      emitPlayerDiagnostic({
+        level: 'info',
+        category: 'audio_player',
+        name: 'resource.stop_started',
+        details: {
+          resource: 'audio_player',
+          scope,
+          ...(trigger === undefined ? undefined : { trigger }),
+        },
+      });
+      return lifecycle;
+    },
+    [emitPlayerDiagnostic],
+  );
+
+  const reportPlayerStopFailure = useCallback(
+    (
+      lifecycle: PlayerStopLifecycle,
+      failureCount: number,
+      failure?: { error: unknown; message: string },
+    ) => {
+      emitPlayerDiagnostic({
+        level: 'warn',
+        category: 'audio_player',
+        name: 'resource.cleanup_failed',
+        durationMs: getMonotonicTime() - lifecycle.startedAt,
+        details: {
+          ...failure,
+          operation: 'stop',
+          resource: 'audio_player',
+          scope: lifecycle.scope,
+          failureCount,
+          ...(lifecycle.trigger === undefined
+            ? undefined
+            : { trigger: lifecycle.trigger }),
+        },
+      });
+    },
+    [emitPlayerDiagnostic],
+  );
+
+  const finishPlayerStopLifecycle = useCallback(
+    (lifecycle: PlayerStopLifecycle) => {
+      emitPlayerDiagnostic({
+        level: 'info',
+        category: 'audio_player',
+        name: 'resource.stopped',
+        durationMs: getMonotonicTime() - lifecycle.startedAt,
+        details: {
+          resource: 'audio_player',
+          scope: lifecycle.scope,
+          ...(lifecycle.trigger === undefined
+            ? undefined
+            : { trigger: lifecycle.trigger }),
         },
       });
     },
@@ -577,11 +655,11 @@ const useSoundPlayerImplementation = (
           existingRetry.pendingResources.add(resources);
         }
       }
-      return existingRetry.promise;
+      return { promise: existingRetry.promise, started: false };
     }
     const failedResources = [...failedPlayerContextResources.current];
     if (failedResources.length === 0) {
-      return Promise.resolve();
+      return { promise: Promise.resolve(), started: false };
     }
 
     const retry: FailedPlayerContextRetry = {
@@ -650,47 +728,40 @@ const useSoundPlayerImplementation = (
       }
     };
     void retrying.then(clearRetry, clearRetry);
-    return retrying;
+    return { promise: retrying, started: true };
     // oxlint-disable-next-line react/memo-dependencies -- the explicit callback dependency preserves retry ownership if disposal behavior changes
   }, [disposePlayerResourceBatch]);
 
   const retryFailedPlayerContextClosuresBestEffort = useCallback(
-    async (mode: 'background' | 'unmount' = 'background') => {
+    async (trigger?: 'unmount') => {
       if (failedPlayerContextResources.current.size === 0) return;
-      const reportStopLifecycle = mode === 'unmount';
-      const retryStartedAt = getMonotonicTime();
-      if (reportStopLifecycle) {
-        emitPlayerDiagnostic({
-          level: 'info',
-          category: 'audio_player',
-          name: 'resource.stop_started',
-          details: {
-            resource: 'audio_player',
-            scope: 'detached_context_retry',
-          },
-        });
-      }
+      const retry = retryFailedPlayerContextClosures();
+      const lifecycle =
+        trigger === 'unmount' && retry.started
+          ? startPlayerStopLifecycle('detached_context_retry', trigger)
+          : null;
       try {
-        await retryFailedPlayerContextClosures();
+        await retry.promise;
       } catch (error) {
         const failureMessage =
-          mode === 'unmount'
+          trigger === 'unmount'
             ? 'Failed to dispose retained audio player contexts while unmounting.'
             : 'Failed to close a previously detached audio player.';
-        const failures: unknown[] = [];
-        appendCleanupFailures(failures, error);
-        reportPlayerResourceFailure(
-          failureMessage,
-          error,
-          reportStopLifecycle
-            ? {
-                failureCount: failures.length,
-                operation: 'stop',
-                scope: 'detached_context_retry',
-              }
-            : undefined,
-        );
-        if (mode === 'unmount') {
+        if (lifecycle) {
+          const failures: unknown[] = [];
+          appendCleanupFailures(failures, error);
+          reportPlayerStopFailure(lifecycle, failures.length, {
+            error,
+            message: failureMessage,
+          });
+        } else {
+          reportPlayerResourceFailure(
+            failureMessage,
+            error,
+            trigger === undefined ? undefined : { joinedRetry: true, trigger },
+          );
+        }
+        if (trigger === 'unmount') {
           const message = getBrowserErrorMessage(error) ?? 'Unknown error';
           reportPlayerError(
             `Failed to dispose audio player while unmounting: ${message}`,
@@ -699,24 +770,15 @@ const useSoundPlayerImplementation = (
         }
         return;
       }
-      if (reportStopLifecycle) {
-        emitPlayerDiagnostic({
-          level: 'info',
-          category: 'audio_player',
-          name: 'resource.stopped',
-          durationMs: getMonotonicTime() - retryStartedAt,
-          details: {
-            resource: 'audio_player',
-            scope: 'detached_context_retry',
-          },
-        });
-      }
+      if (lifecycle) finishPlayerStopLifecycle(lifecycle);
     },
     [
-      emitPlayerDiagnostic,
+      finishPlayerStopLifecycle,
       reportPlayerError,
       reportPlayerResourceFailure,
+      reportPlayerStopFailure,
       retryFailedPlayerContextClosures,
+      startPlayerStopLifecycle,
     ],
   );
 
@@ -1550,19 +1612,13 @@ const useSoundPlayerImplementation = (
         return;
       }
 
-      let stopScope = 'active_player';
+      let stopScope: PlayerStopScope = 'active_player';
       if (resourcesToStop === null) {
         stopScope = 'detached_context_retry';
       } else if (failedResourcesToRetry.length > 0) {
         stopScope = 'active_player_with_detached_retry';
       }
-      const stopStartedAt = getMonotonicTime();
-      emitPlayerDiagnostic({
-        level: 'info',
-        category: 'audio_player',
-        name: 'resource.stop_started',
-        details: { resource: 'audio_player', scope: stopScope },
-      });
+      const stopLifecycle = startPlayerStopLifecycle(stopScope);
       const workletToStop = resourcesToStop?.worklet ?? null;
 
       const failures: unknown[] = [];
@@ -1614,34 +1670,19 @@ const useSoundPlayerImplementation = (
       }
 
       if (failures.length > 0) {
-        emitPlayerDiagnostic({
-          level: 'warn',
-          category: 'audio_player',
-          name: 'resource.cleanup_failed',
-          durationMs: getMonotonicTime() - stopStartedAt,
-          details: {
-            operation: 'stop',
-            resource: 'audio_player',
-            scope: stopScope,
-            failureCount: failures.length,
-          },
-        });
+        reportPlayerStopFailure(stopLifecycle, failures.length);
         throwCleanupFailures(failures, 'Audio player cleanup failed.');
       }
-      emitPlayerDiagnostic({
-        level: 'info',
-        category: 'audio_player',
-        name: 'resource.stopped',
-        durationMs: getMonotonicTime() - stopStartedAt,
-        details: { resource: 'audio_player', scope: stopScope },
-      });
+      finishPlayerStopLifecycle(stopLifecycle);
     },
     [
       cancelPlayerFft,
       disposePlayerResourceBatch,
-      emitPlayerDiagnostic,
+      finishPlayerStopLifecycle,
       notifyDrainWaiters,
+      reportPlayerStopFailure,
       resetPlayerState,
+      startPlayerStopLifecycle,
     ],
   );
 
