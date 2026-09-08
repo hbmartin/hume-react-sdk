@@ -433,6 +433,35 @@ describe('VoiceProvider close lifecycle', () => {
     ).toHaveLength(0);
   });
 
+  it('finishes disconnect when the shared context state is unreadable', async () => {
+    const sharedContext = Object.defineProperty(
+      { close: mocks.contextClose },
+      'state',
+      {
+        get: () => {
+          throw new Error('context state unavailable');
+        },
+      },
+    ) as unknown as AudioContext;
+    globalThis.AudioContext = vi.fn(function AudioContextMock() {
+      return sharedContext;
+    });
+    const { result } = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => <VoiceProvider>{children}</VoiceProvider>,
+    });
+    await act(() =>
+      result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    await act(() => result.current.disconnect());
+
+    expect(mocks.contextClose).toHaveBeenCalledOnce();
+    expect(result.current.status).toEqual({ value: 'disconnected' });
+    expect(result.current.error).toBeNull();
+  });
+
   it('keeps the socket writable until the microphone flushes during disconnect', async () => {
     const finalBuffer = new Uint8Array([1, 2, 3]).buffer;
     const { result } = renderHook(() => useVoice(), {

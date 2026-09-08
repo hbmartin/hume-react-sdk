@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { closeAudioContextWithTimeout } from './closeAudioContextWithTimeout';
+import {
+  closeAudioContextWithTimeout,
+  isAudioContextClosed,
+} from './closeAudioContextWithTimeout';
 
 const createContext = (close: () => Promise<void>) =>
   ({ close }) as unknown as AudioContext;
@@ -8,6 +11,16 @@ const createContext = (close: () => Promise<void>) =>
 describe('closeAudioContextWithTimeout', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('treats an unreadable context state as not closed', () => {
+    const context = Object.defineProperty({}, 'state', {
+      get: () => {
+        throw new Error('context state unavailable');
+      },
+    }) as AudioContext;
+
+    expect(isAudioContextClosed(context)).toBe(false);
   });
 
   it('resolves when the context closes', async () => {

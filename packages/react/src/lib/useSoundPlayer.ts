@@ -8,7 +8,10 @@ import {
   appendCleanupFailures,
   throwCleanupFailures,
 } from '../utils/cleanupErrors';
-import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
+import {
+  closeAudioContextWithTimeout,
+  isAudioContextClosed,
+} from '../utils/closeAudioContextWithTimeout';
 import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { loadAudioWorklet } from '../utils/loadAudioWorklet';
 import { convertLinearFrequenciesToBarkInto } from './convertFrequencyScale';
@@ -76,16 +79,6 @@ const supportsSetSinkId = (
 ): context is AudioContext & {
   setSinkId: (deviceId: string) => Promise<void>;
 } => 'setSinkId' in context && typeof context.setSinkId === 'function';
-
-const isAudioContextClosed = (context: AudioContext): boolean => {
-  try {
-    return context.state === 'closed';
-  } catch {
-    // Treat an unreadable state as still open so cleanup attempts close the
-    // context and conservatively retains ownership if that attempt fails.
-    return false;
-  }
-};
 
 const releaseSafely = (
   failures: unknown[],
@@ -675,6 +668,27 @@ const useSoundPlayerImplementation = (
     }
   }, [reportPlayerResourceFailure, retryFailedPlayerContextClosures]);
 
+  const retryFailedPlayerContextClosuresOnUnmount = useCallback(async () => {
+    if (failedPlayerContextResources.current.size === 0) return;
+    try {
+      await retryFailedPlayerContextClosures();
+    } catch (error) {
+      const message = getBrowserErrorMessage(error) ?? 'Unknown error';
+      reportPlayerResourceFailure(
+        'Failed to dispose retained audio player contexts while unmounting.',
+        error,
+      );
+      reportPlayerError(
+        `Failed to dispose audio player while unmounting: ${message}`,
+        'audio_player_closure_failure',
+      );
+    }
+  }, [
+    reportPlayerError,
+    reportPlayerResourceFailure,
+    retryFailedPlayerContextClosures,
+  ]);
+
   /**
    * Only for non-AudioWorklet mode.
    * This function is called when the current audio clip ends.
@@ -912,7 +926,8 @@ const useSoundPlayerImplementation = (
         if (
           cleanupFailure !== null &&
           generation === playerGeneration.current &&
-          !callbackFailureCaptured
+          !callbackFailureCaptured &&
+          errorCallbackOwner === 'consumer'
         ) {
           reportPlayerError(
             `${message}; cleanup also failed: ${cleanupFailure}`,
@@ -1185,6 +1200,7 @@ const useSoundPlayerImplementation = (
     [
       disposePlayerResources,
       emitPlayerDiagnostic,
+      errorCallbackOwner,
       props.enableAudioWorklet,
       fftStore,
       isAudioMutedRef,
@@ -1864,7 +1880,7 @@ const useSoundPlayerImplementation = (
         notifyDrainWaiters();
         const retryRetainedContextsAfterStop = () => {
           if (failedPlayerContextResources.current.size > 0) {
-            void stopAllAndReportOnUnmount();
+            void retryFailedPlayerContextClosuresOnUnmount();
           }
         };
         void pendingImplicitStop.promise.then(
@@ -1873,11 +1889,12 @@ const useSoundPlayerImplementation = (
         );
         return;
       }
-      if (
-        playerResources.current !== null ||
-        failedPlayerContextResources.current.size > 0
-      ) {
+      if (playerResources.current !== null) {
         void stopAllAndReportOnUnmount();
+        return;
+      }
+      if (failedPlayerContextResources.current.size > 0) {
+        void retryFailedPlayerContextClosuresOnUnmount();
         return;
       }
 
@@ -1894,6 +1911,7 @@ const useSoundPlayerImplementation = (
       cancelPlayerFftSafely,
       clearPlayerFftStore,
       notifyDrainWaiters,
+      retryFailedPlayerContextClosuresOnUnmount,
       stopAllAndReportOnUnmount,
       unmountCleanupOwner,
     ],

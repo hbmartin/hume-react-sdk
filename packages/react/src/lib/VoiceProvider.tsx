@@ -38,6 +38,7 @@ import {
 import {
   type AudioContextCloseResult,
   closeAudioContextWithTimeout,
+  isAudioContextClosed,
 } from '../utils/closeAudioContextWithTimeout';
 import { getMonotonicTime } from '../utils/getMonotonicTime';
 import { getAuthStrategyError } from './auth';
@@ -777,7 +778,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         sharedAudioContextClosePromisesRef.current.set(context, closePromise);
       }
       const closeResult = await closePromise;
-      const contextIsClosed = context.state === 'closed';
+      const contextIsClosed = isAudioContextClosed(context);
       if (
         (closeResult.success || contextIsClosed) &&
         sharedAudioContextRef.current === context
