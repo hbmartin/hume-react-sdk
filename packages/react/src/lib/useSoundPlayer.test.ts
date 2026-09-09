@@ -1515,6 +1515,13 @@ describe('useSoundPlayer', () => {
       events.find(
         (event) =>
           event.name === 'resource.stop_started' &&
+          event.details['trigger'] === undefined,
+      ),
+    ).toMatchObject({ details: { joined: false } });
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
           event.details['joined'] === true &&
           event.details['trigger'] === 'unmount',
       ),
@@ -1527,6 +1534,81 @@ describe('useSoundPlayer', () => {
           event.details['trigger'] === 'unmount',
       ),
     ).toBeDefined();
+  });
+
+  it('handles a joined stop rejection when reusing its existing report', async () => {
+    const context = new AudioContext();
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError,
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    fakePort.close.mockImplementationOnce(() => {
+      throw new Error('joined close failed');
+    });
+
+    let firstStop = Promise.resolve();
+    let joinedStop = Promise.resolve();
+    act(() => {
+      firstStop = result.current.stopAllForContext(context);
+      joinedStop = result.current.stopAllForContext(context, {
+        trigger: 'unmount',
+      });
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(async () => {
+      await Promise.all([firstStop, joinedStop]);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to stop audio player:'),
+      'audio_player_closure_failure',
+    );
+  });
+
+  it('does not revalidate a context stop when unmount advances implicit tracking', async () => {
+    const context = new AudioContext();
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    const stopAllForContext = result.current.stopAllForContext;
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAll();
+    });
+    unmount();
+
+    let staleContextStopSettled = false;
+    await act(async () => {
+      void stopAllForContext(context).then(() => {
+        staleContextStopSettled = true;
+      });
+      await Promise.resolve();
+    });
+    expect(staleContextStopSettled).toBe(true);
+
+    act(() => {
+      fakePort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(() => stopping);
   });
 
   it('does not reuse a stale stop after reinitializing the same context', async () => {
@@ -2821,6 +2903,46 @@ describe('useSoundPlayer', () => {
             'Failed to clean up an incomplete audio player initialization.',
       ),
     ).toMatchObject({ details: { trigger: 'unmount' } });
+  });
+
+  it('does not attribute a pre-existing background retry failure to unmount', async () => {
+    const retainedContextFailure = new Error('initial context close failed');
+    const backgroundRetry = createDeferred<void>();
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        diagnostics,
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+    closeAudioContext.mockRejectedValueOnce(retainedContextFailure);
+    await expect(result.current.initPlayer()).resolves.toBe(false);
+    closeAudioContext.mockReturnValueOnce(backgroundRetry.promise);
+    await expect(result.current.initPlayer()).resolves.toBe(true);
+
+    unmount();
+    await act(async () => {
+      backgroundRetry.reject(new Error('background retry failed'));
+      await Promise.resolve();
+    });
+
+    const backgroundFailure = events.find(
+      (event) =>
+        event.name === 'resource.cleanup_failed' &&
+        event.details['message'] ===
+          'Failed to close a previously detached audio player.',
+    );
+    expect(backgroundFailure).toBeDefined();
+    expect(backgroundFailure?.details['trigger']).toBeUndefined();
   });
 
   it('leaves initialized resources for provider cleanup when unmount cancellation throws', async () => {
