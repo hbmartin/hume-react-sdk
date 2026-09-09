@@ -804,6 +804,15 @@ describe('useSoundPlayer', () => {
     const { unmount, preflightClose, staleInitialization } =
       await beginRetainedContextPreflight(diagnostics);
 
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to close a previously detached audio player.',
+      ),
+    ).toBeDefined();
+
     act(() => unmount());
     await act(async () => {
       preflightClose.resolve();
@@ -2295,6 +2304,12 @@ describe('useSoundPlayer', () => {
 
   it('disposes standalone player resources when unmounting', async () => {
     vi.useFakeTimers();
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
     const rafCallbacks = new Map<number, FrameRequestCallback>();
     let nextAnimationId = 0;
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(
@@ -2311,6 +2326,7 @@ describe('useSoundPlayer', () => {
       });
     const { result, unmount } = renderHook(() =>
       useSoundPlayer({
+        diagnostics,
         enableAudioWorklet: true,
         onError: vi.fn(),
         onPlayAudio: vi.fn(),
@@ -2343,6 +2359,24 @@ describe('useSoundPlayer', () => {
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
     expect(closeAudioContext).toHaveBeenCalledOnce();
+    expect(
+      events.find((event) => event.name === 'resource.stop_started'),
+    ).toMatchObject({
+      details: {
+        resource: 'audio_player',
+        scope: 'active_player',
+        trigger: 'unmount',
+      },
+    });
+    expect(
+      events.find((event) => event.name === 'resource.stopped'),
+    ).toMatchObject({
+      details: {
+        resource: 'audio_player',
+        scope: 'active_player',
+        trigger: 'unmount',
+      },
+    });
   });
 
   it('disposes standalone nodes without closing a shared context on unmount', async () => {
@@ -2442,9 +2476,13 @@ describe('useSoundPlayer', () => {
     await expect(result.current.initPlayer()).resolves.toBe(true);
     closeAudioContext.mockRejectedValue(closeError);
     await expect(result.current.initPlayer()).resolves.toBe(false);
+    onError.mockClear();
 
     act(() => unmount());
-    await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(closeAudioContext).toHaveBeenCalledTimes(2);
+      expect(onError).toHaveBeenCalledOnce();
+    });
 
     expect(
       events.find(
@@ -2480,9 +2518,12 @@ describe('useSoundPlayer', () => {
     });
     expect(typeof cleanupFailure?.durationMs).toBe('number');
     expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining(closeError.message),
+      expect.stringContaining(
+        'Failed to dispose audio player while unmounting:',
+      ),
       'audio_player_closure_failure',
     );
+    expect(onError.mock.calls[0]?.[0]).toContain(closeError.message);
   });
 
   it('reports one failure when unmount joins a public stop', async () => {

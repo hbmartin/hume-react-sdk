@@ -1570,7 +1570,7 @@ const useSoundPlayerImplementation = (
 
   const stopAll = useCallback(
     // fallow-ignore-next-line complexity -- shutdown aggregates independent Web Audio cleanup failures without abandoning later resources
-    async (expectedContext?: AudioContext) => {
+    async (expectedContext?: AudioContext, trigger?: 'unmount') => {
       const currentResources = playerResources.current;
       const resourcesToStop =
         expectedContext === undefined ||
@@ -1618,7 +1618,7 @@ const useSoundPlayerImplementation = (
       } else if (failedResourcesToRetry.length > 0) {
         stopScope = 'active_player_with_detached_retry';
       }
-      const stopLifecycle = startPlayerStopLifecycle(stopScope);
+      const stopLifecycle = startPlayerStopLifecycle(stopScope, trigger);
       const workletToStop = resourcesToStop?.worklet ?? null;
 
       const failures: unknown[] = [];
@@ -1687,7 +1687,7 @@ const useSoundPlayerImplementation = (
   );
 
   const stopAllTracked = useCallback(
-    (expectedContext?: AudioContext) => {
+    (expectedContext?: AudioContext, trigger?: 'unmount') => {
       const currentContext = playerResources.current?.context ?? null;
       const currentGeneration = playerGeneration.current;
       const existingImplicitStop = implicitPlayerStop.current;
@@ -1707,7 +1707,7 @@ const useSoundPlayerImplementation = (
         }
       }
 
-      let stopping = stopAll(expectedContext);
+      let stopping = stopAll(expectedContext, trigger);
       const stopGeneration = playerGeneration.current;
 
       if (context) {
@@ -1741,10 +1741,14 @@ const useSoundPlayerImplementation = (
   );
 
   const stopAllAndReportWithPrefix = useCallback(
-    (failurePrefix: string, expectedContext?: AudioContext) => {
+    (
+      failurePrefix: string,
+      expectedContext?: AudioContext,
+      trigger?: 'unmount',
+    ) => {
       // This hook is publicly exported, so callers outside VoiceProvider can
       // request deduplicated cleanup without handling resource-level failures.
-      const stopping = stopAllTracked(expectedContext);
+      const stopping = stopAllTracked(expectedContext, trigger);
       const existingReport = reportedPlayerStopPromises.current.get(stopping);
       if (existingReport) {
         return existingReport;
@@ -1775,6 +1779,8 @@ const useSoundPlayerImplementation = (
     () =>
       stopAllAndReportWithPrefix(
         'Failed to dispose audio player while unmounting',
+        undefined,
+        'unmount',
       ),
     [stopAllAndReportWithPrefix],
   );
