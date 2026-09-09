@@ -341,6 +341,9 @@ describe('VoiceProvider close lifecycle', () => {
     await waitFor(() =>
       expect(mocks.playerStopForContext).toHaveBeenCalledOnce(),
     );
+    expect(mocks.playerStopForContext).toHaveBeenCalledWith(expect.anything(), {
+      trigger: 'unmount',
+    });
     expect(mocks.clearMessageStore).not.toHaveBeenCalled();
   });
 
@@ -403,6 +406,70 @@ describe('VoiceProvider close lifecycle', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('attributes player cleanup when unmount adopts a consumer teardown', async () => {
+    const stalledMicrophone = createDeferred<void>();
+    mocks.micStop.mockReturnValueOnce(stalledMicrophone.promise);
+    const rendered = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+    await act(() =>
+      rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    let disconnecting = Promise.resolve();
+    act(() => {
+      disconnecting = rendered.result.current.disconnect();
+    });
+    await waitFor(() => expect(mocks.micStop).toHaveBeenCalledOnce());
+    rendered.unmount();
+    await act(async () => {
+      stalledMicrophone.resolve();
+      await disconnecting;
+    });
+
+    expect(mocks.playerStopForContext).toHaveBeenCalledWith(expect.anything(), {
+      trigger: 'unmount',
+    });
+  });
+
+  it('attributes an in-flight player stop when unmount adopts teardown', async () => {
+    const playerStopped = createDeferred<void>();
+    mocks.playerStopForContext.mockReturnValueOnce(playerStopped.promise);
+    const rendered = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+    await act(() =>
+      rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      }),
+    );
+
+    let disconnecting = Promise.resolve();
+    act(() => {
+      disconnecting = rendered.result.current.disconnect();
+    });
+    await waitFor(() =>
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce(),
+    );
+    rendered.unmount();
+    await waitFor(() =>
+      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2),
+    );
+    expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
+      trigger: 'unmount',
+    });
+    await act(async () => {
+      playerStopped.resolve();
+      await disconnecting;
+    });
   });
 
   it('does not emit a disconnect lifecycle when an idle provider unmounts', async () => {

@@ -733,13 +733,17 @@ describe('useSoundPlayer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  const beginRetainedContextPreflight = async (
-    diagnostics?: Parameters<typeof useSoundPlayer>[0]['diagnostics'],
-  ) => {
+  const beginRetainedContextPreflight = async () => {
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
     closeAudioContext.mockRejectedValue(new Error('context cannot close yet'));
     const rendered = renderHook(() =>
       useSoundPlayer({
-        ...(diagnostics === undefined ? undefined : { diagnostics }),
+        diagnostics,
         enableAudioWorklet: false,
         onError: vi.fn(),
         onPlayAudio: vi.fn(),
@@ -752,10 +756,16 @@ describe('useSoundPlayer', () => {
     await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(2));
     await expect(rendered.result.current.initPlayer()).resolves.toBe(false);
     expect(closeAudioContext).toHaveBeenCalledTimes(3);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await waitFor(() =>
+      expect(
+        events.find(
+          (event) =>
+            event.name === 'resource.cleanup_failed' &&
+            event.details['message'] ===
+              'Failed to close a previously detached audio player.',
+        ),
+      ).toBeDefined(),
+    );
 
     const preflightClose = createDeferred<void>();
     closeAudioContext.mockReturnValue(preflightClose.promise);
@@ -764,7 +774,7 @@ describe('useSoundPlayer', () => {
       staleInitialization = rendered.result.current.initPlayer();
     });
     await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(5));
-    return { ...rendered, preflightClose, staleInitialization };
+    return { ...rendered, events, preflightClose, staleInitialization };
   };
 
   it('abandons a retained-context preflight superseded by another initialization', async () => {
@@ -795,25 +805,18 @@ describe('useSoundPlayer', () => {
   });
 
   it('abandons a retained-context preflight when the player unmounts', async () => {
-    const events: VoiceDiagnosticEvent[] = [];
-    const diagnostics = createVoiceDiagnosticsReporter(() => ({
-      level: 'debug',
-      logger: false,
-      onEvent: (event) => events.push(event),
-    }));
-    const { unmount, preflightClose, staleInitialization } =
-      await beginRetainedContextPreflight(diagnostics);
+    const { events, unmount, preflightClose, staleInitialization } =
+      await beginRetainedContextPreflight();
 
+    act(() => unmount());
     expect(
       events.find(
         (event) =>
-          event.name === 'resource.cleanup_failed' &&
-          event.details['message'] ===
-            'Failed to close a previously detached audio player.',
+          event.name === 'resource.stop_started' &&
+          event.details['scope'] === 'detached_context_retry' &&
+          event.details['trigger'] === 'unmount',
       ),
-    ).toBeDefined();
-
-    act(() => unmount());
+    ).toMatchObject({ details: { joined: true } });
     await act(async () => {
       preflightClose.resolve();
       await expect(staleInitialization).resolves.toBe(false);
@@ -821,12 +824,59 @@ describe('useSoundPlayer', () => {
 
     expect(globalThis.AudioContext).toHaveBeenCalledTimes(2);
     expect(
-      events.filter(
+      events.find(
+        (event) =>
+          event.name === 'resource.stopped' &&
+          event.details['scope'] === 'detached_context_retry' &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toMatchObject({ details: { joined: true } });
+  });
+
+  it('reports a joined unmount lifecycle when a retained-context preflight fails', async () => {
+    const closeError = new Error('joined preflight close failed');
+    const { events, unmount, preflightClose, staleInitialization } =
+      await beginRetainedContextPreflight();
+
+    act(() => unmount());
+    await act(async () => {
+      preflightClose.reject(closeError);
+      await expect(staleInitialization).resolves.toBe(false);
+    });
+    await waitFor(() =>
+      expect(
+        events.find(
+          (event) =>
+            event.name === 'resource.cleanup_failed' &&
+            event.details['scope'] === 'detached_context_retry' &&
+            event.details['trigger'] === 'unmount',
+        ),
+      ).toBeDefined(),
+    );
+
+    expect(
+      events.find(
         (event) =>
           event.name === 'resource.stop_started' &&
-          event.details['scope'] === 'detached_context_retry',
+          event.details['scope'] === 'detached_context_retry' &&
+          event.details['trigger'] === 'unmount',
       ),
-    ).toHaveLength(0);
+    ).toMatchObject({ details: { joined: true } });
+    const cleanupFailure = events.find(
+      (event) =>
+        event.name === 'resource.cleanup_failed' &&
+        event.details['scope'] === 'detached_context_retry' &&
+        event.details['trigger'] === 'unmount',
+    );
+    expect(cleanupFailure).toMatchObject({
+      details: {
+        joined: true,
+        operation: 'stop',
+      },
+    });
+    expect(JSON.stringify(cleanupFailure?.details['error'])).toContain(
+      closeError.message,
+    );
   });
 
   it('refuses at the retained-context cap without resetting an active shared player', async () => {
@@ -1422,8 +1472,15 @@ describe('useSoundPlayer', () => {
 
   it('joins concurrent cleanup requests for the same context', async () => {
     const context = new AudioContext();
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
     const { result } = renderHook(() =>
       useSoundPlayer({
+        diagnostics,
         enableAudioWorklet: true,
         onError: vi.fn(),
         onPlayAudio: vi.fn(),
@@ -1437,9 +1494,11 @@ describe('useSoundPlayer', () => {
     let secondSettled = false;
     act(() => {
       firstStop = result.current.stopAllForContext(context);
-      secondStop = result.current.stopAllForContext(context).then(() => {
-        secondSettled = true;
-      });
+      secondStop = result.current
+        .stopAllForContext(context, { trigger: 'unmount' })
+        .then(() => {
+          secondSettled = true;
+        });
     });
     await Promise.resolve();
     expect(secondSettled).toBe(false);
@@ -1452,6 +1511,22 @@ describe('useSoundPlayer', () => {
     });
     await act(() => Promise.all([firstStop, secondStop]));
     expect(secondSettled).toBe(true);
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['joined'] === true &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toBeDefined();
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stopped' &&
+          event.details['joined'] === true &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toBeDefined();
   });
 
   it('does not reuse a stale stop after reinitializing the same context', async () => {
@@ -2360,7 +2435,12 @@ describe('useSoundPlayer', () => {
     expect(disconnectGainNode).toHaveBeenCalledOnce();
     expect(closeAudioContext).toHaveBeenCalledOnce();
     expect(
-      events.find((event) => event.name === 'resource.stop_started'),
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['scope'] === 'active_player' &&
+          event.details['trigger'] === 'unmount',
+      ),
     ).toMatchObject({
       details: {
         resource: 'audio_player',
@@ -2369,7 +2449,12 @@ describe('useSoundPlayer', () => {
       },
     });
     expect(
-      events.find((event) => event.name === 'resource.stopped'),
+      events.find(
+        (event) =>
+          event.name === 'resource.stopped' &&
+          event.details['scope'] === 'active_player' &&
+          event.details['trigger'] === 'unmount',
+      ),
     ).toMatchObject({
       details: {
         resource: 'audio_player',
@@ -2479,10 +2564,16 @@ describe('useSoundPlayer', () => {
     onError.mockClear();
 
     act(() => unmount());
-    await waitFor(() => {
-      expect(closeAudioContext).toHaveBeenCalledTimes(2);
-      expect(onError).toHaveBeenCalledOnce();
-    });
+    await waitFor(() =>
+      expect(
+        events.find(
+          (event) =>
+            event.name === 'resource.cleanup_failed' &&
+            event.details['trigger'] === 'unmount',
+        ),
+      ).toBeDefined(),
+    );
+    expect(closeAudioContext).toHaveBeenCalledTimes(2);
 
     expect(
       events.find(
@@ -2517,6 +2608,7 @@ describe('useSoundPlayer', () => {
       },
     });
     expect(typeof cleanupFailure?.durationMs).toBe('number');
+    expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
       expect.stringContaining(
         'Failed to dispose audio player while unmounting:',
@@ -2530,9 +2622,25 @@ describe('useSoundPlayer', () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
     vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    const events: VoiceDiagnosticEvent[] = [];
+    const unmountFailureReported = createDeferred<void>();
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => {
+        events.push(event);
+        if (
+          event.name === 'resource.cleanup_failed' &&
+          event.details['trigger'] === 'unmount'
+        ) {
+          unmountFailureReported.resolve();
+        }
+      },
+    }));
     const onError = vi.fn();
     const { result, unmount } = renderHook(() =>
       useSoundPlayer({
+        diagnostics,
         enableAudioWorklet: true,
         onError,
         onPlayAudio: vi.fn(),
@@ -2557,6 +2665,7 @@ describe('useSoundPlayer', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
       await stopping;
+      await unmountFailureReported.promise;
     });
 
     expect(onError).toHaveBeenCalledOnce();
@@ -2565,6 +2674,47 @@ describe('useSoundPlayer', () => {
       'audio_player_closure_failure',
     );
     expect(onError.mock.calls[0]?.[0]).toContain('joined stop failed');
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toMatchObject({
+      details: {
+        joined: true,
+        resource: 'audio_player',
+        scope: 'active_player',
+      },
+    });
+    const publicStopFailure = events.find(
+      (event) =>
+        event.name === 'resource.cleanup_failed' &&
+        event.details['operation'] === 'stop' &&
+        event.details['trigger'] === undefined,
+    );
+    expect(publicStopFailure).toMatchObject({
+      details: {
+        message: 'Audio player cleanup failed.',
+      },
+    });
+    expect(JSON.stringify(publicStopFailure?.details['error'])).toContain(
+      'joined stop failed',
+    );
+    const joinedStopFailure = events.find(
+      (event) =>
+        event.name === 'resource.cleanup_failed' &&
+        event.details['trigger'] === 'unmount',
+    );
+    expect(joinedStopFailure).toMatchObject({
+      details: {
+        joined: true,
+        message: 'Failed to dispose audio player while unmounting.',
+      },
+    });
+    expect(JSON.stringify(joinedStopFailure?.details['error'])).toContain(
+      'joined stop failed',
+    );
   });
 
   it('does not emit stop lifecycle events when an unused player unmounts', () => {
@@ -2670,7 +2820,7 @@ describe('useSoundPlayer', () => {
           event.details['message'] ===
             'Failed to clean up an incomplete audio player initialization.',
       ),
-    ).toBeDefined();
+    ).toMatchObject({ details: { trigger: 'unmount' } });
   });
 
   it('leaves initialized resources for provider cleanup when unmount cancellation throws', async () => {
@@ -3494,7 +3644,15 @@ describe('useSoundPlayer', () => {
         await waitFor(() => expect(closeAudioContext).toHaveBeenCalledTimes(5));
         expect(
           events.filter((event) => event.name === 'resource.stop_started'),
-        ).toHaveLength(2);
+        ).toHaveLength(3);
+        expect(
+          events.find(
+            (event) =>
+              event.name === 'resource.stop_started' &&
+              event.details['joined'] === true &&
+              event.details['trigger'] === 'unmount',
+          ),
+        ).toBeDefined();
         expect(
           events.find(
             (event) =>
