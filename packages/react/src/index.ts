@@ -26,7 +26,11 @@ export type {
 // These remain only because the deprecated player returns its FFT store.
 export { FftStore, type FftSnapshot, useFftSubscription } from './lib/fftStore';
 export * from './lib/useAudioDevices';
-export { type UseSoundPlayerProps, useSoundPlayer } from './lib/useSoundPlayer';
+export {
+  type UseSoundPlayerProps,
+  type UseSoundPlayerStopOptions,
+  useSoundPlayer,
+} from './lib/useSoundPlayer';
 export * from './lib/VoiceProvider';
 export {
   AudioDeviceSwitchError,

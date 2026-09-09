@@ -6,6 +6,7 @@ import { getDataProperty } from '../utils/aggregateErrors';
 import { getBrowserErrorMessage } from '../utils/browserErrors';
 import {
   appendCleanupFailures,
+  createCleanupError,
   throwCleanupFailures,
 } from '../utils/cleanupErrors';
 import { closeAudioContextWithTimeout } from '../utils/closeAudioContextWithTimeout';
@@ -126,7 +127,10 @@ interface PlayerResources {
 
 interface TrackedPlayerStop {
   generation: number;
+  joinedStops: Map<PlayerStopTrigger, Promise<void>>;
   promise: Promise<void>;
+  scope: PlayerStopScope | null;
+  trigger: PlayerStopTrigger | undefined;
 }
 
 interface FailedPlayerContextRetry {
@@ -141,11 +145,32 @@ type PlayerStopScope =
   | 'active_player_with_detached_retry'
   | 'detached_context_retry';
 
+type PlayerStopTrigger = 'unmount';
+
 interface PlayerStopLifecycle {
+  joined: boolean;
   scope: PlayerStopScope;
   startedAt: number;
-  trigger?: 'unmount';
+  trigger: PlayerStopTrigger | undefined;
 }
+
+interface PlayerStopRequest extends UseSoundPlayerStopOptions {
+  expectedContext?: AudioContext;
+}
+
+interface StartedPlayerStop {
+  lifecycle: PlayerStopLifecycle | null;
+  promise: Promise<void>;
+}
+
+const getPlayerStopLifecycleDetails = (lifecycle: PlayerStopLifecycle) => ({
+  resource: 'audio_player',
+  scope: lifecycle.scope,
+  ...(lifecycle.trigger === undefined
+    ? undefined
+    : { trigger: lifecycle.trigger }),
+  ...(lifecycle.joined ? { joined: true } : undefined),
+});
 
 class PlayerInitializationFailure extends Error {
   readonly reason: AudioPlayerErrorReason;
@@ -191,6 +216,16 @@ export interface UseSoundPlayerProps {
   onPlayAudio: (id: string) => void;
   /** Called when playback stops for an audio message id. */
   onStopAudio: (id: string) => void;
+}
+
+/**
+ * Diagnostic ownership metadata for a deprecated standalone-player stop.
+ *
+ * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ */
+export interface UseSoundPlayerStopOptions {
+  /** Identifies cleanup performed because the owning React tree unmounted. */
+  trigger?: 'unmount';
 }
 
 interface PlayerLifecyclePolicy {
@@ -244,6 +279,7 @@ const useSoundPlayerImplementation = (
   const reportedPlayerStopPromises = useRef(
     new WeakMap<Promise<void>, Promise<void>>(),
   );
+  const playerUnmounted = useRef(false);
   const isInitialized = useRef(false);
 
   const isProcessing = useRef(false);
@@ -286,6 +322,7 @@ const useSoundPlayerImplementation = (
         category: 'audio_player',
         name: 'resource.cleanup_failed',
         details: {
+          ...(playerUnmounted.current ? { trigger: 'unmount' } : undefined),
           ...additionalDetails,
           resource: 'audio_player',
           message,
@@ -297,21 +334,21 @@ const useSoundPlayerImplementation = (
   );
 
   const startPlayerStopLifecycle = useCallback(
-    (scope: PlayerStopScope, trigger?: 'unmount'): PlayerStopLifecycle => {
+    (
+      scope: PlayerStopScope,
+      options: { joined?: boolean; trigger?: PlayerStopTrigger } = {},
+    ): PlayerStopLifecycle => {
       const lifecycle: PlayerStopLifecycle = {
+        joined: options.joined === true,
         scope,
         startedAt: getMonotonicTime(),
-        ...(trigger === undefined ? undefined : { trigger }),
+        trigger: options.trigger,
       };
       emitPlayerDiagnostic({
         level: 'info',
         category: 'audio_player',
         name: 'resource.stop_started',
-        details: {
-          resource: 'audio_player',
-          scope,
-          ...(trigger === undefined ? undefined : { trigger }),
-        },
+        details: getPlayerStopLifecycleDetails(lifecycle),
       });
       return lifecycle;
     },
@@ -332,12 +369,8 @@ const useSoundPlayerImplementation = (
         details: {
           ...failure,
           operation: 'stop',
-          resource: 'audio_player',
-          scope: lifecycle.scope,
           failureCount,
-          ...(lifecycle.trigger === undefined
-            ? undefined
-            : { trigger: lifecycle.trigger }),
+          ...getPlayerStopLifecycleDetails(lifecycle),
         },
       });
     },
@@ -351,13 +384,7 @@ const useSoundPlayerImplementation = (
         category: 'audio_player',
         name: 'resource.stopped',
         durationMs: getMonotonicTime() - lifecycle.startedAt,
-        details: {
-          resource: 'audio_player',
-          scope: lifecycle.scope,
-          ...(lifecycle.trigger === undefined
-            ? undefined
-            : { trigger: lifecycle.trigger }),
-        },
+        details: getPlayerStopLifecycleDetails(lifecycle),
       });
     },
     [emitPlayerDiagnostic],
@@ -381,6 +408,7 @@ const useSoundPlayerImplementation = (
   );
 
   const [fftStore] = useState(
+    // oxlint-disable-next-line react/refs -- FftStore retains this observer and does not invoke it during construction
     () =>
       new FftStore((error, context) => {
         reportPlayerResourceFailure(context, error);
@@ -737,8 +765,11 @@ const useSoundPlayerImplementation = (
       if (failedPlayerContextResources.current.size === 0) return;
       const retry = retryFailedPlayerContextClosures();
       const lifecycle =
-        trigger === 'unmount' && retry.started
-          ? startPlayerStopLifecycle('detached_context_retry', trigger)
+        trigger === 'unmount'
+          ? startPlayerStopLifecycle('detached_context_retry', {
+              joined: !retry.started,
+              trigger,
+            })
           : null;
       try {
         await retry.promise;
@@ -1568,112 +1599,132 @@ const useSoundPlayerImplementation = (
     [emitPlayerDiagnostic],
   );
 
-  const stopAll = useCallback(
+  const startPlayerStop = useCallback(
     // fallow-ignore-next-line complexity -- shutdown aggregates independent Web Audio cleanup failures without abandoning later resources
-    async (expectedContext?: AudioContext, trigger?: 'unmount') => {
-      const currentResources = playerResources.current;
-      const resourcesToStop =
-        expectedContext === undefined ||
-        currentResources?.context === expectedContext
-          ? currentResources
-          : null;
-      const failedResourcesToRetry = [
-        ...failedPlayerContextResources.current,
-      ].filter(
-        (resources) =>
-          resources !== resourcesToStop &&
-          (expectedContext === undefined ||
-            resources.context === expectedContext),
-      );
-
-      if (
-        expectedContext !== undefined &&
-        resourcesToStop === null &&
-        failedResourcesToRetry.length === 0
-      ) {
-        return;
-      }
-
-      // An implicit stop owns the overall player state. A context-scoped stop
-      // only resets it when that context is still the active player; retrying a
-      // detached context must not invalidate a newer player.
-      if (expectedContext === undefined || resourcesToStop !== null) {
-        playerGeneration.current += 1;
-        notifyDrainWaiters();
-        if (resourcesToStop && playerResources.current === resourcesToStop) {
-          playerResources.current = null;
-        }
-        resetPlayerState(
-          'Failed to clear FFT state while stopping the player.',
+    (request: PlayerStopRequest = {}): StartedPlayerStop => {
+      let lifecycle: PlayerStopLifecycle | null = null;
+      // Establish lifecycle metadata before the first suspension so a caller
+      // can attach an attributed join as soon as this function returns.
+      const promise = (async () => {
+        const { expectedContext, trigger } = request;
+        const currentResources = playerResources.current;
+        const resourcesToStop =
+          expectedContext === undefined ||
+          currentResources?.context === expectedContext
+            ? currentResources
+            : null;
+        const failedResourcesToRetry = [
+          ...failedPlayerContextResources.current,
+        ].filter(
+          (resources) =>
+            resources !== resourcesToStop &&
+            (expectedContext === undefined ||
+              resources.context === expectedContext),
         );
-      }
 
-      if (!resourcesToStop && failedResourcesToRetry.length === 0) {
-        return;
-      }
-
-      let stopScope: PlayerStopScope = 'active_player';
-      if (resourcesToStop === null) {
-        stopScope = 'detached_context_retry';
-      } else if (failedResourcesToRetry.length > 0) {
-        stopScope = 'active_player_with_detached_retry';
-      }
-      const stopLifecycle = startPlayerStopLifecycle(stopScope, trigger);
-      const workletToStop = resourcesToStop?.worklet ?? null;
-
-      const failures: unknown[] = [];
-      const release = (label: string, action: () => void) =>
-        releaseSafely(failures, label, action);
-
-      if (resourcesToStop) {
-        release('FFT cleanup failed', () => cancelPlayerFft(resourcesToStop));
-      }
-
-      if (workletToStop) {
-        // AudioWorklet mode
-        let isWorkletClosed = false;
-        release('Audio worklet close listener setup failed', () => {
-          workletToStop.port.onmessage = (e: MessageEvent) => {
-            const data: unknown = e.data;
-            if (isWorkletMessage(data) && data.type === 'worklet_closed') {
-              isWorkletClosed = true;
-            }
-          };
-        });
-        release('Audio worklet fade request failed', () => {
-          workletToStop.port.postMessage({ type: 'fadeAndClear' });
-        });
-        release('Audio worklet close request failed', () => {
-          workletToStop.port.postMessage({ type: 'end' });
-        });
-
-        // Wait for the worklet's fade-out acknowledgement before disconnecting
-        // its nodes, bounded to 500 ms.
-        let closed = 0;
-        while (closed < 5) {
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the worklet message callback mutates this flag asynchronously
-          if (isWorkletClosed) {
-            break;
-          }
-          closed += 1;
-          await new Promise((resolve) => setTimeout(resolve, 100));
+        if (
+          expectedContext !== undefined &&
+          resourcesToStop === null &&
+          failedResourcesToRetry.length === 0
+        ) {
+          return;
         }
-      }
 
-      try {
-        await disposePlayerResourceBatch([
-          ...(resourcesToStop ? [resourcesToStop] : []),
-          ...failedResourcesToRetry,
-        ]);
-      } catch (error) {
-        appendCleanupFailures(failures, error);
-      }
+        let stopScope: PlayerStopScope | null = null;
+        if (resourcesToStop !== null) {
+          stopScope =
+            failedResourcesToRetry.length > 0
+              ? 'active_player_with_detached_retry'
+              : 'active_player';
+        } else if (failedResourcesToRetry.length > 0) {
+          stopScope = 'detached_context_retry';
+        }
 
-      if (failures.length > 0) {
-        reportPlayerStopFailure(stopLifecycle, failures.length);
-        throwCleanupFailures(failures, 'Audio player cleanup failed.');
-      }
-      finishPlayerStopLifecycle(stopLifecycle);
+        // An implicit stop owns the overall player state. A context-scoped stop
+        // only resets it when that context is still the active player; retrying a
+        // detached context must not invalidate a newer player.
+        if (expectedContext === undefined || resourcesToStop !== null) {
+          playerGeneration.current += 1;
+          notifyDrainWaiters();
+          if (resourcesToStop && playerResources.current === resourcesToStop) {
+            playerResources.current = null;
+          }
+          resetPlayerState(
+            'Failed to clear FFT state while stopping the player.',
+          );
+        }
+
+        if (stopScope === null) return;
+
+        const stopLifecycle = startPlayerStopLifecycle(
+          stopScope,
+          trigger === undefined ? {} : { trigger },
+        );
+        lifecycle = stopLifecycle;
+        const workletToStop = resourcesToStop?.worklet ?? null;
+
+        const failures: unknown[] = [];
+        const release = (label: string, action: () => void) =>
+          releaseSafely(failures, label, action);
+
+        if (resourcesToStop) {
+          release('FFT cleanup failed', () => cancelPlayerFft(resourcesToStop));
+        }
+
+        if (workletToStop) {
+          // AudioWorklet mode
+          let isWorkletClosed = false;
+          release('Audio worklet close listener setup failed', () => {
+            workletToStop.port.onmessage = (e: MessageEvent) => {
+              const data: unknown = e.data;
+              if (isWorkletMessage(data) && data.type === 'worklet_closed') {
+                isWorkletClosed = true;
+              }
+            };
+          });
+          release('Audio worklet fade request failed', () => {
+            workletToStop.port.postMessage({ type: 'fadeAndClear' });
+          });
+          release('Audio worklet close request failed', () => {
+            workletToStop.port.postMessage({ type: 'end' });
+          });
+
+          // Wait for the worklet's fade-out acknowledgement before disconnecting
+          // its nodes, bounded to 500 ms.
+          let closed = 0;
+          while (closed < 5) {
+            // oxlint-disable-next-line typescript/no-unnecessary-condition -- the worklet message callback mutates this flag asynchronously
+            if (isWorkletClosed) {
+              break;
+            }
+            closed += 1;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+
+        try {
+          await disposePlayerResourceBatch([
+            ...(resourcesToStop ? [resourcesToStop] : []),
+            ...failedResourcesToRetry,
+          ]);
+        } catch (error) {
+          appendCleanupFailures(failures, error);
+        }
+
+        if (failures.length > 0) {
+          const cleanupError = createCleanupError(
+            failures,
+            'Audio player cleanup failed.',
+          );
+          reportPlayerStopFailure(stopLifecycle, failures.length, {
+            error: cleanupError,
+            message: 'Audio player cleanup failed.',
+          });
+          throw cleanupError;
+        }
+        finishPlayerStopLifecycle(stopLifecycle);
+      })();
+      return { lifecycle, promise };
     },
     [
       cancelPlayerFft,
@@ -1686,8 +1737,49 @@ const useSoundPlayerImplementation = (
     ],
   );
 
+  const joinTrackedPlayerStop = useCallback(
+    (trackedStop: TrackedPlayerStop, trigger: PlayerStopTrigger) => {
+      if (trackedStop.trigger === trigger || trackedStop.scope === null) {
+        return trackedStop.promise;
+      }
+      const existingJoin = trackedStop.joinedStops.get(trigger);
+      if (existingJoin) return existingJoin;
+
+      const lifecycle = startPlayerStopLifecycle(trackedStop.scope, {
+        joined: true,
+        trigger,
+      });
+      const joinedStop = trackedStop.promise.then(
+        () => finishPlayerStopLifecycle(lifecycle),
+        (error: unknown) => {
+          const failures: unknown[] = [];
+          appendCleanupFailures(failures, error);
+          reportPlayerStopFailure(lifecycle, failures.length, {
+            error,
+            message: 'Failed to dispose audio player while unmounting.',
+          });
+          throw error;
+        },
+      );
+      trackedStop.joinedStops.set(trigger, joinedStop);
+      const existingReport = reportedPlayerStopPromises.current.get(
+        trackedStop.promise,
+      );
+      if (existingReport) {
+        reportedPlayerStopPromises.current.set(joinedStop, existingReport);
+      }
+      return joinedStop;
+    },
+    [
+      finishPlayerStopLifecycle,
+      reportPlayerStopFailure,
+      startPlayerStopLifecycle,
+    ],
+  );
+
   const stopAllTracked = useCallback(
-    (expectedContext?: AudioContext, trigger?: 'unmount') => {
+    (request: PlayerStopRequest = {}) => {
+      const { expectedContext, trigger } = request;
       const currentContext = playerResources.current?.context ?? null;
       const currentGeneration = playerGeneration.current;
       const existingImplicitStop = implicitPlayerStop.current;
@@ -1696,37 +1788,42 @@ const useSoundPlayerImplementation = (
         existingImplicitStop &&
         existingImplicitStop.generation === currentGeneration
       ) {
-        return existingImplicitStop.promise;
+        return trigger === undefined
+          ? existingImplicitStop.promise
+          : joinTrackedPlayerStop(existingImplicitStop, trigger);
       }
 
       const context = expectedContext ?? currentContext ?? undefined;
       if (context) {
         const existingStop = playerStopPromises.current.get(context);
         if (existingStop && existingStop.generation === currentGeneration) {
-          return existingStop.promise;
+          return trigger === undefined
+            ? existingStop.promise
+            : joinTrackedPlayerStop(existingStop, trigger);
         }
       }
 
-      let stopping = stopAll(expectedContext, trigger);
+      const startedStop = startPlayerStop(request);
+      const stopping = startedStop.promise;
       const stopGeneration = playerGeneration.current;
+      const trackedStop: TrackedPlayerStop = {
+        generation: stopGeneration,
+        joinedStops: new Map(),
+        promise: stopping,
+        scope: startedStop.lifecycle?.scope ?? null,
+        trigger,
+      };
 
       if (context) {
-        stopping = trackWeakMapPromise(
+        void trackWeakMapPromise(
           playerStopPromises.current,
           context,
           stopping,
-          (trackedPromise) => ({
-            generation: stopGeneration,
-            promise: trackedPromise,
-          }),
+          () => trackedStop,
         );
       }
 
       if (expectedContext === undefined) {
-        const trackedStop: TrackedPlayerStop = {
-          generation: stopGeneration,
-          promise: stopping,
-        };
         implicitPlayerStop.current = trackedStop;
         const clearImplicitStop = () => {
           if (implicitPlayerStop.current === trackedStop) {
@@ -1737,18 +1834,14 @@ const useSoundPlayerImplementation = (
       }
       return stopping;
     },
-    [stopAll],
+    [joinTrackedPlayerStop, startPlayerStop],
   );
 
   const stopAllAndReportWithPrefix = useCallback(
-    (
-      failurePrefix: string,
-      expectedContext?: AudioContext,
-      trigger?: 'unmount',
-    ) => {
+    (failurePrefix: string, request: PlayerStopRequest = {}) => {
       // This hook is publicly exported, so callers outside VoiceProvider can
       // request deduplicated cleanup without handling resource-level failures.
-      const stopping = stopAllTracked(expectedContext, trigger);
+      const stopping = stopAllTracked(request);
       const existingReport = reportedPlayerStopPromises.current.get(stopping);
       if (existingReport) {
         return existingReport;
@@ -1770,7 +1863,7 @@ const useSoundPlayerImplementation = (
     (expectedContext?: AudioContext) =>
       stopAllAndReportWithPrefix(
         'Failed to stop audio player',
-        expectedContext,
+        expectedContext === undefined ? {} : { expectedContext },
       ),
     [stopAllAndReportWithPrefix],
   );
@@ -1779,18 +1872,20 @@ const useSoundPlayerImplementation = (
     () =>
       stopAllAndReportWithPrefix(
         'Failed to dispose audio player while unmounting',
-        undefined,
-        'unmount',
+        { trigger: 'unmount' },
       ),
     [stopAllAndReportWithPrefix],
   );
 
   const stopAllForContext = useCallback(
-    (context: AudioContext) =>
+    (context: AudioContext, options: UseSoundPlayerStopOptions = {}) =>
       contextStopFailureMode === 'propagate'
-        ? stopAllTracked(context)
-        : stopAllAndReport(context),
-    [contextStopFailureMode, stopAllAndReport, stopAllTracked],
+        ? stopAllTracked({ ...options, expectedContext: context })
+        : stopAllAndReportWithPrefix('Failed to stop audio player', {
+            ...options,
+            expectedContext: context,
+          }),
+    [contextStopFailureMode, stopAllAndReportWithPrefix, stopAllTracked],
   );
 
   const clearQueue = useCallback(() => {
@@ -1932,8 +2027,10 @@ const useSoundPlayerImplementation = (
   // VoiceProvider owns ordered teardown of its shared resources. The standalone
   // hook has no parent owner, so unmount starts the same tracked shutdown used
   // by explicit stops, including the worklet fade/close handshake.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    playerUnmounted.current = false;
+    return () => {
+      playerUnmounted.current = true;
       if (unmountCleanupOwner === 'voice-provider') {
         playerGeneration.current += 1;
         notifyDrainWaiters();
@@ -1956,13 +2053,14 @@ const useSoundPlayerImplementation = (
         pendingImplicitStop !== null &&
         pendingImplicitStop.generation === playerGeneration.current;
       if (joiningPendingImplicitStop) {
+        const joinedStop = stopAllTracked({ trigger: 'unmount' });
         playerGeneration.current += 1;
         pendingImplicitStop.generation = playerGeneration.current;
         notifyDrainWaiters();
         const retryRetainedContextsAfterStop = () => {
           void retryFailedPlayerContextClosuresBestEffort('unmount');
         };
-        void pendingImplicitStop.promise.then(
+        void joinedStop.then(
           retryRetainedContextsAfterStop,
           retryRetainedContextsAfterStop,
         );
@@ -1982,16 +2080,16 @@ const useSoundPlayerImplementation = (
       clearPlayerFftStore(
         'Failed to clear FFT state while unmounting the player.',
       );
-    },
-    [
-      cancelPlayerFftSafely,
-      clearPlayerFftStore,
-      notifyDrainWaiters,
-      retryFailedPlayerContextClosuresBestEffort,
-      stopAllAndReportOnUnmount,
-      unmountCleanupOwner,
-    ],
-  );
+    };
+  }, [
+    cancelPlayerFftSafely,
+    clearPlayerFftStore,
+    notifyDrainWaiters,
+    retryFailedPlayerContextClosuresBestEffort,
+    stopAllTracked,
+    stopAllAndReportOnUnmount,
+    unmountCleanupOwner,
+  ]);
 
   return useMemo(
     () => ({

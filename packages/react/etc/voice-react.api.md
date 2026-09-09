@@ -313,7 +313,7 @@ export const useSoundPlayer: (props: UseSoundPlayerProps) => {
     muteAudio: () => void;
     unmuteAudio: () => void;
     stopAll: (expectedContext?: AudioContext) => Promise<void>;
-    stopAllForContext: (context: AudioContext) => Promise<void>;
+    stopAllForContext: (context: AudioContext, options?: UseSoundPlayerStopOptions) => Promise<void>;
     waitForQueueToDrain: (timeoutMs?: number) => Promise<boolean>;
     clearQueue: () => void;
     volume: number;
@@ -329,6 +329,11 @@ export interface UseSoundPlayerProps {
     onError: (message: string, reason: AudioPlayerErrorReason) => void;
     onPlayAudio: (id: string) => void;
     onStopAudio: (id: string) => void;
+}
+
+// @public @deprecated
+export interface UseSoundPlayerStopOptions {
+    trigger?: 'unmount';
 }
 
 // @public
