@@ -11,7 +11,16 @@ export type AudioContextCloseResult =
       reason: 'rejected' | 'timeout';
     };
 
-/** Read the terminal AudioContext state without letting host accessors abort cleanup. */
+// `AudioContext.state` changes to `closed` as soon as close() is accepted,
+// before the returned promise confirms that system resources were released.
+// Keep the original completion promise so later callers can join it after a
+// bounded wait instead of treating `state` as proof or calling close() twice.
+const audioContextCloseCompletions = new WeakMap<
+  AudioContext,
+  Promise<AudioContextCloseResult>
+>();
+
+/** Avoid a redundant close without letting host accessors abort cleanup. */
 const isAudioContextClosed = (context: AudioContext): boolean => {
   try {
     return context.state === 'closed';
@@ -22,26 +31,22 @@ const isAudioContextClosed = (context: AudioContext): boolean => {
   }
 };
 
-/** Treat the context's observable terminal state as authoritative. */
-export const reconcileAudioContextCloseResult = (
-  context: AudioContext,
-  result: AudioContextCloseResult,
-): AudioContextCloseResult =>
-  result.success || !isAudioContextClosed(context) ? result : { success: true };
-
 const toError = (error: unknown): Error =>
   normalizeBrowserError(error, 'Unknown audio context error');
 
-export const closeAudioContextWithTimeout = async (
+const getOrStartAudioContextClose = (
   context: AudioContext,
 ): Promise<AudioContextCloseResult> => {
+  const existingCompletion = audioContextCloseCompletions.get(context);
+  if (existingCompletion) return existingCompletion;
+
   if (isAudioContextClosed(context)) {
-    return { success: true };
+    return Promise.resolve({ success: true });
   }
 
-  let closePromise: Promise<AudioContextCloseResult>;
+  let closeCompletion: Promise<AudioContextCloseResult>;
   try {
-    closePromise = Promise.resolve(context.close()).then(
+    closeCompletion = Promise.resolve(context.close()).then(
       () => ({ success: true }),
       (error: unknown) => ({
         success: false,
@@ -50,16 +55,35 @@ export const closeAudioContextWithTimeout = async (
       }),
     );
   } catch (error) {
-    return reconcileAudioContextCloseResult(context, {
+    return Promise.resolve({
       success: false,
       error: toError(error),
       reason: 'rejected',
     });
   }
 
+  audioContextCloseCompletions.set(context, closeCompletion);
+  void closeCompletion.then((result) => {
+    // A rejected invocation can be retried later. Successful and pending close
+    // operations remain joinable for as long as the context itself is alive.
+    if (
+      !result.success &&
+      audioContextCloseCompletions.get(context) === closeCompletion
+    ) {
+      audioContextCloseCompletions.delete(context);
+    }
+  });
+  return closeCompletion;
+};
+
+export const closeAudioContextWithTimeout = async (
+  context: AudioContext,
+): Promise<AudioContextCloseResult> => {
+  const closeCompletion = getOrStartAudioContextClose(context);
+
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const result = await Promise.race([
-    closePromise,
+    closeCompletion,
     new Promise<AudioContextCloseResult>((resolve) => {
       timeoutId = setTimeout(
         () =>
@@ -75,5 +99,5 @@ export const closeAudioContextWithTimeout = async (
   if (timeoutId !== undefined) {
     clearTimeout(timeoutId);
   }
-  return reconcileAudioContextCloseResult(context, result);
+  return result;
 };

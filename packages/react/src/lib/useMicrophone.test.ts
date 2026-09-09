@@ -2682,8 +2682,16 @@ describe('useMicrophone', () => {
   it('bounds an owned audio context that never closes', async () => {
     vi.useFakeTimers();
     stubMediaRecorder(supports(MimeType.WEBM));
-    const contextClose = vi.fn(() => new Promise<void>(() => {}));
-    stubOwnedAudioContext(contextClose);
+    let contextState: AudioContextState = 'running';
+    const contextClose = vi.fn(() => {
+      contextState = 'closed';
+      return new Promise<void>(() => {});
+    });
+    const { context } = stubOwnedAudioContext(contextClose);
+    Object.defineProperty(context, 'state', {
+      configurable: true,
+      get: () => contextState,
+    });
     const { result, onError } = renderMicrophone();
     result.current.start(createStream());
 
