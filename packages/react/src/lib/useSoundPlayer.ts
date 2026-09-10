@@ -167,6 +167,45 @@ interface StartedPlayerStop {
   promise: Promise<void>;
 }
 
+interface ReusablePlayerStop {
+  context: AudioContext | undefined;
+  trackedStop: TrackedPlayerStop | null;
+}
+
+const findReusablePlayerStop = (
+  request: PlayerStopRequest,
+  currentContext: AudioContext | null,
+  currentGeneration: number,
+  implicitStop: TrackedPlayerStop | null,
+  contextStops: WeakMap<AudioContext, TrackedPlayerStop>,
+): ReusablePlayerStop => {
+  const { expectedContext, trigger } = request;
+  if (
+    expectedContext === undefined &&
+    implicitStop?.generation === currentGeneration
+  ) {
+    return {
+      context: currentContext ?? undefined,
+      trackedStop: implicitStop,
+    };
+  }
+
+  const context = expectedContext ?? currentContext ?? undefined;
+  const contextStop =
+    context === undefined ? undefined : contextStops.get(context);
+  // Explicit attribution may join an in-flight stop for a detached exact
+  // context across unrelated generations. Unattributed stale callers and a
+  // newer active player using the same context retain generation isolation.
+  const canReuseContextStop =
+    contextStop !== undefined &&
+    (contextStop.generation === currentGeneration ||
+      (trigger !== undefined && currentContext !== context));
+  return {
+    context,
+    trackedStop: canReuseContextStop ? contextStop : null,
+  };
+};
+
 const getPlayerStopLifecycleDetails = (lifecycle: PlayerStopLifecycle) => ({
   resource: 'audio_player',
   scope: lifecycle.scope,
@@ -1835,33 +1874,17 @@ const useSoundPlayerImplementation = (
       const { expectedContext, trigger } = request;
       const currentContext = playerResources.current?.context ?? null;
       const currentGeneration = playerGeneration.current;
-      const existingImplicitStop = implicitPlayerStop.current;
-      if (
-        expectedContext === undefined &&
-        existingImplicitStop &&
-        existingImplicitStop.generation === currentGeneration
-      ) {
+      const { context, trackedStop: reusableStop } = findReusablePlayerStop(
+        request,
+        currentContext,
+        currentGeneration,
+        implicitPlayerStop.current,
+        playerStopPromises.current,
+      );
+      if (reusableStop !== null) {
         return trigger === undefined
-          ? existingImplicitStop.operation.promise
-          : joinTrackedPlayerStop(existingImplicitStop.operation, trigger);
-      }
-
-      const context = expectedContext ?? currentContext ?? undefined;
-      if (context) {
-        const existingStop = playerStopPromises.current.get(context);
-        // Explicit attribution may join an in-flight stop for a detached exact
-        // context across unrelated generations. Unattributed stale callers and
-        // a newer active player using the same context retain generation
-        // isolation.
-        if (
-          existingStop &&
-          (existingStop.generation === currentGeneration ||
-            (trigger !== undefined && currentContext !== context))
-        ) {
-          return trigger === undefined
-            ? existingStop.operation.promise
-            : joinTrackedPlayerStop(existingStop.operation, trigger);
-        }
+          ? reusableStop.operation.promise
+          : joinTrackedPlayerStop(reusableStop.operation, trigger);
       }
 
       const startedStop = startPlayerStop(request);
