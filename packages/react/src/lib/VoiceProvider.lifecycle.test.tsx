@@ -507,6 +507,42 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
+  it('attributes connection rollback that starts after unmount', async () => {
+    const playerInitialized = createDeferred<boolean>();
+    mocks.playerInit.mockReturnValueOnce(playerInitialized.promise);
+    const rendered = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+
+    let connecting = Promise.resolve();
+    act(() => {
+      connecting = rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.playerInit).toHaveBeenCalledOnce());
+
+    rendered.unmount();
+    await waitFor(() =>
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce(),
+    );
+
+    await act(async () => {
+      playerInitialized.resolve(false);
+      await connecting;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+    expect(mocks.playerStopForContext.mock.calls.at(-1)?.[1]).toEqual({
+      trigger: 'unmount',
+    });
+  });
+
   it('contains a synchronous failure while attributing an in-flight stop', async () => {
     const playerStopped = createDeferred<void>();
     mocks.playerStopForContext

@@ -1536,6 +1536,86 @@ describe('useSoundPlayer', () => {
     ).toBeDefined();
   });
 
+  it('joins a detached context stop after another context becomes active', async () => {
+    vi.useFakeTimers();
+    const firstPort = createFakePort();
+    const secondPort = createFakePort();
+    globalThis.AudioWorkletNode = vi
+      .fn()
+      .mockImplementationOnce(function FirstAudioWorkletNodeMock() {
+        return {
+          port: firstPort,
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        };
+      })
+      .mockImplementationOnce(function SecondAudioWorkletNodeMock() {
+        return {
+          port: secondPort,
+          connect: vi.fn(),
+          disconnect: vi.fn(),
+        };
+      });
+    const firstContext = new AudioContext();
+    const secondContext = new AudioContext();
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    const { result } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
+        diagnostics,
+        enableAudioWorklet: true,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, firstContext));
+
+    let firstStop = Promise.resolve();
+    act(() => {
+      firstStop = result.current.stopAllForContext(firstContext);
+    });
+    await act(() => result.current.initPlayer(undefined, secondContext));
+
+    let attributedStopSettled = false;
+    let attributedStop = Promise.resolve();
+    act(() => {
+      attributedStop = result.current
+        .stopAllForContext(firstContext, { trigger: 'unmount' })
+        .then(() => {
+          attributedStopSettled = true;
+        });
+    });
+    await act(() => Promise.resolve());
+
+    expect(attributedStopSettled).toBe(false);
+    expect(firstPort.postMessage).toHaveBeenCalledTimes(2);
+    expect(secondPort.postMessage).not.toHaveBeenCalled();
+
+    act(() => {
+      firstPort.onmessage?.({
+        data: { type: 'worklet_closed' },
+      } as MessageEvent);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+      await Promise.all([firstStop, attributedStop]);
+    });
+
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['joined'] === true &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toBeDefined();
+  });
+
   it('handles a joined stop rejection when reusing its existing report', async () => {
     const context = new AudioContext();
     const onError = vi.fn();
@@ -3398,6 +3478,66 @@ describe('useSoundPlayer', () => {
 
     await expect(stopping).rejects.toThrow('worklet post failed');
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('returns lifecycle setup failures as a promise and still disposes resources', async () => {
+    const context = new AudioContext();
+    const lifecycleError = new Error('monotonic clock failed');
+    const { result } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    const now = vi
+      .spyOn(globalThis.performance, 'now')
+      .mockImplementationOnce(() => {
+        throw lifecycleError;
+      });
+
+    let stopping = Promise.resolve();
+    act(() => {
+      expect(() => {
+        stopping = result.current.stopAllForContext(context);
+      }).not.toThrow();
+    });
+    now.mockRestore();
+
+    await expect(stopping).rejects.toBe(lifecycleError);
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+  });
+
+  it('still disposes resources when synchronous state reset fails', async () => {
+    const context = new AudioContext();
+    const resetError = new Error('player state reset failed');
+    const { result } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+
+    let stopping = Promise.resolve();
+    act(() => {
+      const clear = vi
+        .spyOn(Map.prototype, 'clear')
+        .mockImplementationOnce(() => {
+          throw resetError;
+        });
+      stopping = result.current.stopAllForContext(context);
+      clear.mockRestore();
+    });
+
+    await expect(stopping).rejects.toBe(resetError);
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
   });
 
   it('does not publish stale nodes after a pending sink selection', async () => {

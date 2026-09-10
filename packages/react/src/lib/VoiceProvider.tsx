@@ -722,6 +722,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const microphoneFlushOwnerRef = useRef<symbol | null>(null);
   const resourceCleanupCompletedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
+  const providerUnmountSequenceRef = useRef(0);
   const currentConnectionGenerationRef = useRef<number | null>(null);
   const pendingResourceCleanupsRef = useRef(new Set<Promise<unknown>>());
   const pendingResourceCleanupTimeoutsRef = useRef(
@@ -2062,6 +2063,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       }
 
       const generation = ++lifecycleGenerationRef.current;
+      const connectionUnmountSequence = providerUnmountSequenceRef.current;
       resourceCleanupCompletedRef.current = false;
       const connectionStartedAt = getMonotonicTime();
       clearError('connect');
@@ -2198,7 +2200,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       sharedAudioContextRef.current = sharedCtx;
 
       const cleanupAttemptResources = (stopPlayer: boolean) => {
-        const playerCleanupState = stopPlayer ? beginPlayerCleanup() : null;
+        const playerCleanupState = stopPlayer
+          ? beginPlayerCleanup(
+              connectionUnmountSequence === providerUnmountSequenceRef.current
+                ? {}
+                : { trigger: 'unmount' },
+            )
+          : null;
         const cleanup = (async () => {
           const failures: string[] = [];
           const streamFailure = stopCapturedStream(
@@ -2886,6 +2894,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     const cleanupTimeouts = pendingResourceCleanupTimeoutsRef.current;
     // disconnect from socket when the voice provider component unmounts
     return () => {
+      providerUnmountSequenceRef.current += 1;
       // Only accelerate cleanup that was already pending before unmount. The
       // teardown created below retains its normal bounded grace period.
       const preexistingCleanupTimeouts = [...cleanupTimeouts];

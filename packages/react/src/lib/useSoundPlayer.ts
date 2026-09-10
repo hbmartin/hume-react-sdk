@@ -279,7 +279,6 @@ const useSoundPlayerImplementation = (
   const playerStopPromises = useRef(
     new WeakMap<AudioContext, TrackedPlayerStop>(),
   );
-  const activeContextPlayerStops = useRef(new Set<TrackedPlayerStop>());
   const implicitPlayerStop = useRef<TrackedPlayerStop | null>(null);
   const reportedPlayerStopPromises = useRef(
     new WeakMap<Promise<void>, Promise<void>>(),
@@ -1662,9 +1661,12 @@ const useSoundPlayerImplementation = (
         stopScope = 'detached_context_retry';
       }
 
-      // Preserve the promise-only failure contract while completing all
-      // lifecycle setup synchronously. Joiners can now observe an immutable
-      // lifecycle without relying on an async IIFE mutating outer state.
+      const setupFailures: unknown[] = [];
+
+      // Complete lifecycle setup synchronously so joiners can observe an
+      // immutable lifecycle without relying on an async IIFE mutating outer
+      // state. Preserve setup failures for the returned promise while still
+      // disposing every captured resource below.
       try {
         // An implicit stop owns the overall player state. A context-scoped stop
         // only resets it when that context is still the active player; retrying a
@@ -1681,22 +1683,37 @@ const useSoundPlayerImplementation = (
           );
         }
       } catch (error) {
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- preserve arbitrary synchronous failures from the existing promise-only stop contract
-        return { lifecycle: null, promise: Promise.reject(error) };
+        appendCleanupFailures(setupFailures, error);
       }
 
       if (stopScope === null) {
-        return { lifecycle: null, promise: Promise.resolve() };
+        const setupError = createCleanupError(
+          setupFailures,
+          'Audio player stop setup failed.',
+        );
+        return {
+          lifecycle: null,
+          promise:
+            setupError === undefined
+              ? Promise.resolve()
+              : // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- preserve arbitrary synchronous failures from the promise-only stop contract
+                Promise.reject(setupError),
+        };
       }
 
-      const lifecycle = startPlayerStopLifecycle(
-        stopScope,
-        trigger === undefined ? {} : { trigger },
-      );
+      let lifecycle: PlayerStopLifecycle | null = null;
+      try {
+        lifecycle = startPlayerStopLifecycle(
+          stopScope,
+          trigger === undefined ? {} : { trigger },
+        );
+      } catch (error) {
+        appendCleanupFailures(setupFailures, error);
+      }
       const workletToStop = resourcesToStop?.worklet ?? null;
 
       const promise = (async () => {
-        const failures: unknown[] = [];
+        const failures: unknown[] = [...setupFailures];
         const release = (label: string, action: () => void) =>
           releaseSafely(failures, label, action);
 
@@ -1749,13 +1766,17 @@ const useSoundPlayerImplementation = (
             failures,
             'Audio player cleanup failed.',
           );
-          reportPlayerStopFailure(lifecycle, failures.length, {
-            error: cleanupError,
-            message: 'Audio player cleanup failed.',
-          });
+          if (lifecycle !== null) {
+            reportPlayerStopFailure(lifecycle, failures.length, {
+              error: cleanupError,
+              message: 'Audio player cleanup failed.',
+            });
+          }
           throw cleanupError;
         }
-        finishPlayerStopLifecycle(lifecycle);
+        if (lifecycle !== null) {
+          finishPlayerStopLifecycle(lifecycle);
+        }
       })();
       return { lifecycle, promise };
     },
@@ -1828,7 +1849,15 @@ const useSoundPlayerImplementation = (
       const context = expectedContext ?? currentContext ?? undefined;
       if (context) {
         const existingStop = playerStopPromises.current.get(context);
-        if (existingStop && existingStop.generation === currentGeneration) {
+        // Explicit attribution may join an in-flight stop for a detached exact
+        // context across unrelated generations. Unattributed stale callers and
+        // a newer active player using the same context retain generation
+        // isolation.
+        if (
+          existingStop &&
+          (existingStop.generation === currentGeneration ||
+            (trigger !== undefined && currentContext !== context))
+        ) {
           return trigger === undefined
             ? existingStop.operation.promise
             : joinTrackedPlayerStop(existingStop.operation, trigger);
@@ -1846,21 +1875,12 @@ const useSoundPlayerImplementation = (
       };
 
       if (context) {
-        const trackedContextStop: TrackedPlayerStop = {
-          generation: stopGeneration,
-          operation,
-        };
-        activeContextPlayerStops.current.add(trackedContextStop);
         void trackWeakMapPromise(
           playerStopPromises.current,
           context,
           stopping,
-          () => trackedContextStop,
+          () => ({ generation: stopGeneration, operation }),
         );
-        const clearActiveContextStop = () => {
-          activeContextPlayerStops.current.delete(trackedContextStop);
-        };
-        void stopping.then(clearActiveContextStop, clearActiveContextStop);
       }
 
       if (expectedContext === undefined) {
@@ -2076,18 +2096,11 @@ const useSoundPlayerImplementation = (
   // hook has no parent owner, so unmount starts the same tracked shutdown used
   // by explicit stops, including the worklet fade/close handshake.
   useEffect(() => {
-    const contextPlayerStops = activeContextPlayerStops.current;
     return () => {
       playerUnmountSequence.current += 1;
       const unmountDetails = { trigger: 'unmount' };
       if (unmountCleanupOwner === 'voice-provider') {
-        const generationBeforeUnmount = playerGeneration.current;
         playerGeneration.current += 1;
-        for (const trackedStop of contextPlayerStops) {
-          if (trackedStop.generation === generationBeforeUnmount) {
-            trackedStop.generation = playerGeneration.current;
-          }
-        }
         notifyDrainWaiters();
         const resources = playerResources.current;
         if (resources) {
