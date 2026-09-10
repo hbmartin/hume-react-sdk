@@ -158,11 +158,7 @@ interface PlayerStopLifecycle {
   trigger: PlayerStopTrigger | undefined;
 }
 
-interface PlayerStopOptions {
-  trigger?: PlayerStopTrigger;
-}
-
-interface PlayerStopRequest extends PlayerStopOptions {
+interface PlayerStopRequest extends UseSoundPlayerStopOptions {
   expectedContext?: AudioContext;
 }
 
@@ -174,10 +170,10 @@ interface StartedPlayerStop {
 const getPlayerStopLifecycleDetails = (lifecycle: PlayerStopLifecycle) => ({
   resource: 'audio_player',
   scope: lifecycle.scope,
-  joined: lifecycle.joined,
   ...(lifecycle.trigger === undefined
     ? undefined
     : { trigger: lifecycle.trigger }),
+  ...(lifecycle.joined ? { joined: true } : undefined),
 });
 
 class PlayerInitializationFailure extends Error {
@@ -283,6 +279,7 @@ const useSoundPlayerImplementation = (
   const playerStopPromises = useRef(
     new WeakMap<AudioContext, TrackedPlayerStop>(),
   );
+  const activeContextPlayerStops = useRef(new Set<TrackedPlayerStop>());
   const implicitPlayerStop = useRef<TrackedPlayerStop | null>(null);
   const reportedPlayerStopPromises = useRef(
     new WeakMap<Promise<void>, Promise<void>>(),
@@ -529,12 +526,15 @@ const useSoundPlayerImplementation = (
   );
 
   const resetPlayerState = useCallback(
-    (fftFailureMessage: string) => {
+    (
+      fftFailureMessage: string,
+      additionalDetails?: Record<string, unknown>,
+    ) => {
       isInitialized.current = false;
       isProcessing.current = false;
       publishIsPlaying(false);
       publishQueueLength(0);
-      clearPlayerFftStore(fftFailureMessage);
+      clearPlayerFftStore(fftFailureMessage, additionalDetails);
       chunkBufferQueues.current.clear();
       lastQueuedChunk.current = null;
       clipQueue.current = [];
@@ -1677,6 +1677,7 @@ const useSoundPlayerImplementation = (
           }
           resetPlayerState(
             'Failed to clear FFT state while stopping the player.',
+            trigger === undefined ? undefined : { trigger },
           );
         }
       } catch (error) {
@@ -1688,16 +1689,10 @@ const useSoundPlayerImplementation = (
         return { lifecycle: null, promise: Promise.resolve() };
       }
 
-      let lifecycle: PlayerStopLifecycle;
-      try {
-        lifecycle = startPlayerStopLifecycle(
-          stopScope,
-          trigger === undefined ? {} : { trigger },
-        );
-      } catch (error) {
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- preserve arbitrary synchronous diagnostic failures as a rejected stop
-        return { lifecycle: null, promise: Promise.reject(error) };
-      }
+      const lifecycle = startPlayerStopLifecycle(
+        stopScope,
+        trigger === undefined ? {} : { trigger },
+      );
       const workletToStop = resourcesToStop?.worklet ?? null;
 
       const promise = (async () => {
@@ -1851,12 +1846,21 @@ const useSoundPlayerImplementation = (
       };
 
       if (context) {
+        const trackedContextStop: TrackedPlayerStop = {
+          generation: stopGeneration,
+          operation,
+        };
+        activeContextPlayerStops.current.add(trackedContextStop);
         void trackWeakMapPromise(
           playerStopPromises.current,
           context,
           stopping,
-          () => ({ generation: stopGeneration, operation }),
+          () => trackedContextStop,
         );
+        const clearActiveContextStop = () => {
+          activeContextPlayerStops.current.delete(trackedContextStop);
+        };
+        void stopping.then(clearActiveContextStop, clearActiveContextStop);
       }
 
       if (expectedContext === undefined) {
@@ -2072,11 +2076,18 @@ const useSoundPlayerImplementation = (
   // hook has no parent owner, so unmount starts the same tracked shutdown used
   // by explicit stops, including the worklet fade/close handshake.
   useEffect(() => {
+    const contextPlayerStops = activeContextPlayerStops.current;
     return () => {
       playerUnmountSequence.current += 1;
       const unmountDetails = { trigger: 'unmount' };
       if (unmountCleanupOwner === 'voice-provider') {
+        const generationBeforeUnmount = playerGeneration.current;
         playerGeneration.current += 1;
+        for (const trackedStop of contextPlayerStops) {
+          if (trackedStop.generation === generationBeforeUnmount) {
+            trackedStop.generation = playerGeneration.current;
+          }
+        }
         notifyDrainWaiters();
         const resources = playerResources.current;
         if (resources) {

@@ -1516,8 +1516,8 @@ describe('useSoundPlayer', () => {
         (event) =>
           event.name === 'resource.stop_started' &&
           event.details['trigger'] === undefined,
-      ),
-    ).toMatchObject({ details: { joined: false } });
+      )?.details,
+    ).not.toHaveProperty('joined');
     expect(
       events.find(
         (event) =>
@@ -2546,6 +2546,47 @@ describe('useSoundPlayer', () => {
     });
   });
 
+  it('attributes FFT reset failures from a standalone unmount stop', async () => {
+    const cancellationError = new Error('FFT cancellation failed');
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockReturnValue(41);
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {
+      throw cancellationError;
+    });
+    const { result, unmount } = renderHook(() =>
+      useSoundPlayer({
+        diagnostics,
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer());
+    act(() => result.current.fftStore.write([1]));
+
+    act(() => unmount());
+
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.cleanup_failed' &&
+          event.details['message'] ===
+            'Failed to clear FFT state while stopping the player.',
+      ),
+    ).toMatchObject({
+      details: {
+        error: { message: cancellationError.message },
+        trigger: 'unmount',
+      },
+    });
+  });
+
   it('disposes standalone nodes without closing a shared context on unmount', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
@@ -3003,12 +3044,19 @@ describe('useSoundPlayer', () => {
     expect(disconnectGainNode).toHaveBeenCalledOnce();
   });
 
-  it('lets an in-flight provider stop finish its worklet handshake after unmount', async () => {
+  it('lets provider unmount attribute an in-flight context stop', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 41);
     vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(() => {});
+    const events: VoiceDiagnosticEvent[] = [];
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => events.push(event),
+    }));
     const { result, unmount } = renderHook(() =>
       useSoundPlayerForVoiceProvider({
+        diagnostics,
         enableAudioWorklet: true,
         onError: vi.fn(),
         onPlayAudio: vi.fn(),
@@ -3019,16 +3067,28 @@ describe('useSoundPlayer', () => {
     const context = vi.mocked(globalThis.AudioContext).mock.results[0]
       ?.value as AudioContext | undefined;
     if (!context) throw new Error('Expected the initialized audio context.');
+    const stopAllForContext = result.current.stopAllForContext;
 
     let stopping = Promise.resolve();
     act(() => {
-      stopping = result.current.stopAllForContext(context);
+      stopping = stopAllForContext(context);
     });
     act(() => unmount());
+
+    let attributedStopSettled = false;
+    let attributedStop = Promise.resolve();
+    act(() => {
+      attributedStop = stopAllForContext(context, { trigger: 'unmount' }).then(
+        () => {
+          attributedStopSettled = true;
+        },
+      );
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
+    expect(attributedStopSettled).toBe(false);
     expect(closeAudioContext).not.toHaveBeenCalled();
     expect(disconnectAnalyserNode).not.toHaveBeenCalled();
 
@@ -3039,9 +3099,17 @@ describe('useSoundPlayer', () => {
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
-      await stopping;
+      await Promise.all([stopping, attributedStop]);
     });
 
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['joined'] === true &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toBeDefined();
     expect(closeAudioContext).toHaveBeenCalledOnce();
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
