@@ -461,11 +461,11 @@ describe('VoiceProvider close lifecycle', () => {
     );
     rendered.unmount();
     await waitFor(() =>
-      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2),
+      expect(mocks.playerStopForContext).toHaveBeenCalledWith(
+        expect.anything(),
+        { trigger: 'unmount' },
+      ),
     );
-    expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
-      trigger: 'unmount',
-    });
     await act(async () => {
       playerStopped.resolve();
       await disconnecting;
@@ -493,6 +493,7 @@ describe('VoiceProvider close lifecycle', () => {
     );
 
     rendered.unmount();
+    await act(() => Promise.resolve());
     expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
     expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
       trigger: 'unmount',
@@ -585,6 +586,51 @@ describe('VoiceProvider close lifecycle', () => {
     rendered.unmount();
   });
 
+  it('forces context disposal when connection rollback player cleanup stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const playerStopped = createDeferred<void>();
+      mocks.playerInit.mockResolvedValueOnce(false);
+      mocks.playerStopForContext.mockReturnValue(playerStopped.promise);
+      const rendered = renderHook(() => useVoice(), {
+        wrapper: ({ children }) => (
+          <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+        ),
+      });
+
+      let connecting = Promise.resolve();
+      act(() => {
+        connecting = rendered.result.current.connect({
+          auth: { type: 'accessToken', value: 'test-token' },
+        });
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
+
+      await act(() => vi.advanceTimersByTimeAsync(15_000));
+      await act(() => connecting);
+
+      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+      expect(mocks.contextClose).toHaveBeenCalledOnce();
+      expect(rendered.result.current.status.value).toBe('disconnected');
+
+      rendered.unmount();
+      await act(() => Promise.resolve());
+      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        playerStopped.resolve();
+        await playerStopped.promise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('contains a synchronous failure while attributing an in-flight stop', async () => {
     const playerStopped = createDeferred<void>();
     mocks.playerStopForContext
@@ -612,6 +658,7 @@ describe('VoiceProvider close lifecycle', () => {
     );
 
     expect(() => rendered.unmount()).not.toThrow();
+    await act(() => Promise.resolve());
     expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
     await act(async () => {
       playerStopped.resolve();
@@ -2554,11 +2601,11 @@ describe('VoiceProvider close lifecycle', () => {
 
     rendered.unmount();
     await waitFor(() =>
-      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2),
+      expect(mocks.playerStopForContext).toHaveBeenCalledWith(
+        expect.anything(),
+        { trigger: 'unmount' },
+      ),
     );
-    expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
-      trigger: 'unmount',
-    });
 
     await act(async () => {
       playerStopped.resolve();
@@ -2918,7 +2965,7 @@ describe('VoiceProvider close lifecycle', () => {
     }
   });
 
-  it('attributes a player stop first started by forced cleanup', async () => {
+  it('releases player attribution state after forced cleanup times out', async () => {
     vi.useFakeTimers();
     try {
       const stalledMicrophone = createDeferred<void>();
@@ -2944,10 +2991,8 @@ describe('VoiceProvider close lifecycle', () => {
       expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
 
       rendered.unmount();
-      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
-      expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
-        trigger: 'unmount',
-      });
+      await act(() => Promise.resolve());
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
 
       await act(async () => {
         playerStopped.resolve();
