@@ -1,5 +1,3 @@
-export type PlayerStopTrigger = 'unmount';
-
 /**
  * Diagnostic ownership metadata for a deprecated standalone-player stop.
  *
@@ -7,7 +5,5 @@ export type PlayerStopTrigger = 'unmount';
  */
 export interface UseSoundPlayerStopOptions {
   /** Identifies cleanup performed because the owning React tree unmounted. */
-  trigger?: PlayerStopTrigger;
+  trigger?: 'unmount';
 }
-
-export type PlayerStopOptions = UseSoundPlayerStopOptions;
