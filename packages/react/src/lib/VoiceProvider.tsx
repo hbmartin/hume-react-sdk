@@ -65,7 +65,10 @@ import { useLatestRef } from './useLatestRef';
 import { useMessages } from './useMessages';
 import { useMicrophone } from './useMicrophone';
 import { useMicrophoneStream } from './useMicrophoneStream';
-import { useSoundPlayerForVoiceProvider } from './useSoundPlayer';
+import {
+  type UseSoundPlayerStopOptions,
+  useSoundPlayerForVoiceProvider,
+} from './useSoundPlayer';
 import { type ToolStatusStore, useToolStatus } from './useToolStatus';
 import {
   type SessionSettingsUpdate,
@@ -221,10 +224,6 @@ type ResourceCleanupTimeoutControl = Readonly<{
 
 type DisconnectDiagnosticOwner = symbol;
 
-type PlayerStopOptions = {
-  trigger?: 'unmount';
-};
-
 type PendingPlayerStop = Readonly<{
   context: AudioContext;
 }>;
@@ -232,7 +231,7 @@ type PendingPlayerStop = Readonly<{
 type PlayerCleanupState = {
   activeStop: PendingPlayerStop | null;
   cleanupSettled: boolean;
-  options: PlayerStopOptions;
+  options: UseSoundPlayerStopOptions;
 };
 
 type PendingDisconnectCleanup = Readonly<{
@@ -723,6 +722,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const microphoneFlushOwnerRef = useRef<symbol | null>(null);
   const resourceCleanupCompletedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
+  const providerUnmountSequenceRef = useRef(0);
   const currentConnectionGenerationRef = useRef<number | null>(null);
   const pendingResourceCleanupsRef = useRef(new Set<Promise<unknown>>());
   const pendingResourceCleanupTimeoutsRef = useRef(
@@ -1186,7 +1186,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const beginPlayerCleanup = useCallback(
-    (options: PlayerStopOptions = {}): PlayerCleanupState => {
+    (options: UseSoundPlayerStopOptions = {}): PlayerCleanupState => {
       const state: PlayerCleanupState = {
         activeStop: null,
         cleanupSettled: false,
@@ -1210,6 +1210,12 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     (state: PlayerCleanupState, context: AudioContext) => {
       const activeStop: PendingPlayerStop = { context };
       state.activeStop = activeStop;
+      const clearActiveStop = () => {
+        if (state.activeStop === activeStop) {
+          state.activeStop = null;
+          releasePlayerCleanupStateIfSettled(state);
+        }
+      };
       let stopping: Promise<void>;
       try {
         // Pass a snapshot so a later unmount cannot mutate options already
@@ -1217,18 +1223,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         // a stop is already active.
         stopping = playerStopAllForContext(context, { ...state.options });
       } catch (stopError) {
-        if (state.activeStop === activeStop) {
-          state.activeStop = null;
-          releasePlayerCleanupStateIfSettled(state);
-        }
+        clearActiveStop();
         throw stopError;
       }
-      const clearActiveStop = () => {
-        if (state.activeStop === activeStop) {
-          state.activeStop = null;
-          releasePlayerCleanupStateIfSettled(state);
-        }
-      };
       void stopping.then(clearActiveStop, clearActiveStop);
       return stopping;
     },
@@ -2066,6 +2063,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       }
 
       const generation = ++lifecycleGenerationRef.current;
+      const connectionUnmountSequence = providerUnmountSequenceRef.current;
       resourceCleanupCompletedRef.current = false;
       const connectionStartedAt = getMonotonicTime();
       clearError('connect');
@@ -2202,6 +2200,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       sharedAudioContextRef.current = sharedCtx;
 
       const cleanupAttemptResources = (stopPlayer: boolean) => {
+        const playerCleanupState = stopPlayer
+          ? beginPlayerCleanup(
+              connectionUnmountSequence === providerUnmountSequenceRef.current
+                ? {}
+                : { trigger: 'unmount' },
+            )
+          : null;
         const cleanup = (async () => {
           const failures: string[] = [];
           const streamFailure = stopCapturedStream(
@@ -2210,9 +2215,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           if (streamFailure !== null) {
             failures.push(streamFailure);
           }
-          if (stopPlayer) {
+          if (playerCleanupState !== null) {
             try {
-              await playerStopAllForContext(sharedCtx);
+              await stopPlayerForCleanup(playerCleanupState, sharedCtx);
             } catch (cleanupError) {
               failures.push(
                 `Audio player cleanup failed: ${getBrowserErrorMessage(cleanupError) ?? 'Unknown error'}`,
@@ -2239,9 +2244,16 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
           return failures;
         })();
-        return trackResourceCleanup(cleanup, 'connection_attempt', () => [
-          `Connection attempt cleanup exceeded ${RESOURCE_CLEANUP_TIMEOUT_MS} ms.`,
-        ]);
+        return trackResourceCleanup(
+          cleanup,
+          'connection_attempt',
+          () => [
+            `Connection attempt cleanup exceeded ${RESOURCE_CLEANUP_TIMEOUT_MS} ms.`,
+          ],
+          playerCleanupState === null
+            ? undefined
+            : () => settlePlayerCleanup(playerCleanupState),
+        );
       };
 
       // Audio Player - must initialize before connecting to the socket
@@ -2459,6 +2471,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       clearError,
       clientConnect,
       closeSharedAudioContext,
+      beginPlayerCleanup,
       diagnostics,
       enableAudioWorklet,
       getStream,
@@ -2466,12 +2479,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       markAllResourcesDisconnected,
       micStart,
       playerInitPlayer,
-      playerStopAllForContext,
       publishInputDeviceState,
       publishOutputDeviceState,
       resetAudioDeviceState,
       setDisconnectedStatus,
       setErrorStatus,
+      settlePlayerCleanup,
+      stopPlayerForCleanup,
       stopStream,
       trackResourceCleanup,
       updateError,
@@ -2880,6 +2894,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
     const cleanupTimeouts = pendingResourceCleanupTimeoutsRef.current;
     // disconnect from socket when the voice provider component unmounts
     return () => {
+      providerUnmountSequenceRef.current += 1;
       // Only accelerate cleanup that was already pending before unmount. The
       // teardown created below retains its normal bounded grace period.
       const preexistingCleanupTimeouts = [...cleanupTimeouts];

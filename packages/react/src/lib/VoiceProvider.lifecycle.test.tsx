@@ -472,6 +472,77 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
+  it('attributes an in-flight connection rollback player stop on unmount', async () => {
+    const playerStopped = createDeferred<void>();
+    mocks.playerInit.mockResolvedValueOnce(false);
+    mocks.playerStopForContext.mockReturnValue(playerStopped.promise);
+    const rendered = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+
+    let connecting = Promise.resolve();
+    act(() => {
+      connecting = rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      });
+    });
+    await waitFor(() =>
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce(),
+    );
+
+    rendered.unmount();
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+    expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
+      trigger: 'unmount',
+    });
+
+    await act(async () => {
+      playerStopped.resolve();
+      await connecting;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+  });
+
+  it('attributes connection rollback that starts after unmount', async () => {
+    const playerInitialized = createDeferred<boolean>();
+    mocks.playerInit.mockReturnValueOnce(playerInitialized.promise);
+    const rendered = renderHook(() => useVoice(), {
+      wrapper: ({ children }) => (
+        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+      ),
+    });
+
+    let connecting = Promise.resolve();
+    act(() => {
+      connecting = rendered.result.current.connect({
+        auth: { type: 'accessToken', value: 'test-token' },
+      });
+    });
+    await waitFor(() => expect(mocks.playerInit).toHaveBeenCalledOnce());
+
+    rendered.unmount();
+    await waitFor(() =>
+      expect(mocks.playerStopForContext).toHaveBeenCalledOnce(),
+    );
+
+    await act(async () => {
+      playerInitialized.resolve(false);
+      await connecting;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+    expect(mocks.playerStopForContext.mock.calls.at(-1)?.[1]).toEqual({
+      trigger: 'unmount',
+    });
+  });
+
   it('contains a synchronous failure while attributing an in-flight stop', async () => {
     const playerStopped = createDeferred<void>();
     mocks.playerStopForContext
@@ -2411,10 +2482,19 @@ describe('VoiceProvider close lifecycle', () => {
 
   it('attributes an in-flight server-close player stop when unmount adopts it', async () => {
     const playerStopped = createDeferred<void>();
+    const events: VoiceDiagnosticEvent[] = [];
     mocks.playerStopForContext.mockReturnValue(playerStopped.promise);
     const rendered = renderHook(() => useVoice(), {
       wrapper: ({ children }) => (
-        <VoiceProvider diagnostics={false}>{children}</VoiceProvider>
+        <VoiceProvider
+          diagnostics={{
+            level: 'debug',
+            logger: false,
+            onEvent: (event) => events.push(event),
+          }}
+        >
+          {children}
+        </VoiceProvider>
       ),
     });
     await act(() =>
@@ -2442,6 +2522,20 @@ describe('VoiceProvider close lifecycle', () => {
       playerStopped.resolve();
       await playerStopped.promise;
     });
+    await waitFor(() =>
+      expect(
+        events.find((event) => event.name === 'connection.disconnected'),
+      ).toMatchObject({ details: { reason: 'server' } }),
+    );
+    // The terminal diagnostic is emitted by the adopted raw cleanup. Let the
+    // tracked wrapper settle too so it clears its real timeout before the test
+    // returns.
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        }),
+    );
   });
 
   it('publishes socket closure immediately and serializes later teardown', async () => {
