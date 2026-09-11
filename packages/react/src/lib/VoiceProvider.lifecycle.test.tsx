@@ -5,7 +5,7 @@ import {
   renderHook,
   waitFor,
 } from '@testing-library/react';
-import { useCallback, useMemo } from 'react';
+import { StrictMode, useCallback, useEffect, useMemo } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type PlayerErrorHandler = (
@@ -541,6 +541,48 @@ describe('VoiceProvider close lifecycle', () => {
     expect(mocks.playerStopForContext.mock.calls.at(-1)?.[1]).toEqual({
       trigger: 'unmount',
     });
+  });
+
+  it('does not attribute a StrictMode replay rollback to a real unmount', async () => {
+    const playerInitialized = createDeferred<boolean>();
+    mocks.playerInit.mockReturnValueOnce(playerInitialized.promise);
+    mocks.playerInit.mockResolvedValue(false);
+    const connections: Promise<void>[] = [];
+    const ConnectOnMount = () => {
+      const { connect } = useVoice();
+      useEffect(() => {
+        connections.push(
+          connect({
+            auth: { type: 'accessToken', value: 'test-token' },
+          }),
+        );
+      }, [connect]);
+      return null;
+    };
+    const rendered = render(
+      <StrictMode>
+        <VoiceProvider diagnostics={false}>
+          <ConnectOnMount />
+        </VoiceProvider>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(mocks.playerInit).toHaveBeenCalled());
+
+    await act(async () => {
+      playerInitialized.resolve(false);
+      await Promise.allSettled(connections);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+
+    await waitFor(() =>
+      expect(mocks.playerStopForContext).toHaveBeenCalledWith(
+        expect.anything(),
+        {},
+      ),
+    );
+    rendered.unmount();
   });
 
   it('contains a synchronous failure while attributing an in-flight stop', async () => {

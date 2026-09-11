@@ -18,6 +18,7 @@ import {
   type VoiceDiagnosticsReporter,
 } from './diagnostics';
 import { FftStore } from './fftStore';
+import type { PlayerStopOptions, PlayerStopTrigger } from './playerStopTypes';
 import { useLatestRef } from './useLatestRef';
 import type { AudioPlayerErrorReason } from './VoiceProvider';
 
@@ -149,16 +150,14 @@ type PlayerStopScope =
   | 'active_player_with_detached_retry'
   | 'detached_context_retry';
 
-type PlayerStopTrigger = 'unmount';
-
 interface PlayerStopLifecycle {
   joined: boolean;
   scope: PlayerStopScope;
-  startedAt: number;
+  startedAt: number | null;
   trigger: PlayerStopTrigger | undefined;
 }
 
-interface PlayerStopRequest extends UseSoundPlayerStopOptions {
+interface PlayerStopRequest extends PlayerStopOptions {
   expectedContext?: AudioContext;
 }
 
@@ -167,27 +166,19 @@ interface StartedPlayerStop {
   promise: Promise<void>;
 }
 
-interface ReusablePlayerStop {
-  context: AudioContext | undefined;
-  trackedStop: TrackedPlayerStop | null;
-}
-
 const findReusablePlayerStop = (
-  request: PlayerStopRequest,
+  expectedContext: AudioContext | undefined,
+  trigger: PlayerStopTrigger | undefined,
   currentContext: AudioContext | null,
   currentGeneration: number,
   implicitStop: TrackedPlayerStop | null,
   contextStops: WeakMap<AudioContext, TrackedPlayerStop>,
-): ReusablePlayerStop => {
-  const { expectedContext, trigger } = request;
+): TrackedPlayerStop | null => {
   if (
     expectedContext === undefined &&
     implicitStop?.generation === currentGeneration
   ) {
-    return {
-      context: currentContext ?? undefined,
-      trackedStop: implicitStop,
-    };
+    return implicitStop;
   }
 
   const context = expectedContext ?? currentContext ?? undefined;
@@ -200,19 +191,16 @@ const findReusablePlayerStop = (
     contextStop !== undefined &&
     (contextStop.generation === currentGeneration ||
       (trigger !== undefined && currentContext !== context));
-  return {
-    context,
-    trackedStop: canReuseContextStop ? contextStop : null,
-  };
+  return canReuseContextStop ? contextStop : null;
 };
 
 const getPlayerStopLifecycleDetails = (lifecycle: PlayerStopLifecycle) => ({
   resource: 'audio_player',
   scope: lifecycle.scope,
+  joined: lifecycle.joined,
   ...(lifecycle.trigger === undefined
     ? undefined
     : { trigger: lifecycle.trigger }),
-  ...(lifecycle.joined ? { joined: true } : undefined),
 });
 
 class PlayerInitializationFailure extends Error {
@@ -409,7 +397,9 @@ const useSoundPlayerImplementation = (
         level: 'warn',
         category: 'audio_player',
         name: 'resource.cleanup_failed',
-        durationMs: getMonotonicTime() - lifecycle.startedAt,
+        ...(lifecycle.startedAt === null
+          ? undefined
+          : { durationMs: getMonotonicTime() - lifecycle.startedAt }),
         details: {
           ...failure,
           operation: 'stop',
@@ -427,7 +417,9 @@ const useSoundPlayerImplementation = (
         level: 'info',
         category: 'audio_player',
         name: 'resource.stopped',
-        durationMs: getMonotonicTime() - lifecycle.startedAt,
+        ...(lifecycle.startedAt === null
+          ? undefined
+          : { durationMs: getMonotonicTime() - lifecycle.startedAt }),
         details: getPlayerStopLifecycleDetails(lifecycle),
       });
     },
@@ -1702,10 +1694,31 @@ const useSoundPlayerImplementation = (
 
       const setupFailures: unknown[] = [];
 
-      // Complete lifecycle setup synchronously so joiners can observe an
-      // immutable lifecycle without relying on an async IIFE mutating outer
-      // state. Preserve setup failures for the returned promise while still
-      // disposing every captured resource below.
+      let lifecycle: PlayerStopLifecycle | null = null;
+      if (stopScope !== null) {
+        try {
+          lifecycle = startPlayerStopLifecycle(
+            stopScope,
+            trigger === undefined ? {} : { trigger },
+          );
+        } catch (error) {
+          appendCleanupFailures(setupFailures, error);
+          // Preserve the stop's identity even when its start diagnostic cannot
+          // be timed or emitted. Disposal failures and later attribution joins
+          // can still publish the correct scope and trigger.
+          lifecycle = {
+            joined: false,
+            scope: stopScope,
+            startedAt: null,
+            trigger,
+          };
+        }
+      }
+
+      // Complete state reset synchronously so joiners observe an immutable
+      // lifecycle without relying on an async IIFE mutating outer state.
+      // Preserve setup failures for the returned promise while still disposing
+      // every captured resource below.
       try {
         // An implicit stop owns the overall player state. A context-scoped stop
         // only resets it when that context is still the active player; retrying a
@@ -1716,9 +1729,15 @@ const useSoundPlayerImplementation = (
           if (resourcesToStop && playerResources.current === resourcesToStop) {
             playerResources.current = null;
           }
+          let resetFailureDetails: Record<string, unknown> | undefined;
+          if (lifecycle !== null) {
+            resetFailureDetails = getPlayerStopLifecycleDetails(lifecycle);
+          } else if (trigger !== undefined) {
+            resetFailureDetails = { trigger };
+          }
           resetPlayerState(
             'Failed to clear FFT state while stopping the player.',
-            trigger === undefined ? undefined : { trigger },
+            resetFailureDetails,
           );
         }
       } catch (error) {
@@ -1740,14 +1759,10 @@ const useSoundPlayerImplementation = (
         };
       }
 
-      let lifecycle: PlayerStopLifecycle | null = null;
-      try {
-        lifecycle = startPlayerStopLifecycle(
-          stopScope,
-          trigger === undefined ? {} : { trigger },
-        );
-      } catch (error) {
-        appendCleanupFailures(setupFailures, error);
+      // `stopScope !== null` above always creates either the normal lifecycle
+      // or its failure-tolerant fallback.
+      if (lifecycle === null) {
+        throw new Error('Audio player stop lifecycle was not initialized.');
       }
       const workletToStop = resourcesToStop?.worklet ?? null;
 
@@ -1805,17 +1820,13 @@ const useSoundPlayerImplementation = (
             failures,
             'Audio player cleanup failed.',
           );
-          if (lifecycle !== null) {
-            reportPlayerStopFailure(lifecycle, failures.length, {
-              error: cleanupError,
-              message: 'Audio player cleanup failed.',
-            });
-          }
+          reportPlayerStopFailure(lifecycle, failures.length, {
+            error: cleanupError,
+            message: 'Audio player cleanup failed.',
+          });
           throw cleanupError;
         }
-        if (lifecycle !== null) {
-          finishPlayerStopLifecycle(lifecycle);
-        }
+        finishPlayerStopLifecycle(lifecycle);
       })();
       return { lifecycle, promise };
     },
@@ -1874,8 +1885,9 @@ const useSoundPlayerImplementation = (
       const { expectedContext, trigger } = request;
       const currentContext = playerResources.current?.context ?? null;
       const currentGeneration = playerGeneration.current;
-      const { context, trackedStop: reusableStop } = findReusablePlayerStop(
-        request,
+      const reusableStop = findReusablePlayerStop(
+        expectedContext,
+        trigger,
         currentContext,
         currentGeneration,
         implicitPlayerStop.current,
@@ -1887,6 +1899,7 @@ const useSoundPlayerImplementation = (
           : joinTrackedPlayerStop(reusableStop.operation, trigger);
       }
 
+      const context = expectedContext ?? currentContext ?? undefined;
       const startedStop = startPlayerStop(request);
       const stopping = startedStop.promise;
       const stopGeneration = playerGeneration.current;

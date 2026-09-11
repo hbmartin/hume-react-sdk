@@ -60,15 +60,13 @@ import {
   useFftSubscription,
 } from './fftStore';
 import { noop } from './noop';
+import type { PlayerStopOptions } from './playerStopTypes';
 import { type CallDurationStore, useCallDuration } from './useCallDuration';
 import { useLatestRef } from './useLatestRef';
 import { useMessages } from './useMessages';
 import { useMicrophone } from './useMicrophone';
 import { useMicrophoneStream } from './useMicrophoneStream';
-import {
-  type UseSoundPlayerStopOptions,
-  useSoundPlayerForVoiceProvider,
-} from './useSoundPlayer';
+import { useSoundPlayerForVoiceProvider } from './useSoundPlayer';
 import { type ToolStatusStore, useToolStatus } from './useToolStatus';
 import {
   type SessionSettingsUpdate,
@@ -231,7 +229,7 @@ type PendingPlayerStop = Readonly<{
 type PlayerCleanupState = {
   activeStop: PendingPlayerStop | null;
   cleanupSettled: boolean;
-  options: UseSoundPlayerStopOptions;
+  options: PlayerStopOptions;
 };
 
 type PendingDisconnectCleanup = Readonly<{
@@ -722,7 +720,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   const microphoneFlushOwnerRef = useRef<symbol | null>(null);
   const resourceCleanupCompletedRef = useRef(true);
   const lifecycleGenerationRef = useRef(0);
-  const providerUnmountSequenceRef = useRef(0);
+  const providerEffectActiveRef = useRef(true);
   const currentConnectionGenerationRef = useRef<number | null>(null);
   const pendingResourceCleanupsRef = useRef(new Set<Promise<unknown>>());
   const pendingResourceCleanupTimeoutsRef = useRef(
@@ -862,7 +860,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       cleanup: Promise<Result>,
       resource: string,
       timeoutResult: () => Result | Promise<Result>,
-      onSettled?: (cleanup: Promise<Result>) => void,
+      onSettled: (cleanup: Promise<Result>) => void,
     ): Promise<Result> => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
@@ -918,7 +916,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       pendingResourceCleanupsRef.current.add(trackedCleanup);
       const clearCleanup = () => {
         pendingResourceCleanupsRef.current.delete(trackedCleanup);
-        onSettled?.(trackedCleanup);
+        onSettled(trackedCleanup);
       };
       void trackedCleanup.then(clearCleanup, clearCleanup);
       return trackedCleanup;
@@ -1186,7 +1184,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
   );
 
   const beginPlayerCleanup = useCallback(
-    (options: UseSoundPlayerStopOptions = {}): PlayerCleanupState => {
+    (options: PlayerStopOptions = {}): PlayerCleanupState => {
       const state: PlayerCleanupState = {
         activeStop: null,
         cleanupSettled: false,
@@ -1204,6 +1202,30 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       releasePlayerCleanupStateIfSettled(state);
     },
     [releasePlayerCleanupStateIfSettled],
+  );
+
+  const trackPlayerResourceCleanup = useCallback(
+    <Result,>(
+      cleanup: Promise<Result>,
+      resource: string,
+      timeoutResult: () => Result | Promise<Result>,
+      tracking: Readonly<{
+        playerCleanupState: PlayerCleanupState | null;
+        onSettled?: (cleanup: Promise<Result>) => void;
+      }>,
+    ) =>
+      trackResourceCleanup(
+        cleanup,
+        resource,
+        timeoutResult,
+        (trackedCleanup) => {
+          if (tracking.playerCleanupState !== null) {
+            settlePlayerCleanup(tracking.playerCleanupState);
+          }
+          tracking.onSettled?.(trackedCleanup);
+        },
+      ),
+    [settlePlayerCleanup, trackResourceCleanup],
   );
 
   const stopPlayerForCleanup = useCallback(
@@ -1649,7 +1671,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             cleanupFailures,
           );
         });
-        trackedCloseCleanup = trackResourceCleanup(
+        trackedCloseCleanup = trackPlayerResourceCleanup(
           closeCleanup,
           'server_close',
           async () => {
@@ -1681,7 +1703,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
               forcedCleanup.failures,
             );
           },
-          () => settlePlayerCleanup(playerCleanupState),
+          { playerCleanupState },
         );
         publishDisconnectMessage();
         publishCloseCallback();
@@ -1701,14 +1723,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         runForcedCleanup,
         setDisconnectedStatus,
         setErrorStatus,
-        settlePlayerCleanup,
         stopPlayerForCleanup,
         isCurrentLifecycleGeneration,
         markAllResourcesDisconnected,
         stopOwnedMicrophoneStreams,
         stopTimer,
         toolStatusClearStore,
-        trackResourceCleanup,
+        trackPlayerResourceCleanup,
       ],
     ),
     ...(props.onToolCall === undefined ? {} : { onToolCall: props.onToolCall }),
@@ -2063,7 +2084,6 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       }
 
       const generation = ++lifecycleGenerationRef.current;
-      const connectionUnmountSequence = providerUnmountSequenceRef.current;
       resourceCleanupCompletedRef.current = false;
       const connectionStartedAt = getMonotonicTime();
       clearError('connect');
@@ -2202,9 +2222,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       const cleanupAttemptResources = (stopPlayer: boolean) => {
         const playerCleanupState = stopPlayer
           ? beginPlayerCleanup(
-              connectionUnmountSequence === providerUnmountSequenceRef.current
-                ? {}
-                : { trigger: 'unmount' },
+              providerEffectActiveRef.current ? {} : { trigger: 'unmount' },
             )
           : null;
         const cleanup = (async () => {
@@ -2244,15 +2262,13 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
           }
           return failures;
         })();
-        return trackResourceCleanup(
+        return trackPlayerResourceCleanup(
           cleanup,
           'connection_attempt',
           () => [
             `Connection attempt cleanup exceeded ${RESOURCE_CLEANUP_TIMEOUT_MS} ms.`,
           ],
-          playerCleanupState === null
-            ? undefined
-            : () => settlePlayerCleanup(playerCleanupState),
+          { playerCleanupState },
         );
       };
 
@@ -2484,10 +2500,9 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       resetAudioDeviceState,
       setDisconnectedStatus,
       setErrorStatus,
-      settlePlayerCleanup,
       stopPlayerForCleanup,
       stopStream,
-      trackResourceCleanup,
+      trackPlayerResourceCleanup,
       updateError,
     ],
   );
@@ -2707,7 +2722,7 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
         }
       })();
 
-      cleanup = trackResourceCleanup(
+      cleanup = trackPlayerResourceCleanup(
         rawCleanup,
         'connection',
         async () => {
@@ -2739,19 +2754,23 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
             finalizeLifecycle();
           }
         },
-        (settledCleanup) => {
-          if (pendingDisconnectCleanupRef.current?.promise === settledCleanup) {
-            pendingDisconnectCleanupRef.current = null;
-          }
-          settlePlayerCleanup(playerCleanupState);
-          for (const pendingCleanup of cleanupsToAwait) {
+        {
+          playerCleanupState,
+          onSettled: (settledCleanup) => {
             if (
-              resourceCleanupAdoptionOwnersRef.current.get(pendingCleanup) ===
-              cleanupOwner
+              pendingDisconnectCleanupRef.current?.promise === settledCleanup
             ) {
-              resourceCleanupAdoptionOwnersRef.current.delete(pendingCleanup);
+              pendingDisconnectCleanupRef.current = null;
             }
-          }
+            for (const pendingCleanup of cleanupsToAwait) {
+              if (
+                resourceCleanupAdoptionOwnersRef.current.get(pendingCleanup) ===
+                cleanupOwner
+              ) {
+                resourceCleanupAdoptionOwnersRef.current.delete(pendingCleanup);
+              }
+            }
+          },
         },
       );
       pendingDisconnectCleanupRef.current = {
@@ -2777,9 +2796,8 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
       closeSharedAudioContext,
       resetAudioDeviceState,
       runForcedCleanup,
-      settlePlayerCleanup,
       stopPlayerForCleanup,
-      trackResourceCleanup,
+      trackPlayerResourceCleanup,
       clearMessagesOnDisconnect,
       clearMessageStore,
       toolStatusClearStore,
@@ -2892,9 +2910,10 @@ export const VoiceProvider: FC<VoiceProviderProps> = ({
 
   useEffect(() => {
     const cleanupTimeouts = pendingResourceCleanupTimeoutsRef.current;
+    providerEffectActiveRef.current = true;
     // disconnect from socket when the voice provider component unmounts
     return () => {
-      providerUnmountSequenceRef.current += 1;
+      providerEffectActiveRef.current = false;
       // Only accelerate cleanup that was already pending before unmount. The
       // teardown created below retains its normal bounded grace period.
       const preexistingCleanupTimeouts = [...cleanupTimeouts];
