@@ -1847,6 +1847,56 @@ describe('useSoundPlayer', () => {
     expect(closeAudioContext).toHaveBeenCalledOnce();
   });
 
+  it('registers a stop before its start diagnostic can reenter cleanup', async () => {
+    const context = new AudioContext();
+    const events: VoiceDiagnosticEvent[] = [];
+    let startAttributedStop = () => Promise.resolve();
+    let attributedStop = Promise.resolve();
+    let reentered = false;
+    const diagnostics = createVoiceDiagnosticsReporter(() => ({
+      level: 'debug',
+      logger: false,
+      onEvent: (event) => {
+        events.push(event);
+        if (event.name === 'resource.stop_started' && !reentered) {
+          reentered = true;
+          attributedStop = startAttributedStop();
+        }
+      },
+    }));
+    const { result } = renderHook(() =>
+      useSoundPlayerForVoiceProvider({
+        diagnostics,
+        enableAudioWorklet: false,
+        onError: vi.fn(),
+        onPlayAudio: vi.fn(),
+        onStopAudio: vi.fn(),
+      }),
+    );
+    await act(() => result.current.initPlayer(undefined, context));
+    startAttributedStop = () =>
+      result.current.stopAllForContext(context, { trigger: 'unmount' });
+
+    let stopping = Promise.resolve();
+    act(() => {
+      stopping = result.current.stopAllForContext(context);
+    });
+    await act(() => Promise.all([stopping, attributedStop]));
+
+    expect(
+      events.filter((event) => event.name === 'resource.stop_started'),
+    ).toHaveLength(2);
+    expect(
+      events.find(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.details['trigger'] === 'unmount',
+      ),
+    ).toMatchObject({ details: { joined: true } });
+    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
+    expect(disconnectGainNode).toHaveBeenCalledOnce();
+  });
+
   it('does not let an older implicit stop hide a reinitialized player on unmount', async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 1);
@@ -3480,7 +3530,7 @@ describe('useSoundPlayer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('keeps lifecycle timing failures out of primary and joined stop results', async () => {
+  it('falls back to wall-clock timing for primary and joined stops', async () => {
     const context = new AudioContext();
     const lifecycleError = new Error('monotonic clock failed');
     const events: VoiceDiagnosticEvent[] = [];
@@ -3531,7 +3581,8 @@ describe('useSoundPlayer', () => {
     expect(
       events.filter(
         (event) =>
-          event.name === 'resource.stopped' && event.durationMs === undefined,
+          event.name === 'resource.stopped' &&
+          typeof event.durationMs === 'number',
       ),
     ).toHaveLength(2);
     expect(

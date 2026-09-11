@@ -544,7 +544,7 @@ describe('VoiceProvider close lifecycle', () => {
     });
   });
 
-  it('does not attribute a StrictMode replay rollback to a real unmount', async () => {
+  it('does not attribute a delayed StrictMode replay rollback as final removal', async () => {
     const playerInitialized = createDeferred<boolean>();
     mocks.playerInit.mockReturnValueOnce(playerInitialized.promise);
     mocks.playerInit.mockResolvedValue(false);
@@ -620,7 +620,10 @@ describe('VoiceProvider close lifecycle', () => {
 
       rendered.unmount();
       await act(() => Promise.resolve());
-      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(3);
+      expect(mocks.playerStopForContext.mock.calls[2]?.[1]).toEqual({
+        trigger: 'unmount',
+      });
 
       await act(async () => {
         playerStopped.resolve();
@@ -2965,7 +2968,7 @@ describe('VoiceProvider close lifecycle', () => {
     }
   });
 
-  it('releases player attribution state after forced cleanup times out', async () => {
+  it('retains player attribution after forced cleanup times out', async () => {
     vi.useFakeTimers();
     try {
       const stalledMicrophone = createDeferred<void>();
@@ -2992,7 +2995,10 @@ describe('VoiceProvider close lifecycle', () => {
 
       rendered.unmount();
       await act(() => Promise.resolve());
-      expect(mocks.playerStopForContext).toHaveBeenCalledOnce();
+      expect(mocks.playerStopForContext).toHaveBeenCalledTimes(2);
+      expect(mocks.playerStopForContext.mock.calls[1]?.[1]).toEqual({
+        trigger: 'unmount',
+      });
 
       await act(async () => {
         playerStopped.resolve();
