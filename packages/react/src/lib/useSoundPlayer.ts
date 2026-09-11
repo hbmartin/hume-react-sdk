@@ -18,9 +18,15 @@ import {
   type VoiceDiagnosticsReporter,
 } from './diagnostics';
 import { FftStore } from './fftStore';
-import type { PlayerStopOptions, PlayerStopTrigger } from './playerStopTypes';
+import type {
+  PlayerStopOptions,
+  PlayerStopTrigger,
+  UseSoundPlayerStopOptions,
+} from './playerStopTypes';
 import { useLatestRef } from './useLatestRef';
 import type { AudioPlayerErrorReason } from './VoiceProvider';
+
+export type { UseSoundPlayerStopOptions } from './playerStopTypes';
 
 // Worklet message types (replaces Zod schemas)
 interface WorkletStartClipMessage {
@@ -249,16 +255,6 @@ export interface UseSoundPlayerProps {
   onStopAudio: (id: string) => void;
 }
 
-/**
- * Diagnostic ownership metadata for a deprecated standalone-player stop.
- *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
- */
-export interface UseSoundPlayerStopOptions {
-  /** Identifies cleanup performed because the owning React tree unmounted. */
-  trigger?: 'unmount';
-}
-
 interface PlayerLifecyclePolicy {
   contextStopFailureMode: 'propagate' | 'report';
   errorCallbackOwner: 'consumer' | 'voice-provider';
@@ -370,10 +366,16 @@ const useSoundPlayerImplementation = (
       scope: PlayerStopScope,
       options: { joined?: boolean; trigger?: PlayerStopTrigger } = {},
     ): PlayerStopLifecycle => {
+      let startedAt: number | null = null;
+      try {
+        startedAt = getMonotonicTime();
+      } catch {
+        // Timing is diagnostic-only and must never change stop behavior.
+      }
       const lifecycle: PlayerStopLifecycle = {
         joined: options.joined === true,
         scope,
-        startedAt: getMonotonicTime(),
+        startedAt,
         trigger: options.trigger,
       };
       emitPlayerDiagnostic({
@@ -387,19 +389,30 @@ const useSoundPlayerImplementation = (
     [emitPlayerDiagnostic],
   );
 
+  const getPlayerStopDuration = useCallback(
+    (lifecycle: PlayerStopLifecycle): number | undefined => {
+      if (lifecycle.startedAt === null) return undefined;
+      try {
+        return getMonotonicTime() - lifecycle.startedAt;
+      } catch {
+        return undefined;
+      }
+    },
+    [],
+  );
+
   const reportPlayerStopFailure = useCallback(
     (
       lifecycle: PlayerStopLifecycle,
       failureCount: number,
       failure?: { error: unknown; message: string },
     ) => {
+      const durationMs = getPlayerStopDuration(lifecycle);
       emitPlayerDiagnostic({
         level: 'warn',
         category: 'audio_player',
         name: 'resource.cleanup_failed',
-        ...(lifecycle.startedAt === null
-          ? undefined
-          : { durationMs: getMonotonicTime() - lifecycle.startedAt }),
+        ...(durationMs === undefined ? undefined : { durationMs }),
         details: {
           ...failure,
           operation: 'stop',
@@ -408,22 +421,21 @@ const useSoundPlayerImplementation = (
         },
       });
     },
-    [emitPlayerDiagnostic],
+    [emitPlayerDiagnostic, getPlayerStopDuration],
   );
 
   const finishPlayerStopLifecycle = useCallback(
     (lifecycle: PlayerStopLifecycle) => {
+      const durationMs = getPlayerStopDuration(lifecycle);
       emitPlayerDiagnostic({
         level: 'info',
         category: 'audio_player',
         name: 'resource.stopped',
-        ...(lifecycle.startedAt === null
-          ? undefined
-          : { durationMs: getMonotonicTime() - lifecycle.startedAt }),
+        ...(durationMs === undefined ? undefined : { durationMs }),
         details: getPlayerStopLifecycleDetails(lifecycle),
       });
     },
-    [emitPlayerDiagnostic],
+    [emitPlayerDiagnostic, getPlayerStopDuration],
   );
 
   const reportPlayerError = useCallback(
@@ -560,14 +572,17 @@ const useSoundPlayerImplementation = (
       fftFailureMessage: string,
       additionalDetails?: Record<string, unknown>,
     ) => {
+      // Replace retained queues before invoking React or observer callbacks so
+      // even an exceptional notification cannot leave decoded buffers tied to
+      // the context being torn down.
       isInitialized.current = false;
       isProcessing.current = false;
+      chunkBufferQueues.current = new Map();
+      lastQueuedChunk.current = null;
+      clipQueue.current = [];
       publishIsPlaying(false);
       publishQueueLength(0);
       clearPlayerFftStore(fftFailureMessage, additionalDetails);
-      chunkBufferQueues.current.clear();
-      lastQueuedChunk.current = null;
-      clipQueue.current = [];
     },
     [clearPlayerFftStore, publishIsPlaying, publishQueueLength],
   );
@@ -1694,26 +1709,13 @@ const useSoundPlayerImplementation = (
 
       const setupFailures: unknown[] = [];
 
-      let lifecycle: PlayerStopLifecycle | null = null;
-      if (stopScope !== null) {
-        try {
-          lifecycle = startPlayerStopLifecycle(
-            stopScope,
-            trigger === undefined ? {} : { trigger },
-          );
-        } catch (error) {
-          appendCleanupFailures(setupFailures, error);
-          // Preserve the stop's identity even when its start diagnostic cannot
-          // be timed or emitted. Disposal failures and later attribution joins
-          // can still publish the correct scope and trigger.
-          lifecycle = {
-            joined: false,
-            scope: stopScope,
-            startedAt: null,
-            trigger,
-          };
-        }
-      }
+      const lifecycle =
+        stopScope === null
+          ? null
+          : startPlayerStopLifecycle(
+              stopScope,
+              trigger === undefined ? {} : { trigger },
+            );
 
       // Complete state reset synchronously so joiners observe an immutable
       // lifecycle without relying on an async IIFE mutating outer state.
@@ -1744,7 +1746,7 @@ const useSoundPlayerImplementation = (
         appendCleanupFailures(setupFailures, error);
       }
 
-      if (stopScope === null) {
+      if (lifecycle === null) {
         const setupError = createCleanupError(
           setupFailures,
           'Audio player stop setup failed.',
@@ -1759,11 +1761,6 @@ const useSoundPlayerImplementation = (
         };
       }
 
-      // `stopScope !== null` above always creates either the normal lifecycle
-      // or its failure-tolerant fallback.
-      if (lifecycle === null) {
-        throw new Error('Audio player stop lifecycle was not initialized.');
-      }
       const workletToStop = resourcesToStop?.worklet ?? null;
 
       const promise = (async () => {

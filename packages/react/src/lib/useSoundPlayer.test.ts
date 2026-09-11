@@ -4,7 +4,6 @@ import {
   beforeEach,
   describe,
   expect,
-  expectTypeOf,
   it,
   type Mock,
   vi,
@@ -16,9 +15,7 @@ import {
   createVoiceDiagnosticsReporter,
   type VoiceDiagnosticEvent,
 } from './diagnostics';
-import type { PlayerStopOptions } from './playerStopTypes';
 import {
-  type UseSoundPlayerStopOptions,
   useSoundPlayer,
   useSoundPlayerForVoiceProvider,
 } from './useSoundPlayer';
@@ -89,10 +86,6 @@ type FakeBufferSource = {
 };
 
 describe('useSoundPlayer', () => {
-  expectTypeOf<UseSoundPlayerStopOptions['trigger']>().toEqualTypeOf<
-    PlayerStopOptions['trigger']
-  >();
-
   let originalAudioContext: typeof globalThis.AudioContext;
   let originalAudioWorkletNode: typeof globalThis.AudioWorkletNode;
   let bufferSources: FakeBufferSource[];
@@ -3487,7 +3480,7 @@ describe('useSoundPlayer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('returns lifecycle setup failures as a promise and still disposes resources', async () => {
+  it('keeps lifecycle timing failures out of primary and joined stop results', async () => {
     const context = new AudioContext();
     const lifecycleError = new Error('monotonic clock failed');
     const events: VoiceDiagnosticEvent[] = [];
@@ -3508,124 +3501,42 @@ describe('useSoundPlayer', () => {
     await act(() => result.current.initPlayer(undefined, context));
     const now = vi
       .spyOn(globalThis.performance, 'now')
-      .mockImplementationOnce(() => {
+      .mockImplementation(() => {
         throw lifecycleError;
       });
 
     let stopping = Promise.resolve();
-    act(() => {
-      expect(() => {
-        stopping = result.current.stopAllForContext(context);
-      }).not.toThrow();
-    });
-    now.mockRestore();
     let attributedStopping = Promise.resolve();
-    act(() => {
-      attributedStopping = result.current.stopAllForContext(context, {
-        trigger: 'unmount',
-      });
-    });
-
-    expect(await Promise.allSettled([stopping, attributedStopping])).toEqual([
-      { reason: lifecycleError, status: 'rejected' },
-      { reason: lifecycleError, status: 'rejected' },
-    ]);
-    expect(
-      events.find(
-        (event) =>
-          event.name === 'resource.stop_started' &&
-          event.details['joined'] === false,
-      ),
-    ).toBeUndefined();
-    expect(
-      events.find(
-        (event) =>
-          event.name === 'resource.cleanup_failed' &&
-          event.details['operation'] === 'stop',
-      ),
-    ).toMatchObject({
-      details: {
-        joined: false,
-        scope: 'active_player',
-      },
-    });
-    expect(
-      events.find(
-        (event) =>
-          event.name === 'resource.cleanup_failed' &&
-          event.details['joined'] === true &&
-          event.details['trigger'] === 'unmount',
-      ),
-    ).toMatchObject({ details: { scope: 'active_player' } });
-    expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
-    expect(disconnectGainNode).toHaveBeenCalledOnce();
-  });
-
-  it('still disposes resources when synchronous state reset fails', async () => {
-    const context = new AudioContext();
-    const resetError = new Error('player state reset failed');
-    const { result } = renderHook(() =>
-      useSoundPlayerForVoiceProvider({
-        enableAudioWorklet: false,
-        onError: vi.fn(),
-        onPlayAudio: vi.fn(),
-        onStopAudio: vi.fn(),
-      }),
-    );
-    await act(() => result.current.initPlayer(undefined, context));
-
-    const originalMapSet = Reflect.get(Map.prototype, 'set') as (
-      this: Map<unknown, unknown>,
-      key: unknown,
-      value: unknown,
-    ) => Map<unknown, unknown>;
-    const chunkBufferQueueMaps = new WeakSet();
-    let foundChunkBufferQueueMap = false;
-    const set = vi.spyOn(Map.prototype, 'set').mockImplementation(function (
-      this: Map<unknown, unknown>,
-      key: unknown,
-      value: unknown,
-    ) {
-      if (key === 'reset-failure-probe' && Array.isArray(value)) {
-        chunkBufferQueueMaps.add(this);
-        foundChunkBufferQueueMap = true;
-      }
-      return Reflect.apply(originalMapSet, this, [key, value]);
-    });
-    try {
-      await act(() =>
-        result.current.addToQueue({
-          id: 'reset-failure-probe',
-          index: 1,
-          data: '\x01',
-          type: 'audio_output',
-          receivedAt: new Date(0),
-        }),
-      );
-    } finally {
-      set.mockRestore();
-    }
-    expect(foundChunkBufferQueueMap).toBe(true);
-
-    let stopping = Promise.resolve();
-    const originalMapClear = Reflect.get(Map.prototype, 'clear');
-    const clear = vi
-      .spyOn(Map.prototype, 'clear')
-      .mockImplementation(function (this: Map<unknown, unknown>) {
-        if (chunkBufferQueueMaps.has(this)) {
-          throw resetError;
-        }
-        Reflect.apply(originalMapClear, this, []);
-      });
     try {
       act(() => {
         stopping = result.current.stopAllForContext(context);
+        attributedStopping = result.current.stopAllForContext(context, {
+          trigger: 'unmount',
+        });
       });
+      await expect(
+        Promise.all([stopping, attributedStopping]),
+      ).resolves.toEqual([undefined, undefined]);
     } finally {
-      clear.mockRestore();
+      now.mockRestore();
     }
 
-    await expect(stopping).rejects.toBe(resetError);
+    expect(
+      events.filter(
+        (event) =>
+          event.name === 'resource.stop_started' &&
+          event.durationMs === undefined,
+      ),
+    ).toHaveLength(2);
+    expect(
+      events.filter(
+        (event) =>
+          event.name === 'resource.stopped' && event.durationMs === undefined,
+      ),
+    ).toHaveLength(2);
+    expect(
+      events.some((event) => event.name === 'resource.cleanup_failed'),
+    ).toBe(false);
     expect(disconnectAnalyserNode).toHaveBeenCalledOnce();
     expect(disconnectGainNode).toHaveBeenCalledOnce();
   });
