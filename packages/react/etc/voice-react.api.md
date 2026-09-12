@@ -331,7 +331,7 @@ export interface UseSoundPlayerProps {
     onStopAudio: (id: string) => void;
 }
 
-// @public @deprecated
+// @public
 export interface UseSoundPlayerStopOptions {
     trigger?: 'unmount';
 }

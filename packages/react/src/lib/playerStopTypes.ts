@@ -1,7 +1,7 @@
 /**
- * Diagnostic ownership metadata for a deprecated standalone-player stop.
+ * Diagnostic ownership metadata for an audio player stop.
  *
- * @deprecated Use {@link VoiceProvider} and {@link useVoice}.
+ * Shared by the standalone player hook and by {@link VoiceProvider} teardown.
  */
 export interface UseSoundPlayerStopOptions {
   /** Identifies cleanup performed because the owning React tree unmounted. */
