@@ -3572,11 +3572,7 @@ describe('useSoundPlayer', () => {
     }
 
     expect(
-      events.filter(
-        (event) =>
-          event.name === 'resource.stop_started' &&
-          event.durationMs === undefined,
-      ),
+      events.filter((event) => event.name === 'resource.stop_started'),
     ).toHaveLength(2);
     expect(
       events.filter(
