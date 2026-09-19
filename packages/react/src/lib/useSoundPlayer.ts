@@ -844,6 +844,41 @@ const useSoundPlayerImplementation = (
     // oxlint-disable-next-line react/memo-dependencies -- the explicit callback dependency preserves retry ownership if disposal behavior changes
   }, [disposePlayerResourceBatch]);
 
+  const reportFailedPlayerContextClosureRetry = useCallback(
+    (
+      error: unknown,
+      lifecycle: PlayerStopLifecycle | null,
+      trigger?: 'unmount',
+    ) => {
+      const isUnmount = trigger === 'unmount';
+      const failureMessage = isUnmount
+        ? 'Failed to dispose retained audio player contexts while unmounting.'
+        : 'Failed to close a previously detached audio player.';
+      if (lifecycle) {
+        const failures: unknown[] = [];
+        appendCleanupFailures(failures, error);
+        reportPlayerStopFailure(lifecycle, failures.length, {
+          error,
+          message: failureMessage,
+        });
+      } else {
+        reportPlayerResourceFailure(
+          failureMessage,
+          error,
+          trigger === undefined ? undefined : { joinedRetry: true, trigger },
+        );
+      }
+      if (!isUnmount) return;
+
+      const message = getBrowserErrorMessage(error) ?? 'Unknown error';
+      reportPlayerError(
+        `Failed to dispose audio player while unmounting: ${message}`,
+        'audio_player_closure_failure',
+      );
+    },
+    [reportPlayerError, reportPlayerResourceFailure, reportPlayerStopFailure],
+  );
+
   const retryFailedPlayerContextClosuresBestEffort = useCallback(
     async (trigger?: 'unmount') => {
       if (failedPlayerContextResources.current.size === 0) return;
@@ -859,31 +894,7 @@ const useSoundPlayerImplementation = (
       try {
         await retry.promise;
       } catch (error) {
-        const failureMessage =
-          trigger === 'unmount'
-            ? 'Failed to dispose retained audio player contexts while unmounting.'
-            : 'Failed to close a previously detached audio player.';
-        if (lifecycle) {
-          const failures: unknown[] = [];
-          appendCleanupFailures(failures, error);
-          reportPlayerStopFailure(lifecycle, failures.length, {
-            error,
-            message: failureMessage,
-          });
-        } else {
-          reportPlayerResourceFailure(
-            failureMessage,
-            error,
-            trigger === undefined ? undefined : { joinedRetry: true, trigger },
-          );
-        }
-        if (trigger === 'unmount') {
-          const message = getBrowserErrorMessage(error) ?? 'Unknown error';
-          reportPlayerError(
-            `Failed to dispose audio player while unmounting: ${message}`,
-            'audio_player_closure_failure',
-          );
-        }
+        reportFailedPlayerContextClosureRetry(error, lifecycle, trigger);
         return;
       }
       if (lifecycle) finishPlayerStopLifecycle(lifecycle);
@@ -892,9 +903,7 @@ const useSoundPlayerImplementation = (
       finishPlayerStopLifecycle,
       createPlayerStopLifecycle,
       emitPlayerStopStarted,
-      reportPlayerError,
-      reportPlayerResourceFailure,
-      reportPlayerStopFailure,
+      reportFailedPlayerContextClosureRetry,
       retryFailedPlayerContextClosures,
     ],
   );
