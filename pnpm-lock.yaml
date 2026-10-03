@@ -67,6 +67,9 @@ importers:
       turbo:
         specifier: ^2.10.12
         version: 2.10.12
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
       vitepress:
         specifier: 1.6.4
         version: 1.6.4(@algolia/client-search@5.57.0)(@types/node@22.20.1)(@types/react@19.2.18)(lightningcss@1.33.0)(postcss@8.5.26)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(search-insights@2.17.3)(terser@5.43.1)(typescript@7.0.2)
@@ -338,13 +341,26 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(@vitest/coverage-istanbul@4.1.11)(jsdom@30.0.1)(vite@6.4.3(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.43.1)(yaml@2.9.0))
 
-  tools/lint-contract: {}
+  tools/lint-contract:
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   tools/quality-gate:
     devDependencies:
       '@babel/parser':
         specifier: 7.29.8
         version: 7.29.8
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   tools/typescript-config: {}
 
